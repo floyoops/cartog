@@ -11,7 +11,7 @@ See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/
 ```bash
 cargo build              # debug build
 cargo build --release    # release build
-cargo test               # run all tests (271 tests)
+cargo test               # run all tests (294 tests)
 cargo fmt --check        # check formatting
 cargo clippy --all-targets -- -D warnings  # lint
 ```
@@ -103,5 +103,5 @@ The script bumps `Cargo.toml`, commits, tags `vX.Y.Z`, and pushes. The release w
 
 ## Current State
 
-- **Working**: Python, TypeScript/JavaScript, Rust, Go, Ruby extractors, SQLite storage, all 9 CLI commands + MCP server (`cartog serve`, 11 tools: 9 core + 2 RAG), incremental indexing (git-based + SHA-256 fallback), `--force` re-index flag, CI/CD pipelines, `EdgeKind::References` extraction (type annotations, decorators, exception types, composite literals, `new` expressions, rescue clause types), symbol search (`cartog search`), RAG semantic search (`cartog rag` subcommand group: setup/index/search), hybrid FTS5+vector search with RRF merge, fastembed ONNX Runtime embeddings (`BAAI/bge-small-en-v1.5`), sqlite-vec vector storage, cross-encoder re-ranking (`BAAI/bge-reranker-base` via fastembed, batch scoring, auto-enabled when model downloaded via `cartog rag setup`), shared model cache (`~/.cache/cartog/models`, XDG-compliant), file watcher (`cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding)
-- **Pending**: Java extractor
+- **Working**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java extractors, SQLite storage, all 9 CLI commands + MCP server (`cartog serve`, 11 tools: 9 core + 2 RAG), incremental indexing (git-based + SHA-256 fallback), `--force` re-index flag, CI/CD pipelines, `EdgeKind::References` extraction (type annotations, decorators, exception types, composite literals, `new` expressions, rescue clause types, Java annotations), symbol search (`cartog search`), RAG semantic search (`cartog rag` subcommand group: setup/index/search), hybrid FTS5+vector search with RRF merge, fastembed ONNX Runtime embeddings (`BAAI/bge-small-en-v1.5`), sqlite-vec vector storage, cross-encoder re-ranking (`BAAI/bge-reranker-base` via fastembed, batch scoring, auto-enabled when model downloaded via `cartog rag setup`), shared model cache (`~/.cache/cartog/models`, XDG-compliant), file watcher (`cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding)
+- **Pending**: Java extractor improvements (see review findings in conversation history)

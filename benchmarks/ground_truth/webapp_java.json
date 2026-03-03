@@ -1,0 +1,271 @@
+{
+  "01_find_callers": {
+    "description": "Who calls validateToken?",
+    "query": "refs validateToken --kind calls",
+    "expected": [
+      {
+        "source": "authenticate",
+        "file": "middleware/AuthMiddleware.java"
+      },
+      {
+        "source": "getCurrentUser",
+        "file": "auth/AuthService.java"
+      },
+      {
+        "source": "refreshToken",
+        "file": "auth/TokenService.java"
+      }
+    ]
+  },
+  "02_file_structure": {
+    "description": "What's in auth/TokenService.java?",
+    "query": "outline auth/TokenService.java",
+    "expected": [
+      {
+        "name": "log",
+        "kind": "variable"
+      },
+      {
+        "name": "TOKEN_EXPIRY",
+        "kind": "variable"
+      },
+      {
+        "name": "TokenService",
+        "kind": "class"
+      },
+      {
+        "name": "generateToken",
+        "kind": "method"
+      },
+      {
+        "name": "validateToken",
+        "kind": "method"
+      },
+      {
+        "name": "refreshToken",
+        "kind": "method"
+      },
+      {
+        "name": "revokeToken",
+        "kind": "method"
+      },
+      {
+        "name": "extractToken",
+        "kind": "method"
+      }
+    ]
+  },
+  "03_refactor_impact": {
+    "description": "Impact of changing AuthService",
+    "query": "impact AuthService --depth 3",
+    "expected_refs": [
+      "AdminService",
+      "auth/AdminService.java",
+      "services/AuthenticationService.java",
+      "routes/AuthRoutes.java",
+      "api/v1/AuthController.java",
+      "api/v2/AuthController.java",
+      "Main.java"
+    ]
+  },
+  "04_class_hierarchy": {
+    "description": "Hierarchy of AppException",
+    "query": "hierarchy AppException",
+    "expected": [
+      {
+        "name": "ValidationException"
+      },
+      {
+        "name": "TokenException"
+      },
+      {
+        "name": "AuthenticationException"
+      },
+      {
+        "name": "PaymentException"
+      }
+    ]
+  },
+  "05_trace_call_chain": {
+    "description": "Trace handleLogin call chain",
+    "query_sequence": [
+      "callees handleLogin",
+      "callees authenticate",
+      "callees login",
+      "callees generateToken",
+      "callees executeQuery",
+      "callees getConnection"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handleLogin",
+        "callee": "UserValidator.validateLogin"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "routes.handleLogin"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "authService.login"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "db.insert"
+      },
+      {
+        "caller": "login",
+        "callee": "tokenService.generateToken"
+      },
+      {
+        "caller": "generateToken",
+        "callee": "String.format"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "pool.getConnection"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "pool.releaseConnection"
+      },
+      {
+        "caller": "getConnection",
+        "callee": "conn.setInUse"
+      }
+    ]
+  },
+  "06_file_deps": {
+    "description": "What does routes/AuthRoutes.java import?",
+    "query": "deps routes/AuthRoutes.java",
+    "expected": [
+      "DatabaseConnection",
+      "AuthenticationException",
+      "TokenException",
+      "AuthenticationService",
+      "Logger"
+    ]
+  },
+  "07_type_references": {
+    "description": "Type references to TokenException",
+    "query": "refs TokenException",
+    "expected": [
+      {
+        "source": "validateToken",
+        "file": "auth/TokenService.java",
+        "kind": "raises"
+      },
+      {
+        "source": "refreshToken",
+        "file": "auth/TokenService.java",
+        "kind": "raises"
+      },
+      {
+        "source": "revokeToken",
+        "file": "auth/TokenService.java",
+        "kind": "raises"
+      },
+      {
+        "source": "ExpiredTokenException",
+        "file": "errors/ExpiredTokenException.java",
+        "kind": "inherits"
+      }
+    ]
+  },
+  "08_symbol_search": {
+    "description": "Find all Token-related symbols",
+    "query": "search Token",
+    "expected": [
+      { "name": "TokenService" },
+      { "name": "TokenClaims" },
+      { "name": "TokenException" },
+      { "name": "ExpiredTokenException" },
+      { "name": "TOKEN_EXPIRY" },
+      { "name": "generateToken" },
+      { "name": "validateToken" },
+      { "name": "refreshToken" },
+      { "name": "revokeToken" },
+      { "name": "extractToken" }
+    ]
+  },
+  "09_ambiguous_symbol": {
+    "description": "Where is 'validate' defined?",
+    "query": "search validate",
+    "expected": [
+      { "name": "validate", "file": "models/PaymentModel.java" },
+      { "name": "validate", "file": "models/UserModel.java" },
+      { "name": "validate", "file": "validators/PaymentValidator.java" },
+      { "name": "validate", "file": "validators/UserValidator.java" }
+    ]
+  },
+  "10_high_fanout": {
+    "description": "What inherits from AppException?",
+    "query": "hierarchy AppException",
+    "expected": [
+      { "name": "ValidationException" },
+      { "name": "TokenException" },
+      { "name": "AuthenticationException" },
+      { "name": "PaymentException" }
+    ]
+  },
+  "11_deep_call_chain": {
+    "description": "Deep call chain from handleLogin (5+ hops)",
+    "query_sequence": [
+      "callees handleLogin",
+      "callees authenticate",
+      "callees login",
+      "callees generateToken",
+      "callees executeQuery",
+      "callees getConnection"
+    ],
+    "expected_chain": [
+      { "caller": "handleLogin", "callee": "UserValidator.validateLogin" },
+      { "caller": "handleLogin", "callee": "routes.handleLogin" },
+      { "caller": "authenticate", "callee": "requireInitialized" },
+      { "caller": "authenticate", "callee": "authService.login" },
+      { "caller": "authenticate", "callee": "db.insert" },
+      { "caller": "login", "callee": "tokenService.generateToken" },
+      { "caller": "login", "callee": "log.info" },
+      { "caller": "generateToken", "callee": "log.info" },
+      { "caller": "generateToken", "callee": "String.format" },
+      { "caller": "executeQuery", "callee": "pool.getConnection" },
+      { "caller": "executeQuery", "callee": "pool.releaseConnection" },
+      { "caller": "getConnection", "callee": "log.debug" },
+      { "caller": "getConnection", "callee": "conn.isInUse" },
+      { "caller": "getConnection", "callee": "conn.setInUse" },
+      { "caller": "getConnection", "callee": "log.error" }
+    ]
+  },
+  "12_deep_impact": {
+    "description": "Deep impact of DatabaseConnection (depth 3)",
+    "query": "impact DatabaseConnection --depth 3",
+    "expected_refs": [
+      "database/UserQueries.java",
+      "database/SessionQueries.java",
+      "tasks/CleanupTask.java",
+      "tasks/EmailTask.java",
+      "Main.java",
+      "api/v1/AuthController.java",
+      "api/v2/AuthController.java",
+      "routes/AuthRoutes.java",
+      "routes/UserRoutes.java",
+      "services/SessionService.java",
+      "services/UserService.java",
+      "services/payment/PaymentProcessor.java",
+      "services/AuthenticationService.java"
+    ]
+  },
+  "13_rag_search": {
+    "description": "Semantic search: validate token",
+    "query": "rag search \"validate token\"",
+    "expected": [
+      { "name": "validateToken" },
+      { "name": "TokenException" },
+      { "name": "ExpiredTokenException" },
+      { "name": "extractToken" },
+      { "name": "generateToken" },
+      { "name": "refreshToken" },
+      { "name": "TokenService" }
+    ]
+  }
+}

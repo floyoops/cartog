@@ -73,9 +73,22 @@
 - Variable assignments (module-level and class-level)
 - Visibility: public (default), `_prefixed` (private convention)
 
-## Planned
-
 ### Java (.java)
+- Classes, interfaces, enums, annotation types (all as class symbols)
+- Methods, constructors (as method symbols)
+- Fields, constants (as variable symbols)
+- Imports (named only, wildcards skipped)
+- Method calls (including receiver: `obj.method`)
+- `new` expressions → `References` edges
+- Inheritance (`extends` → inherits edge)
+- Interface implementation (`implements` → inherits edges)
+- Declared throws clauses → `Raises` edges
+- `throw` statements → `Raises` edges
+- Annotation references (`@Override`, `@Deprecated`, etc.) → `References` edges
+- Type references in method signatures (parameter types, return types, generic types)
+- Nested named classes at any depth (anonymous classes skipped)
+- Javadoc (`/** ... */`) and line comment (`//`) docstrings
+- Visibility: `public`, `private`, `protected`; package-private (no modifier) → `Public`
 
 ## Extraction Notes
 

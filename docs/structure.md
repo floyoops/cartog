@@ -23,7 +23,8 @@ cartog/
 │   │   ├── js_shared.rs     # Shared JS/TS extraction logic
 │   │   ├── rust_lang.rs     # Rust extractor
 │   │   ├── go.rs            # Go extractor
-│   │   └── ruby.rs          # Ruby extractor
+│   │   ├── ruby.rs          # Ruby extractor
+│   │   └── java.rs          # Java extractor
 │   ├── rag/
 │   │   ├── mod.rs           # RAG module root, constants (EMBEDDING_DIM)
 │   │   ├── setup.rs         # Model download (triggers fastembed auto-download)
@@ -54,7 +55,8 @@ cartog/
 │   │   ├── webapp_ts/       # TypeScript fixture (48 files)
 │   │   ├── webapp_go/       # Go fixture (45 files)
 │   │   ├── webapp_rs/       # Rust fixture (65 files)
-│   │   └── webapp_rb/       # Ruby fixture (51 files)
+│   │   ├── webapp_rb/       # Ruby fixture (51 files)
+│   │   └── webapp_java/     # Java fixture (41 files)
 │   ├── ground_truth/        # Expected relationships per fixture (JSON)
 │   ├── scenarios/           # 13 scenario scripts (01-13)
 │   └── results/             # Benchmark output (gitignored)

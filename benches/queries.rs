@@ -135,6 +135,130 @@ fn bench_stats(c: &mut Criterion) {
     c.bench_function("stats", |b| b.iter(|| db.stats().unwrap()));
 }
 
+fn setup_java_db() -> Database {
+    let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("benchmarks")
+        .join("fixtures")
+        .join("webapp_java");
+
+    let db = Database::open_memory().expect("open in-memory DB");
+    index_directory(&db, &fixture_dir, true).expect("index Java fixture");
+    db
+}
+
+fn bench_java_search(c: &mut Criterion) {
+    let db = setup_java_db();
+
+    c.bench_function("java_search_token", |b| {
+        b.iter(|| db.search("Token", None, None, 100).unwrap())
+    });
+
+    c.bench_function("java_search_validate", |b| {
+        b.iter(|| db.search("validate", None, None, 100).unwrap())
+    });
+
+    c.bench_function("java_search_no_match", |b| {
+        b.iter(|| {
+            db.search("zzz_nonexistent_symbol", None, None, 100)
+                .unwrap()
+        })
+    });
+}
+
+fn bench_java_refs(c: &mut Criterion) {
+    let db = setup_java_db();
+
+    c.bench_function("java_refs_validateToken_all", |b| {
+        b.iter(|| db.refs("validateToken", None).unwrap())
+    });
+
+    c.bench_function("java_refs_validateToken_calls", |b| {
+        b.iter(|| db.refs("validateToken", Some(EdgeKind::Calls)).unwrap())
+    });
+
+    c.bench_function("java_refs_TokenException_all", |b| {
+        b.iter(|| db.refs("TokenException", None).unwrap())
+    });
+
+    c.bench_function("java_refs_AuthService", |b| {
+        b.iter(|| db.refs("AuthService", None).unwrap())
+    });
+}
+
+fn bench_java_impact(c: &mut Criterion) {
+    let db = setup_java_db();
+
+    c.bench_function("java_impact_AuthService_d3", |b| {
+        b.iter(|| db.impact("AuthService", 3).unwrap())
+    });
+
+    c.bench_function("java_impact_DatabaseConnection_d3", |b| {
+        b.iter(|| db.impact("DatabaseConnection", 3).unwrap())
+    });
+
+    c.bench_function("java_impact_validateToken_d3", |b| {
+        b.iter(|| db.impact("validateToken", 3).unwrap())
+    });
+}
+
+fn bench_java_outline(c: &mut Criterion) {
+    let db = setup_java_db();
+
+    c.bench_function("java_outline_token_service", |b| {
+        b.iter(|| db.outline("auth/TokenService.java").unwrap())
+    });
+
+    c.bench_function("java_outline_auth_routes", |b| {
+        b.iter(|| db.outline("routes/AuthRoutes.java").unwrap())
+    });
+}
+
+fn bench_java_callees(c: &mut Criterion) {
+    let db = setup_java_db();
+
+    c.bench_function("java_callees_handleLogin", |b| {
+        b.iter(|| db.callees("handleLogin").unwrap())
+    });
+
+    c.bench_function("java_callees_authenticate", |b| {
+        b.iter(|| db.callees("authenticate").unwrap())
+    });
+
+    c.bench_function("java_callees_generateToken", |b| {
+        b.iter(|| db.callees("generateToken").unwrap())
+    });
+}
+
+fn bench_java_hierarchy(c: &mut Criterion) {
+    let db = setup_java_db();
+
+    c.bench_function("java_hierarchy_AppException", |b| {
+        b.iter(|| db.hierarchy("AppException").unwrap())
+    });
+
+    c.bench_function("java_hierarchy_AuthService", |b| {
+        b.iter(|| db.hierarchy("AuthService").unwrap())
+    });
+}
+
+fn bench_java_deps(c: &mut Criterion) {
+    let db = setup_java_db();
+
+    c.bench_function("java_deps_auth_routes", |b| {
+        b.iter(|| db.file_deps("routes/AuthRoutes.java").unwrap())
+    });
+
+    c.bench_function("java_deps_auth_service", |b| {
+        b.iter(|| db.file_deps("services/AuthenticationService.java").unwrap())
+    });
+}
+
+fn bench_java_stats(c: &mut Criterion) {
+    let db = setup_java_db();
+
+    c.bench_function("java_stats", |b| b.iter(|| db.stats().unwrap()));
+}
+
 criterion_group!(
     benches,
     bench_search,
@@ -145,5 +269,13 @@ criterion_group!(
     bench_hierarchy,
     bench_deps,
     bench_stats,
+    bench_java_search,
+    bench_java_refs,
+    bench_java_impact,
+    bench_java_outline,
+    bench_java_callees,
+    bench_java_hierarchy,
+    bench_java_deps,
+    bench_java_stats,
 );
 criterion_main!(benches);

@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-skill check-py check-ts check-go check-rs check-rb bench bench-criterion bench-rag eval-skill
+.PHONY: check check-rust check-fixtures check-skill check-py check-ts check-go check-rs check-rb check-java bench bench-criterion bench-rag eval-skill
 
 # --- Full integrity check ---
 
@@ -13,7 +13,7 @@ check-rust: ## cargo fmt + clippy + test
 
 # --- Fixture syntax/build checks ---
 
-check-fixtures: check-py check-go check-rs check-rb ## Validate all fixture codebases
+check-fixtures: check-py check-go check-rs check-rb check-java ## Validate all fixture codebases
 
 check-py: ## Validate Python fixtures (py_compile)
 	@echo "==> Checking Python fixtures..."
@@ -38,6 +38,11 @@ check-rs: ## Validate Rust fixtures (cargo check)
 check-rb: ## Validate Ruby fixtures (ruby -c)
 	@echo "==> Checking Ruby fixtures..."
 	@find benchmarks/fixtures/webapp_rb -name '*.rb' -exec ruby -c {} + > /dev/null
+	@echo "    OK"
+
+check-java: ## Validate Java fixtures (javac)
+	@echo "==> Checking Java fixtures..."
+	@mkdir -p /tmp/cartog_java_check && cd benchmarks/fixtures/webapp_java && javac -sourcepath . $$(find . -name "*.java" | sort) -d /tmp/cartog_java_check
 	@echo "    OK"
 
 # --- Skill tests ---

@@ -202,7 +202,7 @@ references  process  routes/auth.py:22
 
 ```mermaid
 graph LR
-    A["Source files<br/>(py, ts, rs, go, rb)"] -->|tree-sitter| B["Symbols + Edges"]
+    A["Source files<br/>(py, ts, rs, go, rb, java)"] -->|tree-sitter| B["Symbols + Edges"]
     B -->|write| C[".cartog.db<br/>(SQLite)"]
     C -->|query| D["search / refs / impact<br/>outline / callees / hierarchy"]
     C -->|embed locally| E["ONNX embeddings<br/>(sqlite-vec)"]
@@ -290,7 +290,7 @@ Your code never leaves your machine. Not during indexing, not during search, not
 | Rust | .rs | functions, structs, traits, impls, imports | calls, imports, inherits (trait impl), type refs |
 | Go | .go | functions, structs, interfaces, imports | calls, imports, type refs |
 | Ruby | .rb | functions, classes, modules, imports | calls, imports, inherits, raises, rescue types |
-| Java | — | *Planned* | — |
+| Java | .java | classes, interfaces, enums, methods, imports, variables | calls, imports, inherits, raises, type refs, new |
 
 ## Performance
 

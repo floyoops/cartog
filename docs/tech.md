@@ -9,7 +9,7 @@
 | Crate | Purpose |
 |-------|---------|
 | `tree-sitter` | Incremental parsing, CST traversal |
-| `tree-sitter-{lang}` | Per-language grammars (Python, TS/JS, Rust, Go, Ruby) |
+| `tree-sitter-{lang}` | Per-language grammars (Python, TS/JS, Rust, Go, Ruby, Java) |
 | `rusqlite` (bundled) | SQLite storage, zero external deps |
 | `clap` (derive) | CLI argument parsing |
 | `serde` + `serde_json` | JSON serialization for `--json` output |

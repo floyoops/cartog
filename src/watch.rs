@@ -386,6 +386,15 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn test_relevant_java_file() {
+        let root = PathBuf::from("/project");
+        assert!(is_relevant_path(
+            Path::new("/project/src/UserService.java"),
+            &root
+        ));
+    }
+
     // ── Irrelevant file types ──
 
     #[test]

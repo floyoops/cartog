@@ -248,3 +248,142 @@ fn rag_relevancy_benchmark() {
     );
     println!();
 }
+
+fn setup_java_db() -> Database {
+    let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("benchmarks")
+        .join("fixtures")
+        .join("webapp_java");
+
+    let db = Database::open_memory().expect("open in-memory DB");
+    index_directory(&db, &fixture_dir, true).expect("index Java fixture");
+    db
+}
+
+#[test]
+fn java_rag_relevancy_benchmark() {
+    let db = setup_java_db();
+
+    let cases = vec![
+        QueryCase {
+            query: "validate token",
+            expected: &[
+                "validateToken",
+                "TokenException",
+                "ExpiredTokenException",
+                "extractToken",
+            ],
+            k: 5,
+        },
+        QueryCase {
+            query: "database connection pool",
+            expected: &["DatabaseConnection", "ConnectionPool", "ConnectionHandle"],
+            k: 5,
+        },
+        QueryCase {
+            query: "authenticate user login",
+            expected: &["authenticate", "login", "AuthService"],
+            k: 5,
+        },
+        QueryCase {
+            query: "exception error handling",
+            expected: &[
+                "AppException",
+                "TokenException",
+                "ValidationException",
+                "PaymentException",
+            ],
+            k: 10,
+        },
+        QueryCase {
+            query: "payment processing",
+            expected: &["PaymentProcessor", "PaymentGateway", "PaymentModel"],
+            k: 5,
+        },
+        QueryCase {
+            query: "generate token",
+            expected: &["generateToken"],
+            k: 3,
+        },
+    ];
+
+    let reranker_active = cartog::rag::reranker::CrossEncoderEngine::load().is_ok();
+
+    println!();
+    println!("  Java fixture:");
+    println!(
+        "  Re-ranker: {}",
+        if reranker_active {
+            "active"
+        } else {
+            "off (model not downloaded)"
+        }
+    );
+    println!();
+    println!(
+        "  {:<35} {:>10} {:>10} {:>10} {:>6}",
+        "Query", "P@k", "R@k", "NDCG@k", "k"
+    );
+    println!("  {}", "-".repeat(75));
+
+    let mut total_p = 0.0;
+    let mut total_r = 0.0;
+    let mut total_ndcg = 0.0;
+    let n = cases.len() as f64;
+
+    for case in &cases {
+        let result = hybrid_search(&db, case.query, case.k as u32, None)
+            .unwrap_or_else(|e| panic!("search failed for '{}': {e}", case.query));
+
+        let names: Vec<String> = result
+            .results
+            .iter()
+            .map(|r| r.symbol.name.clone())
+            .collect();
+
+        let p = precision_at_k(&names, case.expected, case.k);
+        let r = recall_at_k(&names, case.expected, case.k);
+        let ndcg = ndcg_at_k(&names, case.expected, case.k);
+
+        total_p += p;
+        total_r += r;
+        total_ndcg += ndcg;
+
+        println!(
+            "  {:<35} {:>9.1}% {:>9.1}% {:>9.3}  {:>5}",
+            case.query,
+            p * 100.0,
+            r * 100.0,
+            ndcg,
+            case.k
+        );
+
+        let actual_str = if names.is_empty() {
+            "(no results)".to_string()
+        } else {
+            names
+                .iter()
+                .take(case.k)
+                .map(|n| {
+                    if case.expected.contains(&n.as_str()) {
+                        format!("[{n}]")
+                    } else {
+                        n.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        println!("    got: {actual_str}");
+    }
+
+    println!("  {}", "-".repeat(75));
+    println!(
+        "  {:<35} {:>9.1}% {:>9.1}% {:>9.3}",
+        "MEAN",
+        total_p / n * 100.0,
+        total_r / n * 100.0,
+        total_ndcg / n,
+    );
+    println!();
+}
