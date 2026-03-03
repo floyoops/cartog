@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.5] - 2026-03-01
+## [0.5.0] - 2026-03-03
 
 ### Bug Fixes
 
@@ -20,6 +20,7 @@
 
 - **perf**: Optimize treesitter parser and sql ([`4746d07`](https://github.com/jrollin/cartog/commit/4746d07e35be8a0e5c8dfbce25a4948c80348b9f))
 - Add RAG semantic search, file watcher, and smart search routing ([`ad92a18`](https://github.com/jrollin/cartog/commit/ad92a18ac4685813d0a1424dbbf4dddb983850f6))
+- Add java lang support ([`c0c3cc0`](https://github.com/jrollin/cartog/commit/c0c3cc08141bb48a67237f891621594633d482bc))
 
 ### Miscellaneous
 
