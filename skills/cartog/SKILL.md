@@ -84,6 +84,9 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 - Split one query into multiple `rag search` calls with rephrased variants — one call is enough. The hybrid search (FTS5 + vector + reranker) handles synonyms and related terms internally
 - Block on RAG embedding at setup — background indexing is fine, `rag search` works immediately with FTS5 + reranker
 - Assume `rag search` requires `rag index` — it works (at reduced quality) with just `cartog index .`
+- Chain multiple `cartog` CLI commands with `&&` or `|` — each invocation opens a fresh SQLite connection with full initialization overhead (PRAGMAs, schema checks, cold cache). Run them as **separate tool calls** instead
+- Pipe `cartog` output through `grep` — cartog already returns focused, structured results. Filtering with grep discards context (line numbers, kinds, file paths) and can break `&&` chains when grep finds no match (exit code 1)
+- Combine unrelated cartog queries in one bash command — this creates false dependencies and hides failures. See `references/query_cookbook.md` → "Anti-patterns to avoid" for examples
 
 ## Setup
 

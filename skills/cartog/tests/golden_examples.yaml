@@ -181,6 +181,29 @@
   tags: [routing, fallback]
 
 # ============================================================
+# CLI usage: no chaining, no grep filtering
+# ============================================================
+
+- id: no_cli_chaining
+  description: Multiple cartog queries should be separate calls, not chained with && or piped through grep
+  user_query: "What does getLoginCapability call? And what does ssoCallback call?"
+  expected:
+    tool_calls:
+      - "cartog callees getLoginCapability"
+      - "cartog callees ssoCallback"
+    reasoning: >
+      Each cartog CLI invocation opens a fresh SQLite connection with full
+      initialization overhead. The agent should list two separate commands
+      on separate lines (not chained with && or | in a single line).
+      The FIRST command must be a plain cartog callees call without any
+      shell piping, grep filtering, or && chaining on that same line.
+  anti_patterns:
+    - Chaining with && (e.g., cartog callees X && cartog callees Y)
+    - Piping through grep (e.g., cartog callees X | grep "something")
+    - Combining both queries in a single bash command
+  tags: [do-dont, cli-usage]
+
+# ============================================================
 # Outline vs read
 # ============================================================
 

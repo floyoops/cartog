@@ -52,6 +52,8 @@ cartog refs SessionManager
 
 ## Combining Commands
 
+Run each cartog command as a **separate tool call** — don't chain with `&&` or pipe through `grep`. Each CLI invocation opens a fresh SQLite connection with full initialization overhead. Separate calls let the agent inspect each result before deciding the next step.
+
 ### Understand a function before modifying it
 ```bash
 cartog search validate_token           # Locate the symbol — note the file path returned
@@ -73,6 +75,21 @@ cartog search OldClassName             # Confirm exact name and file first
 cartog refs OldClassName               # All references
 cartog hierarchy OldClassName          # Subclasses to update
 cartog impact OldClassName --depth 5   # Full blast radius
+```
+
+### Anti-patterns to avoid
+
+Don't chain cartog calls in a single bash command:
+```bash
+# BAD — chained with && and grep filtering
+cartog callees getLogin 2>&1 | grep "Manager" && cartog callees ssoCallback 2>&1
+
+# BAD — grep discards structured output, && creates false dependency
+cartog refs validate_token --kind calls 2>&1 | grep "auth" && cartog impact validate_token
+
+# GOOD — separate calls, inspect each result
+cartog callees getLogin
+cartog callees ssoCallback
 ```
 
 ## Semantic Search (RAG)
