@@ -117,6 +117,22 @@
     - cartog search as FIRST command or in parallel
   tags: [routing, do-dont]
 
+- id: search_show_me_related
+  description: '"Show me all code related to X" should use rag search'
+  user_query: "show me all code related to svc user api"
+  expected:
+    tool_calls:
+      - 'cartog rag search "svc user api"'
+    reasoning: >
+      "Show me all code related to..." is a natural language query describing
+      a domain concept. The FIRST command must be cartog rag search.
+      The agent should NOT fall back to grep or file browsing.
+  anti_patterns:
+    - grep as the FIRST command
+    - Glob/Read as the FIRST command
+    - cartog search as the FIRST command
+  tags: [routing]
+
 # ============================================================
 # Graceful degradation
 # ============================================================
