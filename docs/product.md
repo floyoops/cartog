@@ -4,26 +4,49 @@
 
 ## Purpose
 
-cartog is a code graph indexer that gives LLM coding agents instant structural understanding of a codebase. It replaces repeated grep/cat with targeted graph queries.
+cartog is a code graph indexer that gives LLM coding agents instant structural understanding of a codebase. It replaces repeated grep/cat with targeted graph queries — **83% fewer tokens per query, 97% recall**.
 
 ## Core Insight
 
 Code is a graph of relationships (calls, imports, inherits, type references). Pre-compute this graph with tree-sitter, store it in SQLite, and let the agent query it instead of re-discovering structure from scratch every time.
 
+## Results
+
+| | grep/cat workflow | cartog |
+|---|---|---|
+| **Tokens per query** | ~1,700 | ~280 (83% fewer) |
+| **Recall** (completeness) | 78% | 97% |
+| **Query latency** | multi-step | 8-450 us |
+| **Transitive analysis** | impossible | `impact --depth 3` |
+
+Measured across 13 scenarios, 5 languages. Best gains on call chain tracing (88% token reduction) and caller lookup (95% reduction).
+
 ## Target Users
 
-- LLM coding agents (Claude Code, Cursor, Aider, etc.)
-- Developers who want fast structural navigation
+- **LLM coding agents** — Claude Code, Cursor, Aider, Copilot, or any LLM with bash/MCP access
+- **Developers** who want fast structural navigation without running a language server
+- **Privacy-conscious teams** — fully local, no API calls, works in air-gapped environments
 
 ## Key Features
 
 - **Zero dependencies**: Single binary + SQLite file. No language server, no graph DB.
 - **Works everywhere**: Claude.ai (as skill), Claude Code (as skill or MCP), any LLM with bash access.
-- **Instant queries**: Pre-computed graph, microsecond lookups.
+- **Instant queries**: Pre-computed graph — 8us for outline, 100us for search, 450us for refs.
 - **Incremental indexing**: Git-based change detection, only re-indexes modified files.
-- **Semantic search (opt-in)**: Hybrid FTS5 keyword + vector similarity search over code symbols, with optional cross-encoder re-ranking. ONNX Runtime inference via fastembed. Models auto-downloaded via `cartog rag setup`.
+- **Live index**: `cartog watch` auto re-indexes on file changes. Agent always queries fresh data.
+- **MCP server**: `cartog serve` exposes 11 tools over stdio. Plug into any MCP-compatible client.
+- **100% local**: tree-sitter parsing, SQLite storage, ONNX embeddings. No API keys, no telemetry. Code never leaves your machine.
+- **Dual search**: keyword search (sub-ms, symbol names) + semantic search (natural language, ~300ms). Run both when unsure.
 
 ## Differentiation
+
+**vs grep/cat/find (the status quo):**
+Pre-computed graph eliminates multi-step discovery. One `refs` call replaces grep + filter + read. Transitive analysis (`impact`) is impossible with grep.
+
+**vs language servers (LSP):**
+No startup time, no per-language server process, no config. Single binary covers 6 languages. Trade-off: ~90% name resolution accuracy vs LSP's full semantic analysis.
+
+**vs alternatives (Serena MCP, codanna, Aider repo-map):**
 
 | vs Serena MCP | vs codanna | vs Aider |
 |---------------|-----------|----------|
@@ -40,3 +63,9 @@ Structural/heuristic name resolution, not full semantic. 90% accuracy — enough
 - **Primary**: Claude Code skill (SKILL.md + bash scripts)
 - **Secondary**: MCP server (`cartog serve` over stdio) for Claude Code, Cursor, and other MCP clients
 - **Tertiary**: `cargo install cartog` / pre-built binaries for direct CLI use
+
+## Further Reading
+
+- [Usage](usage.md) — CLI commands, agent skill setup, MCP server per client
+- [Technology Stack](tech.md) — architecture decisions, dependencies
+- [Project Structure](structure.md) — module layout, conventions

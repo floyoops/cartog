@@ -634,7 +634,7 @@ impl ServerHandler for CartogServer {
                   - Run cartog_rag_index to build the embedding index (after cartog_index).\n\
                   - Use cartog_rag_search for natural language queries about code functionality.\n\
                   - Combines keyword (BM25) and vector similarity search for best results.\n\n\
-                 Supports: Python, TypeScript/JavaScript, Rust, Go, Ruby."
+                 Supports: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java."
                     .into(),
             ),
         }

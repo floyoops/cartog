@@ -60,7 +60,7 @@ main.rs → cli.rs (clap) → command handlers (sync)
 
 Each language extractor implements the `Extractor` trait from `src/languages/mod.rs`:
 ```rust
-fn extract(&self, source: &str, file_path: &str) -> Result<ExtractionResult>
+fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult>
 ```
 
 Returns `Vec<Symbol>` + `Vec<Edge>`. After all files are extracted, `db.resolve_edges()` links edges by name (same file > same dir > unique project match).

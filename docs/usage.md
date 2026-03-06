@@ -2,6 +2,8 @@
 
 ## Setup
 
+Requires Rust 1.70+ (`rustup update` if needed).
+
 ```bash
 cargo install cartog           # from crates.io
 
@@ -19,9 +21,10 @@ Build or update the graph. Run this first, then again after code changes.
 ```bash
 cartog index .              # index current directory
 cartog index src/           # index a subdirectory only
+cartog index . --force      # full re-index, bypassing change detection
 ```
 
-Incremental — skips files whose content hash hasn't changed.
+Incremental by default — skips files whose content hash hasn't changed. Use `--force` when results seem stale or after updating cartog itself.
 
 ### `cartog search <query> [--kind <kind>] [--file <path>] [--limit N]`
 
@@ -124,7 +127,7 @@ AdminService -> AuthService
 
 ### `cartog deps <file>`
 
-File-level import graph — what does this file import?
+List symbols imported by a file — answers "what does this file depend on?".
 
 ```bash
 cartog deps src/routes/auth.py
@@ -189,15 +192,71 @@ cartog serve --watch --rag    # MCP server + watcher + auto RAG embedding
 
 When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
 
+### `cartog rag setup`
+
+Download embedding and re-ranker models from HuggingFace. Run once before using RAG search.
+
+```bash
+cartog rag setup
+```
+
+### `cartog rag index [path] [--force]`
+
+Build the embedding index for semantic search. Requires `cartog index` and `cartog rag setup` first.
+
+```bash
+cartog rag index              # embed all symbols in CWD
+cartog rag index src/         # embed a subdirectory
+cartog rag index --force      # re-embed all symbols
+```
+
+### `cartog rag search <query> [--kind <kind>] [--limit N]`
+
+Semantic search over code symbols — use natural language to find code by what it does, not just by name.
+
+```bash
+cartog rag search "validate authentication tokens"
+cartog rag search "error handling" --kind function
+cartog rag search "database connection" --limit 5
+```
+
+Combines keyword (BM25/FTS5) and vector similarity search, merged via RRF, then re-ranked by a cross-encoder model.
+
+Available `--kind` values: `function`, `class`, `method`, `variable`, `import`.
+
+## Recommended Workflow
+
+```
+cartog index .          # 1. build the graph
+cartog search foo       # 2. discover exact symbol names
+cartog refs foo         # 3. find all usages
+cartog callees foo      # 4. see what it depends on
+cartog impact foo       # 5. assess blast radius before changing
+cartog index .          # 6. re-index after code changes
+```
+
+For semantic search, add the RAG pipeline:
+
+```
+cartog rag setup        # one-time model download
+cartog rag index        # embed symbols
+cartog rag search "..."  # natural language queries
+```
+
 ## JSON Output
 
-All commands accept `--json` for structured output:
+All commands accept `--json` for structured output. The flag can go before or after the subcommand:
 
 ```bash
 cartog --json refs validate_token
+cartog refs validate_token --json    # equivalent
 cartog --json outline src/auth/tokens.py
 cartog --json stats
 ```
+
+Returns arrays of objects with fields like `name`, `kind`, `file_path`, `start_line`, `end_line`, `signature`, etc. Empty results return `[]`.
+
+**Errors**: if the index doesn't exist yet, query commands print an error message and exit with a non-zero status. Run `cartog index .` first. If a symbol or file isn't found, the result is an empty array (not an error).
 
 ## Agent Skill
 
@@ -384,7 +443,13 @@ The config pattern is always the same — point the client at `cartog serve` ove
 | `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search |
 | `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |
 
-All tool responses are JSON. The `cartog_index` and `cartog_rag_index` tools restrict indexing to the project directory (CWD subtree).
+All tool responses are JSON.
+
+**Path restriction**: `cartog_index` and `cartog_rag_index` reject paths outside the project directory (CWD subtree). Agents cannot index arbitrary filesystem locations.
+
+### Built-in Workflow Guidance
+
+The MCP server sends workflow instructions to the client at initialization, covering tool chaining order (index → search → refs/callees/impact → re-index) and when to use semantic search. Clients that support the MCP `instructions` field will surface these automatically.
 
 ### Logging
 
