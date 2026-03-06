@@ -60,6 +60,8 @@ cartog/
 │   ├── ground_truth/        # Expected relationships per fixture (JSON)
 │   ├── scenarios/           # 13 scenario scripts (01-13)
 │   └── results/             # Benchmark output (gitignored)
+├── benches/
+│   └── queries.rs          # Criterion micro-benchmarks (query latency, µs)
 ├── tests/
 │   ├── rag_relevancy.rs     # RAG relevancy integration benchmark (P@k, R@k, NDCG)
 │   └── fixtures/
@@ -71,7 +73,7 @@ cartog/
     ├── tech.md              # Technology decisions
     ├── structure.md         # This file
     ├── usage.md             # CLI commands + MCP server setup per client
-    └── claude-code.md       # Claude Code integration details
+    └── spec-watch.md        # Feature spec: file watcher (implemented)
 ```
 
 ## Module Responsibilities
@@ -81,7 +83,7 @@ cartog/
 - **indexer.rs**: Walks the file tree, delegates to language extractors, writes to db, runs edge resolution. Also stores symbol source content for RAG during indexing. Exports `is_ignored_dirname()` for reuse by the watcher.
 - **commands.rs**: Command handlers for all CLI commands including `rag setup/index/search` and `watch`. Formats output (human-readable or `--json`).
 - **mcp.rs**: MCP server over stdio. `CartogServer` struct with 11 `#[tool]` handlers (9 core + 2 RAG). Path validation restricts `index` to CWD subtree. Uses `spawn_blocking` for sync DB/indexer calls. Optionally spawns a background file watcher (`--watch` flag).
-- **watch.rs**: File watcher using `notify-debouncer-mini`. Debounces filesystem events, triggers incremental `index_directory()`. Optionally defers RAG embedding after a configurable delay. Used standalone (`cartog watch`) or embedded in MCP server (`cartog serve --watch`).
+- **watch.rs**: File watcher using `notify-debouncer-mini`. Debounces filesystem events, triggers incremental `index_directory()`. Optionally defers RAG embedding after a configurable delay. Used standalone (`cartog watch`) or embedded in MCP server (`cartog serve --watch`). See [spec-watch.md](spec-watch.md) for design details.
 - **languages/mod.rs**: Maps file extensions to extractors, defines the `Extractor` trait and shared `node_text` helper. Each extractor implements `fn extract(&self, source: &str, file_path: &str) -> Result<ExtractionResult>`.
 - **rag/mod.rs**: RAG pipeline constants (`EMBEDDING_DIM = 384`), shared model cache directory (`model_cache_dir()` — XDG-compliant, avoids per-project model downloads).
 - **rag/setup.rs**: Triggers model download by instantiating fastembed engines (models auto-downloaded from HuggingFace on first use).

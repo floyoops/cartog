@@ -37,7 +37,7 @@ Debounce filter (2s default) ──> code graph index (incremental, ~1-3s)
 ## Functional Requirements
 
 ### FR-001: File Change Detection
-When a supported source file (Python, TypeScript/JavaScript, Rust, Go, Ruby) is created, modified, or deleted within the watched directory, the system shall queue a re-index after the debounce window expires.
+When a supported source file (Python, TypeScript/JavaScript, Rust, Go, Ruby, Java) is created, modified, or deleted within the watched directory, the system shall queue a re-index after the debounce window expires.
 
 ### FR-002: Debounce Window
 While file change events are arriving within the debounce window (default 2s, configurable via `--debounce`), the system shall reset the timer and not trigger re-indexing until the window elapses without new events.
@@ -99,7 +99,7 @@ Options:
 
 ### AC-001: Basic file change triggers re-index
 Given `cartog watch` is running on a directory
-When I save a Python/TS/Rust/Go/Ruby file
+When I save a Python/TS/Rust/Go/Ruby/Java file
 Then the code graph is re-indexed within debounce window + index time
 And the log shows files indexed count > 0
 
@@ -188,9 +188,15 @@ All items completed.
 ### Public API for reuse
 - [x] `indexer::is_ignored_dirname()` — extracted from private `is_ignored()` for sharing
 
-### Testing (14 new tests)
-- [x] 13 `is_relevant_path()` tests (language filtering + ignored dirs)
-- [x] 1 `WatchConfig` defaults test
+### Testing (44 tests)
+- [x] 12 language coverage tests (Python, TS, TSX, JS, JSX, MJS, CJS, Rust, Go, Ruby, Java, `.pyi`)
+- [x] 5 irrelevant file type tests (JSON, Markdown, TOML, YAML, no extension)
+- [x] 10 ignored directory tests (node_modules, .git, target, __pycache__, vendor, venv, dist, .next, .mypy_cache, .hg/.svn)
+- [x] 4 path boundary tests (hidden dirs, root level, deeply nested, outside root)
+- [x] 4 `is_ignored_dirname()` direct tests (known dirs, hidden dirs, allowed dirs, case sensitivity)
+- [x] 2 `WatchConfig` tests (defaults, custom values)
+- [x] 2 `spawn_watch` error path tests (nonexistent dir, file-not-dir)
+- [x] 2 `WatchHandle` lifecycle tests (drop signals shutdown, stop signals and joins)
 
 ## Out of Scope
 

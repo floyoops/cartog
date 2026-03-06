@@ -3,6 +3,9 @@
 //! Indexes the Python benchmark fixture once, then measures query latency
 //! for search, refs, impact, outline, callees, hierarchy, deps, and stats.
 //!
+//! Note: separate from `benchmarks/` (shell-based integration suite measuring
+//! token efficiency and recall). Both share `benchmarks/fixtures/`.
+//!
 //! Run with: `cargo bench --bench queries`
 
 use criterion::{criterion_group, criterion_main, Criterion};

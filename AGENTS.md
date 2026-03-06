@@ -4,7 +4,7 @@
 
 cartog — code graph indexer for LLM coding agents. Single Rust binary, tree-sitter parsing, SQLite storage.
 
-See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/tech.md) for architecture decisions, [docs/structure.md](docs/structure.md) for module layout.
+See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/tech.md) for architecture decisions, [docs/structure.md](docs/structure.md) for module layout, [docs/usage.md](docs/usage.md) for CLI commands and MCP/skill setup.
 
 ## Build & Test
 
@@ -43,6 +43,8 @@ Run `make check` before committing. Run `make eval-skill` after changing skill S
 
 ## Architecture
 
+See [docs/structure.md](docs/structure.md) for full directory tree and module responsibilities.
+
 ```
 main.rs → cli.rs (clap) → command handlers (sync)
                          ↓
@@ -51,22 +53,9 @@ main.rs → cli.rs (clap) → command handlers (sync)
               ├── db.rs (SQLite: core schema + RAG schema)
               └── types.rs (shared structs)
 
-         → Rag → rag/setup.rs (model download via fastembed auto-download)
-              → rag/embeddings.rs (ONNX Runtime inference via fastembed)
-              → rag/indexer.rs (embed symbols → sqlite-vec)
-              → rag/search.rs (FTS5 + vector KNN → RRF merge)
-              → rag/reranker.rs (cross-encoder re-ranking via fastembed)
-
-         → Watch → watch.rs (file watcher, debounced re-index + deferred RAG)
-              ├── notify-debouncer-mini (kqueue/inotify/ReadDirectoryChangesW)
-              ├── WatchConfig (debounce, rag, rag_delay)
-              └── run_watch() / spawn_watch() (foreground / background)
-
-         → Serve → mcp.rs (MCP server over stdio, async via tokio)
-              ├── CartogServer (11 tool handlers: 9 core + 2 RAG)
-              ├── Path validation (CWD subtree restriction)
-              ├── --watch flag → spawn_watch() background thread
-              └── spawn_blocking → db.rs / indexer.rs / rag (sync)
+         → Rag    → rag/*.rs (setup, embeddings, indexer, search, reranker)
+         → Watch  → watch.rs (debounced re-index + deferred RAG)
+         → Serve  → mcp.rs (MCP server over stdio, 11 tools)
 ```
 
 Each language extractor implements the `Extractor` trait from `src/languages/mod.rs`:
@@ -101,7 +90,32 @@ Returns `Vec<Symbol>` + `Vec<Edge>`. After all files are extracted, `db.resolve_
 
 The script bumps `Cargo.toml`, commits, tags `vX.Y.Z`, and pushes. The release workflow then builds binaries and publishes to crates.io.
 
+## Documentation Convention
+
+All documentation lives in `docs/`. No per-tool or per-client separate doc files — consolidate into the canonical files below.
+
+| File | Scope |
+|------|-------|
+| `docs/product.md` | Product context, target users, differentiation |
+| `docs/tech.md` | Technology stack, architecture decisions |
+| `docs/structure.md` | Directory layout, module responsibilities, conventions |
+| `docs/usage.md` | CLI commands, agent skill setup, MCP server setup (all clients) |
+| `docs/spec-*.md` | Feature specs (design records, kept after implementation) |
+
+### Feature Specs (`docs/spec-*.md`)
+
+Create a spec for new features with 3+ functional requirements or cross-cutting concerns. Follow the pattern in `docs/spec-watch.md`: overview, architecture, FRs, NFRs, acceptance criteria, implementation checklist.
+
+Do **not** create specs for bug fixes, small enhancements, or docs-only changes.
+
+After implementation, mark checklist items complete — the spec stays as a design record.
+
 ## Current State
 
-- **Working**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java extractors, SQLite storage, all 9 CLI commands + MCP server (`cartog serve`, 11 tools: 9 core + 2 RAG), incremental indexing (git-based + SHA-256 fallback), `--force` re-index flag, CI/CD pipelines, `EdgeKind::References` extraction (type annotations, decorators, exception types, composite literals, `new` expressions, rescue clause types, Java annotations), symbol search (`cartog search`), RAG semantic search (`cartog rag` subcommand group: setup/index/search), hybrid FTS5+vector search with RRF merge, fastembed ONNX Runtime embeddings (`BAAI/bge-small-en-v1.5`), sqlite-vec vector storage, cross-encoder re-ranking (`BAAI/bge-reranker-base` via fastembed, batch scoring, auto-enabled when model downloaded via `cartog rag setup`), shared model cache (`~/.cache/cartog/models`, XDG-compliant), file watcher (`cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding)
-- **Pending**: Java extractor improvements (see review findings in conversation history)
+- **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java
+- **CLI**: 9 commands + MCP server (11 tools: 9 core + 2 RAG)
+- **Indexing**: incremental (git-based + SHA-256 fallback), `--force` re-index
+- **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
+- **Watch**: `cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding
+- **CI/CD**: fmt, clippy, test, coverage, release to crates.io + GitHub Releases
+- **Pending**: Java extractor improvements

@@ -199,6 +199,42 @@ cartog --json outline src/auth/tokens.py
 cartog --json stats
 ```
 
+## Agent Skill
+
+cartog ships as an [Agent Skill](https://agentskills.io) — behavioral instructions that teach your AI agent *when and how* to use cartog, including search routing, refactoring workflows, and fallback heuristics. This is the **primary** distribution method (works with any LLM that has bash access).
+
+### Installation
+
+```bash
+npx skills add jrollin/cartog
+```
+
+Or install manually:
+
+```bash
+cp -r skills/cartog ~/.claude/skills/
+```
+
+At session start, run the setup script (3-phase: blocking index + model download, background RAG embedding):
+
+```bash
+bash scripts/ensure_indexed.sh
+```
+
+### Skill Contents
+
+| File | Purpose |
+|------|---------|
+| [`SKILL.md`](../skills/cartog/SKILL.md) | Behavioral instructions, commands, and workflows |
+| [`scripts/install.sh`](../skills/cartog/scripts/install.sh) | Automated installation via `cargo install` |
+| [`scripts/ensure_indexed.sh`](../skills/cartog/scripts/ensure_indexed.sh) | 3-phase setup: blocking index + rag setup, background rag index |
+| [`scripts/query.sh`](../skills/cartog/scripts/query.sh) | Thin wrapper running `cartog --json "$@"` |
+| [`tests/golden_examples.yaml`](../skills/cartog/tests/golden_examples.yaml) | Behavioral test scenarios (expected tool calls per query) |
+| [`tests/test_ensure_indexed.sh`](../skills/cartog/tests/test_ensure_indexed.sh) | Bash unit tests for ensure_indexed.sh |
+| [`tests/eval.sh`](../skills/cartog/tests/eval.sh) | LLM-as-judge evaluation via `claude` CLI |
+| [`references/query_cookbook.md`](../skills/cartog/references/query_cookbook.md) | Recipes for common navigation patterns |
+| [`references/supported_languages.md`](../skills/cartog/references/supported_languages.md) | Language support matrix |
+
 ## MCP Server
 
 `cartog serve` runs cartog as an MCP server over stdio, exposing 11 tools (9 core + 2 RAG) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
