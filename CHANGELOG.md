@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.5.2] - 2026-03-06
+## [0.5.3] - 2026-03-06
 
 ### Bug Fixes
 
@@ -10,6 +10,7 @@
 - **search**: Rank definitions above variables/imports in search results ([`bdfa966`](https://github.com/jrollin/cartog/commit/bdfa966ac8e7fe51d5fd029ec69860bed280622e))
 - **ci**: Resolve gitleaks false positive on fixture fake API key ([`9ef398d`](https://github.com/jrollin/cartog/commit/9ef398dec824bfed4ead338d79ef53a9a99ca6d3))
 - **ci**: Remove deprecated os and use cross binaries ([`5804ed5`](https://github.com/jrollin/cartog/commit/5804ed55a1a5137abda4b8df00ae90cb88722392))
+- **skill**: Add "show me" trigger patterns to cartog skill description ([`fe7020f`](https://github.com/jrollin/cartog/commit/fe7020f18285d3f5902f5b79d73d37e263967e67))
 
 ### Documentation
 
