@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.5.3] - 2026-03-06
+## [0.5.4] - 2026-03-10
 
 ### Bug Fixes
 
@@ -11,6 +11,7 @@
 - **ci**: Resolve gitleaks false positive on fixture fake API key ([`9ef398d`](https://github.com/jrollin/cartog/commit/9ef398dec824bfed4ead338d79ef53a9a99ca6d3))
 - **ci**: Remove deprecated os and use cross binaries ([`5804ed5`](https://github.com/jrollin/cartog/commit/5804ed55a1a5137abda4b8df00ae90cb88722392))
 - **skill**: Add "show me" trigger patterns to cartog skill description ([`fe7020f`](https://github.com/jrollin/cartog/commit/fe7020f18285d3f5902f5b79d73d37e263967e67))
+- Update quinn-proto 0.11.13 -> 0.11.14 (RUSTSEC-2026-0037 DoS) ([`68b0399`](https://github.com/jrollin/cartog/commit/68b039901aa99f04e212341610c573e6d3fe7973))
 
 ### Documentation
 
