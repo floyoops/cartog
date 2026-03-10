@@ -2,15 +2,35 @@
 set -euo pipefail
 
 # Install cartog binary
-# 1. Try downloading pre-built binary from GitHub Releases
-# 2. Fallback to cargo install
+# 1. Try downloading pre-built binary from GitHub Releases (requires curl + tar)
+# 2. Fallback to cargo install (requires Rust 1.70+)
 
 REPO="jrollin/cartog"
+MIN_RUST_MAJOR=1
+MIN_RUST_MINOR=70
 
 if command -v cartog &>/dev/null; then
     echo "cartog is already installed: $(cartog --version)"
     exit 0
 fi
+
+has_cmd() { command -v "$1" &>/dev/null; }
+
+check_rust_version() {
+    if ! has_cmd rustc; then
+        return 1
+    fi
+    local version
+    version="$(rustc --version | sed -E 's/rustc ([0-9]+\.[0-9]+).*/\1/')"
+    local major minor
+    major="${version%%.*}"
+    minor="${version##*.}"
+    if [ "$major" -gt "$MIN_RUST_MAJOR" ] || { [ "$major" -eq "$MIN_RUST_MAJOR" ] && [ "$minor" -ge "$MIN_RUST_MINOR" ]; }; then
+        return 0
+    fi
+    echo "Warning: Rust $version found, but cartog requires >= $MIN_RUST_MAJOR.$MIN_RUST_MINOR"
+    return 1
+}
 
 detect_target() {
     local os arch
@@ -39,6 +59,15 @@ detect_target() {
 }
 
 install_from_github() {
+    if ! has_cmd curl; then
+        echo "curl not found, skipping binary download."
+        return 1
+    fi
+    if ! has_cmd tar; then
+        echo "tar not found, skipping binary download."
+        return 1
+    fi
+
     local target="$1"
     local latest_tag
 
@@ -61,22 +90,57 @@ install_from_github() {
     return 1
 }
 
+verify_install() {
+    local bin="${CARGO_HOME:-$HOME/.cargo}/bin/cartog"
+    local target_bin=""
+
+    if has_cmd cartog; then
+        target_bin="cartog"
+    elif [ -x "$bin" ]; then
+        target_bin="$bin"
+    else
+        echo "Error: cartog binary not found after install."
+        return 1
+    fi
+
+    local version_output
+    if version_output=$("$target_bin" --version 2>&1); then
+        echo "Verified: $version_output"
+        if [ "$target_bin" = "$bin" ]; then
+            echo "Note: ${CARGO_HOME:-$HOME/.cargo}/bin is not in your PATH."
+            echo "  Add it with: export PATH=\"\${CARGO_HOME:-\$HOME/.cargo}/bin:\$PATH\""
+        fi
+        return 0
+    fi
+
+    echo "Error: cartog binary exists but failed to run (wrong architecture?)."
+    echo "  Output: $version_output"
+    rm -f "$bin"
+    return 1
+}
+
 # Try pre-built binary first
 if target="$(detect_target)"; then
     if install_from_github "$target"; then
+        verify_install
         exit 0
     fi
     echo "Pre-built binary not available, falling back to cargo install..."
 fi
 
 # Fallback to cargo install
-if command -v cargo &>/dev/null; then
-    echo "Installing cartog via cargo..."
-    cargo install cartog
-    echo "cartog installed successfully."
-else
+if ! has_cmd cargo; then
     echo "Error: could not download pre-built binary and cargo not found."
     echo "Install Rust from https://rustup.rs/ then run:"
     echo "  cargo install cartog"
     exit 1
 fi
+
+if ! check_rust_version; then
+    echo "Error: Rust toolchain too old. Update with: rustup update"
+    exit 1
+fi
+
+echo "Installing cartog via cargo..."
+cargo install cartog
+verify_install
