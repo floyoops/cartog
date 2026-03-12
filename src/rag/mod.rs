@@ -7,6 +7,45 @@ pub mod setup;
 /// Embedding dimension for the bge-small-en-v1.5 model.
 pub const EMBEDDING_DIM: usize = 384;
 
+/// HuggingFace repo ID for the quantized embedding model.
+const EMBEDDING_MODEL_CODE: &str = "Qdrant/bge-small-en-v1.5-onnx-Q";
+/// Primary ONNX file that must exist for the embedding model to be considered cached.
+const EMBEDDING_MODEL_FILE: &str = "model_optimized.onnx";
+/// HuggingFace repo ID for the cross-encoder reranker model.
+const RERANKER_MODEL_CODE: &str = "BAAI/bge-reranker-base";
+/// Primary ONNX file that must exist for the reranker model to be considered cached.
+const RERANKER_MODEL_FILE: &str = "onnx/model.onnx";
+
+/// Check if a model is already downloaded in the hf-hub cache (no network access).
+///
+/// Mirrors `hf_hub::CacheRepo::get()` logic: reads the commit hash from
+/// `<cache>/models--<org>--<name>/refs/main`, then checks for the ONNX file
+/// in `snapshots/<hash>/<model_file>`.
+fn is_model_cached(model_code: &str, model_file: &str) -> bool {
+    let cache_dir = model_cache_dir();
+    let dir_name = format!("models--{}", model_code.replace('/', "--"));
+    let ref_path = cache_dir.join(&dir_name).join("refs").join("main");
+    let Ok(commit_hash) = std::fs::read_to_string(&ref_path) else {
+        return false;
+    };
+    let model_path = cache_dir
+        .join(&dir_name)
+        .join("snapshots")
+        .join(commit_hash.trim())
+        .join(model_file);
+    model_path.exists()
+}
+
+/// Whether the embedding model (BGE-small-en-v1.5 quantized) is already cached.
+pub fn is_embedding_model_cached() -> bool {
+    is_model_cached(EMBEDDING_MODEL_CODE, EMBEDDING_MODEL_FILE)
+}
+
+/// Whether the cross-encoder reranker model (BGE-reranker-base) is already cached.
+pub fn is_reranker_model_cached() -> bool {
+    is_model_cached(RERANKER_MODEL_CODE, RERANKER_MODEL_FILE)
+}
+
 /// Shared model cache directory for ONNX models (embedding + reranker).
 ///
 /// Precedence:

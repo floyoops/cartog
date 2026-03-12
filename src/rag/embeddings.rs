@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
+use tracing::info;
 
 use super::{model_cache_dir, EMBEDDING_DIM};
 
@@ -19,20 +20,17 @@ pub struct EmbeddingEngine {
 impl EmbeddingEngine {
     /// Create a new embedding engine using the quantized BGE-small-en-v1.5 model.
     ///
+    /// Downloads the model from HuggingFace on first use (~80MB).
+    /// Progress is always enabled (visible in TTY via indicatif, logged via tracing
+    /// for non-TTY environments like AI editors).
     /// Models are cached in the shared directory (see [`super::model_cache_dir`]).
     pub fn new() -> Result<Self> {
-        let model = TextEmbedding::try_new(
-            TextInitOptions::new(EmbeddingModel::BGESmallENV15Q)
-                .with_cache_dir(model_cache_dir())
-                .with_show_download_progress(false),
-        )
-        .context("Failed to initialize embedding model")?;
+        if super::is_embedding_model_cached() {
+            info!("Loading embedding model...");
+        } else {
+            info!("Downloading embedding model (~80MB, first time only)...");
+        }
 
-        Ok(Self { model })
-    }
-
-    /// Create a new embedding engine, showing download progress on stdout.
-    pub fn new_with_progress() -> Result<Self> {
         let model = TextEmbedding::try_new(
             TextInitOptions::new(EmbeddingModel::BGESmallENV15Q)
                 .with_cache_dir(model_cache_dir())

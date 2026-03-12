@@ -165,7 +165,7 @@ test_phase_order() {
 }
 
 test_rag_setup_failure_continues() {
-    echo "TEST: rag setup failure shows warning with log path but continues to rag index"
+    echo "TEST: rag setup failure shows warning but continues to rag index"
     setup
     create_mock_cartog 1 "Error: model download failed"
 
@@ -174,7 +174,6 @@ test_rag_setup_failure_continues() {
     sleep 0.3
 
     assert_contains "shows warning" "Warning: cartog rag setup failed" "$output"
-    assert_contains "mentions log path" "log:" "$output"
     # rag index should still run in background
     local line3
     line3=$(sed -n '3p' "$CARTOG_TEST_LOG")
@@ -182,27 +181,16 @@ test_rag_setup_failure_continues() {
     teardown
 }
 
-test_rag_setup_stderr_logged() {
-    echo "TEST: rag setup stderr is captured to log file (not suppressed)"
+test_rag_setup_stderr_visible() {
+    echo "TEST: rag setup stderr is visible (not redirected to log file)"
     setup
     create_mock_cartog 1 "Error: disk full"
 
     local output
     output=$(run_ensure_indexed)
 
-    # Extract log path from output
-    local log_path
-    log_path=$(echo "$output" | grep -oE '/tmp/cartog-rag-setup-[0-9]+\.log')
-    if [ -n "$log_path" ] && [ -f "$log_path" ]; then
-        local log_content
-        log_content=$(cat "$log_path")
-        assert_contains "stderr captured in log" "Error: disk full" "$log_content"
-        rm -f "$log_path"
-    else
-        echo "  FAIL: rag setup log file not found"
-        echo "    output: $output"
-        FAIL=$((FAIL + 1))
-    fi
+    # stderr should flow through to the user (visible in AI editors)
+    assert_contains "stderr visible in output" "Error: disk full" "$output"
     teardown
 }
 
@@ -324,7 +312,7 @@ test_phase_order
 echo ""
 test_rag_setup_failure_continues
 echo ""
-test_rag_setup_stderr_logged
+test_rag_setup_stderr_visible
 echo ""
 test_background_rag_index
 echo ""

@@ -200,6 +200,8 @@ Download embedding and re-ranker models from HuggingFace. Run once before using 
 cartog rag setup
 ```
 
+**First-time download**: ~1.2GB of ONNX models (embedding ~80MB + reranker ~1.1GB). May take a few minutes depending on network speed. Models are cached in `~/.cache/cartog/models/` and reused across all projects — subsequent runs are instant.
+
 ### `cartog rag index [path] [--force]`
 
 Build the embedding index for semantic search. Requires `cartog index` and `cartog rag setup` first.
@@ -238,7 +240,7 @@ cartog index .          # 6. re-index after code changes
 For semantic search, add the RAG pipeline:
 
 ```
-cartog rag setup        # one-time model download
+cartog rag setup        # one-time model download (~1.2GB, may take a few minutes)
 cartog rag index        # embed symbols
 cartog rag search "..."  # natural language queries
 ```
@@ -274,7 +276,7 @@ Or install manually:
 cp -r skills/cartog ~/.claude/skills/
 ```
 
-At session start, run the setup script (3-phase: blocking index + model download, background RAG embedding):
+At session start, run the setup script (3-phase: blocking index + model download, background RAG embedding). First run downloads ~1.2GB of ONNX models and may take a few minutes — subsequent runs are instant:
 
 ```bash
 bash scripts/ensure_indexed.sh

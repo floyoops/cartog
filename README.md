@@ -49,7 +49,7 @@ cartog impact validate_token # what breaks if I change this?
 ### Add semantic search (optional, still fully local)
 
 ```bash
-cartog rag setup             # download embedding + re-ranker models (~50MB, one-time)
+cartog rag setup             # download embedding + re-ranker models (~1.2GB, one-time)
 cartog rag index .           # embed all symbols into sqlite-vec
 cartog rag search "authentication token validation"   # natural language queries
 ```

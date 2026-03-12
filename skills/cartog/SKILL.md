@@ -113,9 +113,12 @@ bash scripts/ensure_indexed.sh
 | 2 | `+ cartog rag setup` | Yes | **Yes** | No | Keyword + neural reranking |
 | 3 | `+ cartog rag index .` | Yes | Yes | **Yes** | Full hybrid (best) |
 
-The setup script runs tier 1+2 blocking (fast), then tier 3 in the background.
+The setup script runs tier 1+2 blocking, then tier 3 in the background.
 `cartog rag search` is usable immediately after tier 2 — vector search becomes available
 transparently once background embedding completes.
+
+> **First run**: tier 2 downloads ~1.2GB of ONNX models (cached in `~/.cache/cartog/models/`).
+> This may take a few minutes — do not abort. Subsequent runs are instant.
 
 ## Commands Reference
 

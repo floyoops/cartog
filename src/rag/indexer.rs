@@ -92,7 +92,6 @@ pub fn compact_embedding_text(header: &str, content: &str) -> String {
 /// or auto-downloaded on first use by fastembed).
 /// When `force` is true, clears all existing embeddings and re-embeds everything.
 pub fn index_embeddings(db: &Database, force: bool) -> Result<RagIndexResult> {
-    info!("Loading embedding model...");
     let mut engine = EmbeddingEngine::new()
         .context("Failed to load embedding model. Run 'cartog rag setup' to download it.")?;
 

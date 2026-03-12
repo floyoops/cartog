@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use fastembed::{RerankInitOptions, RerankerModel, TextRerank};
+use tracing::info;
 
 use super::model_cache_dir;
 
@@ -15,20 +16,17 @@ pub struct CrossEncoderEngine {
 impl CrossEncoderEngine {
     /// Load the cross-encoder re-ranker model.
     ///
+    /// Downloads the model from HuggingFace on first use (~1.1GB).
+    /// Progress is always enabled (visible in TTY via indicatif, logged via tracing
+    /// for non-TTY environments like AI editors).
     /// Models are cached in the shared directory (see [`super::model_cache_dir`]).
     pub fn load() -> Result<Self> {
-        let model = TextRerank::try_new(
-            RerankInitOptions::new(RerankerModel::BGERerankerBase)
-                .with_cache_dir(model_cache_dir())
-                .with_show_download_progress(false),
-        )
-        .context("Failed to initialize cross-encoder model")?;
+        if super::is_reranker_model_cached() {
+            info!("Loading reranker model...");
+        } else {
+            info!("Downloading reranker model (~1.1GB, first time only)...");
+        }
 
-        Ok(Self { model })
-    }
-
-    /// Load with download progress displayed on stdout.
-    pub fn load_with_progress() -> Result<Self> {
         let model = TextRerank::try_new(
             RerankInitOptions::new(RerankerModel::BGERerankerBase)
                 .with_cache_dir(model_cache_dir())

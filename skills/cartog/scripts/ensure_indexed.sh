@@ -25,9 +25,9 @@ cartog index .
 
 # Phase 2: Download embedding + reranker models (one-time, cached in ~/.cache/cartog/models/)
 # This enables the cross-encoder reranker even before vector embeddings exist.
-RAG_SETUP_LOG="/tmp/cartog-rag-setup-$$.log"
-if ! cartog rag setup 2>"$RAG_SETUP_LOG"; then
-    echo "Warning: cartog rag setup failed (log: $RAG_SETUP_LOG). Semantic search will use FTS5-only (no reranker)."
+# stderr is NOT redirected so progress/download messages are visible in AI editors.
+if ! cartog rag setup; then
+    echo "Warning: cartog rag setup failed. Semantic search will use FTS5-only (no reranker)."
 fi
 
 # Phase 3: RAG embedding in background (non-blocking)

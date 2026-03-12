@@ -112,12 +112,12 @@ cartog/
 - **mcp.rs**: MCP server over stdio. `CartogServer` struct with 11 `#[tool]` handlers (9 core + 2 RAG). Path validation restricts `index` to CWD subtree. Uses `spawn_blocking` for sync DB/indexer calls. Optionally spawns a background file watcher (`--watch` flag).
 - **watch.rs**: File watcher using `notify-debouncer-mini`. Debounces filesystem events, triggers incremental `index_directory()`. Optionally defers RAG embedding after a configurable delay. Used standalone (`cartog watch`) or embedded in MCP server (`cartog serve --watch`). See [spec-watch.md](spec-watch.md) for design details.
 - **languages/mod.rs**: Maps file extensions to extractors, defines the `Extractor` trait and shared `node_text` helper. Each extractor implements `fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult>`.
-- **rag/mod.rs**: RAG pipeline constants (`EMBEDDING_DIM = 384`), shared model cache directory (`model_cache_dir()` — XDG-compliant, avoids per-project model downloads).
+- **rag/mod.rs**: RAG pipeline constants (`EMBEDDING_DIM = 384`), shared model cache directory (`model_cache_dir()` — XDG-compliant, avoids per-project model downloads), and `is_embedding_model_cached()` / `is_reranker_model_cached()` helpers for cache detection (mirrors hf-hub's `CacheRepo::get()` logic).
 - **rag/setup.rs**: Triggers model download by instantiating fastembed engines (models auto-downloaded from HuggingFace on first use).
-- **rag/embeddings.rs**: ONNX Runtime inference via fastembed (`BAAI/bge-small-en-v1.5`). Serialization helpers for sqlite-vec byte format.
+- **rag/embeddings.rs**: ONNX Runtime inference via fastembed (`BAAI/bge-small-en-v1.5`). Logs download/load status via tracing for non-TTY visibility. Serialization helpers for sqlite-vec byte format.
 - **rag/indexer.rs**: Embeds all symbols with content, stores in sqlite-vec. Supports incremental (skip existing) and force modes.
 - **rag/search.rs**: Hybrid search combining FTS5 keyword (BM25) + vector KNN (cosine), merged via Reciprocal Rank Fusion (RRF, k=60). Optional cross-encoder re-ranking when model is available.
-- **rag/reranker.rs**: Cross-encoder re-ranking via fastembed (`BAAI/bge-reranker-base`). Scores (query, document) pairs jointly. Auto-enabled when model is downloadable.
+- **rag/reranker.rs**: Cross-encoder re-ranking via fastembed (`BAAI/bge-reranker-base`). Scores (query, document) pairs jointly. Logs download/load status via tracing. Graceful degradation when model unavailable.
 - **types.rs**: Shared data structures. No logic beyond Display/serialization.
 
 ## Conventions
