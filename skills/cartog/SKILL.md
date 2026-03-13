@@ -3,13 +3,11 @@ name: cartog
 description: >-
   Code graph navigation, semantic code search, and impact analysis. Use when the user asks
   "where is X defined?", "what calls X?", "who imports X?", "what depends on X?",
-  "what does X call?", "how is X used?", "where is X called from?",
+  "how is X used?", "where is X called from?",
   "what breaks if I change X?", "is it safe to change/delete X?",
   "help me refactor X", "show me the call graph", "trace the execution flow",
-  "find all usages of X", "find code related to...", "find the function/class that handles...",
-  "show me code related to...", "show me all code for...",
+  "find all usages of X", "find code related to...",
   "show me how X works", "show me the X implementation",
-  "what code handles X?", "where is the code for X?",
   "show file structure", "list all functions/classes in a file",
   "show the inheritance tree", "show class hierarchy",
   or needs to navigate code, locate definitions, search code by concept or behavior,
