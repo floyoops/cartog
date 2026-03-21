@@ -1,0 +1,16 @@
+{
+  "name": "cartog",
+  "description": "Code graph navigation, semantic search, and impact analysis for Claude Code",
+  "owner": {
+    "name": "Julien Rollin"
+  },
+  "plugins": [
+    {
+      "name": "cartog",
+      "source": {
+        "source": "github",
+        "repo": "jrollin/cartog"
+      }
+    }
+  ]
+}

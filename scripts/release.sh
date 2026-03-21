@@ -2,6 +2,7 @@
 set -euo pipefail
 
 CARGO_TOML="Cargo.toml"
+PLUGIN_JSON=".claude-plugin/plugin.json"
 
 # ── helpers ──────────────────────────────────────────────────────────
 die()  { echo "error: $*" >&2; exit 1; }
@@ -72,11 +73,16 @@ info "bumping $CURRENT → $NEW"
 # update Cargo.toml
 sed "s/^version = \".*\"/version = \"${NEW}\"/" "$CARGO_TOML" > "$CARGO_TOML.tmp" && mv "$CARGO_TOML.tmp" "$CARGO_TOML"
 
+# update plugin.json
+if [[ -f "$PLUGIN_JSON" ]]; then
+  sed "s/\"version\": \".*\"/\"version\": \"${NEW}\"/" "$PLUGIN_JSON" > "$PLUGIN_JSON.tmp" && mv "$PLUGIN_JSON.tmp" "$PLUGIN_JSON"
+fi
+
 # update Cargo.lock
 cargo generate-lockfile --quiet 2>/dev/null || true
 
 info "committing version bump"
-git add "$CARGO_TOML" Cargo.lock
+git add "$CARGO_TOML" Cargo.lock "$PLUGIN_JSON"
 git commit -m "chore: bump version to ${NEW}"
 
 info "tagging $TAG"

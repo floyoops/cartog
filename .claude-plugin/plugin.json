@@ -1,0 +1,9 @@
+{
+  "name": "cartog",
+  "description": "Code graph navigation and semantic search for LLM coding agents",
+  "version": "0.5.6",
+  "author": {
+    "name": "Julien Rollin"
+  },
+  "skills": "./skills/"
+}
