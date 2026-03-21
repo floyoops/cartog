@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.5.6] - 2026-03-13
+## [0.6.0] - 2026-03-21
 
 ### Bug Fixes
 
@@ -13,6 +13,8 @@
 - **skill**: Add "show me" trigger patterns to cartog skill description ([`fe7020f`](https://github.com/jrollin/cartog/commit/fe7020f18285d3f5902f5b79d73d37e263967e67))
 - Update quinn-proto 0.11.13 -> 0.11.14 (RUSTSEC-2026-0037 DoS) ([`68b0399`](https://github.com/jrollin/cartog/commit/68b039901aa99f04e212341610c573e6d3fe7973))
 - Do exceed limit description ([`ecd612d`](https://github.com/jrollin/cartog/commit/ecd612d55a44a7587350ea1c2a0a9147196b7d2d))
+- Address review findings — chunking, CTE, migration logging ([`3970e5c`](https://github.com/jrollin/cartog/commit/3970e5c69a626c17866ac6027af9c308a9ec17c3))
+- Embedding chunking review — UTF-8 safety, false positive filters, docs ([`0907fee`](https://github.com/jrollin/cartog/commit/0907fee98854aab82f0e6d8b166eb1faa42abe1a))
 
 ### Documentation
 
@@ -27,6 +29,12 @@
 - Add RAG semantic search, file watcher, and smart search routing ([`ad92a18`](https://github.com/jrollin/cartog/commit/ad92a18ac4685813d0a1424dbbf4dddb983850f6))
 - Add java lang support ([`c0c3cc0`](https://github.com/jrollin/cartog/commit/c0c3cc08141bb48a67237f891621594633d482bc))
 - Add information about model download on first time ([`3697cb1`](https://github.com/jrollin/cartog/commit/3697cb194db583151e205c13ac0ac85d7f0d75ee))
+- Improve AST navigation with query API, richer types, and better edge resolution (#2) ([`e0d8039`](https://github.com/jrollin/cartog/commit/e0d80390a5d08441a563395d9afe54f9c420cb43))
+- Add Claude plugin manifest ([`714c29b`](https://github.com/jrollin/cartog/commit/714c29bc5d92d74e9f50e5bcd1d94364b3bb3eab))
+- Batch symbol lookup, Rust visibility precision, and docs updates ([`69b52d7`](https://github.com/jrollin/cartog/commit/69b52d7b7fffd00decaf3969dc3bf418fedd3800))
+- Add --tokens budget flag and cartog changes command ([`0786420`](https://github.com/jrollin/cartog/commit/0786420558ebe26fd67489b10ab536d09f6fa41b))
+- Add in-degree centrality ranking and cartog map command ([`be62b00`](https://github.com/jrollin/cartog/commit/be62b001d3f48910bcabd0ce16d696582e96d946))
+- AST-aware embedding chunks with auto-versioned re-embed ([`e6de91d`](https://github.com/jrollin/cartog/commit/e6de91ddca50773e523b8de1e4a1feb10a064e38))
 
 ### Miscellaneous
 
