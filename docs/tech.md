@@ -70,16 +70,19 @@ This drives two key decisions:
 
 1. **Small embedding model** — BGE-small-en-v1.5 quantized (384 dimensions). 2-3x faster than full precision with negligible quality loss for code symbol matching. Outputs are L2-normalized, enabling L2 distance in sqlite-vec (equivalent to cosine ranking). Trade-off: English-only model — non-English identifiers/comments get degraded embeddings.
 
-2. **Compact embedding text** — Only `header + first line of source` is embedded, not the full body:
+2. **AST-aware embedding text** — Header + signature + significant body lines (skipping blanks, comments, closing braces) up to ~200 tokens (~800 bytes):
    ```
    // File: auth/tokens.py | function validate_token
    def validate_token(token: str) -> bool:
+       if token.is_expired():
+           raise TokenError('expired')
+       return lookup_session(token.session_id)
    ```
-   This yields ~30-60 tokens per symbol instead of hundreds. Full source content is still stored separately for FTS5 keyword search and cross-encoder re-ranking.
+   This captures the "what does this function do" signal (~100-200 tokens) while staying within the model's 512-token window. Full source content is still stored separately for FTS5 keyword search and cross-encoder re-ranking. Decorators/annotations are kept (they carry semantic meaning like `@login_required`).
 
 ### What gets embedded (and what doesn't)
 
-- **Functions, classes, methods**: embedded with compact text (header + first line)
+- **Functions, classes, methods**: embedded with AST-aware text (header + significant body lines)
 - **Variables**: excluded — too numerous, low signal for semantic search
 - **Imports**: excluded at content extraction time — they exist as graph edges, not search targets
 

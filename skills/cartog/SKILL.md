@@ -281,3 +281,4 @@ Before changing any symbol (rename, extract, move, delete):
 - **Graceful degradation**: `rag search` works without `rag setup` or `rag index` (FTS5-only). Quality improves with each setup tier (see Search quality tiers above).
 - **Scores are relative**: `rrf_score` and `rerank_score` values are only meaningful for ranking within a single query — don't compare scores across different queries.
 - **Re-ranking latency**: cross-encoder scores all candidates in a single batch ONNX call (up to 50 candidates). Expect ~150-500ms total overhead depending on candidate count.
+- **Auto re-embed**: when cartog upgrades its embedding format (e.g., AST-aware chunking), `cartog rag index` automatically detects the change and re-embeds all symbols. No `--force` needed.

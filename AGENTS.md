@@ -122,5 +122,7 @@ After implementation, mark checklist items complete — the spec stays as a desi
 - **Codebase map**: `cartog map --tokens N` produces budget-aware file tree + top symbols
 - **Token budget**: `--tokens N` global flag for context-window-aware output truncation
 - **Recent changes**: `cartog changes` shows symbols affected by recent git commits
+- **AST-aware embeddings**: significant body lines (skip blanks/comments/braces) for better vector search recall
+- **Embedding format versioning**: auto-detects embedding strategy changes, triggers re-embed on next `rag index`
 - **Schema versioning**: metadata-based migration system for DB schema evolution
 - **Pending**: Java extractor improvements

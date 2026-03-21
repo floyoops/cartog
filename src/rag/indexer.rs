@@ -76,14 +76,74 @@ fn flush_embedding_batch(
     }
 }
 
-/// Build the compact embedding text for a symbol.
+/// Embedding format version. Increment when changing `compact_embedding_text` logic.
 ///
-/// Uses `header + first line of source` only (~30-60 tokens) instead of full content.
-/// BERT attention is O(n²) in sequence length, so this is the single biggest
-/// performance lever. Full content stays in `symbol_content` for FTS5 and reranking.
+/// Stored in metadata as `embedding_format_version`. When the stored version differs
+/// from this constant, `index_embeddings` automatically forces a full re-embed.
+pub const EMBEDDING_FORMAT_VERSION: u32 = 2;
+
+/// Maximum bytes for the embedding text sent to the model.
+///
+/// BGE-small-en-v1.5 has a 512-token limit. At ~3-4 chars/token for code,
+/// 800 bytes ≈ 200-270 tokens — well within budget while leaving room for the
+/// query in the model's attention window.
+const MAX_EMBED_TEXT_BYTES: usize = 800;
+
+/// Build embedding text for a symbol: header + signature + significant body lines.
+///
+/// Skips blank lines, comment-only lines, and brace-only lines to maximize
+/// semantic signal per token. Keeps decorators/annotations (they carry meaning
+/// like `@login_required`, `#[derive(Serialize)]`).
+///
+/// Full content stays in `symbol_content` for FTS5 keyword search and
+/// cross-encoder re-ranking — this function only controls what gets embedded
+/// for vector similarity.
 pub fn compact_embedding_text(header: &str, content: &str) -> String {
-    let first_line = content.lines().next().unwrap_or("");
-    format!("{}\n{}", header, first_line)
+    let mut out = String::with_capacity(MAX_EMBED_TEXT_BYTES);
+    out.push_str(header);
+
+    for line in content.lines() {
+        if out.len() >= MAX_EMBED_TEXT_BYTES {
+            break;
+        }
+        if is_insignificant_line(line) {
+            continue;
+        }
+        out.push('\n');
+        let remaining = MAX_EMBED_TEXT_BYTES.saturating_sub(out.len());
+        if line.len() > remaining {
+            out.push_str(&line[..remaining]);
+            break;
+        }
+        out.push_str(line);
+    }
+
+    out
+}
+
+/// Returns true for lines that add little semantic value for embedding:
+/// blank lines, comment-only lines, and closing-brace-only lines.
+fn is_insignificant_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    // Closing braces/brackets only: }, }, end, })
+    if matches!(trimmed, "}" | "})" | "};" | "end" | ")" | "]" | "])") {
+        return true;
+    }
+    // Comment-only lines across common languages
+    if trimmed.starts_with("//")
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("--")
+        || trimmed.starts_with('*')
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with("'''")
+        || trimmed.starts_with("\"\"\"")
+    {
+        return true;
+    }
+    false
 }
 
 /// Embed all symbols that have content but no embedding yet.
@@ -96,6 +156,20 @@ pub fn index_embeddings(db: &Database, force: bool) -> Result<RagIndexResult> {
         .context("Failed to load embedding model. Run 'cartog rag setup' to download it.")?;
 
     let total_content_symbols = db.symbol_content_count()?;
+
+    // Auto-detect embedding format change and force re-embed
+    let stored_version: u32 = db
+        .get_metadata("embedding_format_version")?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let format_changed = stored_version < EMBEDDING_FORMAT_VERSION;
+    let force = force || format_changed;
+
+    if format_changed {
+        info!(
+            "Embedding format upgraded (v{stored_version} → v{EMBEDDING_FORMAT_VERSION}), re-embedding all symbols"
+        );
+    }
 
     if force {
         info!("Force mode: clearing all existing embeddings");
@@ -182,6 +256,12 @@ pub fn index_embeddings(db: &Database, force: bool) -> Result<RagIndexResult> {
         db.insert_embeddings(&db_batch)?;
     }
 
+    // Store the current embedding format version
+    db.set_metadata(
+        "embedding_format_version",
+        &EMBEDDING_FORMAT_VERSION.to_string(),
+    )?;
+
     info!(
         "Done: {} embedded, {} skipped ({processed}/{total} processed)",
         result.symbols_embedded, result.symbols_skipped
@@ -195,25 +275,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_compact_embedding_text_header_plus_first_line() {
+    fn test_compact_embedding_text_includes_significant_lines() {
         let header = "// File: auth.py | function validate_token";
         let content = "def validate_token(token: str) -> bool:\n    if token.is_expired():\n        raise TokenError('expired')\n    return True";
         let result = compact_embedding_text(header, content);
-        assert_eq!(
-            result,
-            "// File: auth.py | function validate_token\ndef validate_token(token: str) -> bool:"
-        );
+        assert!(result.contains("validate_token(token: str)"));
+        assert!(result.contains("token.is_expired()"));
+        assert!(result.contains("raise TokenError"));
+        assert!(result.contains("return True"));
     }
 
     #[test]
-    fn test_compact_embedding_text_single_line_content() {
+    fn test_compact_embedding_text_skips_blanks_and_comments() {
+        let header = "header";
+        let content = "def foo():\n    # setup\n\n    x = 1\n    // another comment\n    y = 2\n\n    return x + y";
+        let result = compact_embedding_text(header, content);
+        assert!(result.contains("def foo():"));
+        assert!(result.contains("x = 1"));
+        assert!(result.contains("y = 2"));
+        assert!(result.contains("return x + y"));
+        assert!(!result.contains("# setup"));
+        assert!(!result.contains("// another comment"));
+    }
+
+    #[test]
+    fn test_compact_embedding_text_skips_closing_braces() {
+        let header = "header";
+        let content = "fn main() {\n    let x = 1;\n    println!(x);\n}";
+        let result = compact_embedding_text(header, content);
+        assert!(result.contains("fn main()"));
+        assert!(result.contains("let x = 1;"));
+        assert!(result.contains("println!(x);"));
+        assert!(!result.ends_with("\n}"));
+    }
+
+    #[test]
+    fn test_compact_embedding_text_keeps_decorators() {
+        let header = "header";
+        let content = "@login_required\n@cached(ttl=300)\ndef protected_view(request):\n    return render(request)";
+        let result = compact_embedding_text(header, content);
+        assert!(result.contains("@login_required"));
+        assert!(result.contains("@cached(ttl=300)"));
+        assert!(result.contains("def protected_view"));
+    }
+
+    #[test]
+    fn test_compact_embedding_text_single_line() {
         let header = "// File: config.py | variable MAX_RETRIES";
         let content = "MAX_RETRIES = 3";
         let result = compact_embedding_text(header, content);
-        assert_eq!(
-            result,
-            "// File: config.py | variable MAX_RETRIES\nMAX_RETRIES = 3"
-        );
+        assert!(result.contains("MAX_RETRIES = 3"));
     }
 
     #[test]
@@ -221,14 +332,38 @@ mod tests {
         let header = "// File: a.py | function foo";
         let content = "";
         let result = compact_embedding_text(header, content);
-        assert_eq!(result, "// File: a.py | function foo\n");
+        assert_eq!(result, "// File: a.py | function foo");
     }
 
     #[test]
-    fn test_compact_embedding_text_multiline_uses_only_first() {
+    fn test_compact_embedding_text_respects_byte_limit() {
         let header = "header";
-        let content = "line1\nline2\nline3";
-        let result = compact_embedding_text(header, content);
-        assert_eq!(result, "header\nline1");
+        // Build content with many significant lines that exceed MAX_EMBED_TEXT_BYTES
+        let lines: Vec<String> = (0..100)
+            .map(|i| format!("    let var_{i} = compute({i});"))
+            .collect();
+        let content = lines.join("\n");
+        let result = compact_embedding_text(header, &content);
+        assert!(result.len() <= MAX_EMBED_TEXT_BYTES + 50); // small tolerance for last line
+    }
+
+    #[test]
+    fn test_is_insignificant_line() {
+        assert!(is_insignificant_line(""));
+        assert!(is_insignificant_line("   "));
+        assert!(is_insignificant_line("// comment"));
+        assert!(is_insignificant_line("# comment"));
+        assert!(is_insignificant_line("  # comment"));
+        assert!(is_insignificant_line("  }"));
+        assert!(is_insignificant_line("})"));
+        assert!(is_insignificant_line("end"));
+        assert!(is_insignificant_line("  * javadoc line"));
+        assert!(is_insignificant_line("  \"\"\"docstring\"\"\""));
+
+        assert!(!is_insignificant_line("let x = 1;"));
+        assert!(!is_insignificant_line("@login_required"));
+        assert!(!is_insignificant_line("def foo():"));
+        assert!(!is_insignificant_line("  return x + y"));
+        assert!(!is_insignificant_line("  hash_map.insert(key, value);"));
     }
 }
