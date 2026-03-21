@@ -267,6 +267,8 @@ cartog rag index src/         # embed a subdirectory
 cartog rag index --force      # re-embed all symbols
 ```
 
+After a cartog upgrade that changes the embedding strategy, `cartog rag index` automatically detects the format change and re-embeds all symbols — no `--force` needed.
+
 ### `cartog rag search <query> [--kind <kind>] [--limit N]`
 
 Semantic search over code symbols — use natural language to find code by what it does, not just by name.

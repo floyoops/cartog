@@ -112,7 +112,12 @@ pub fn compact_embedding_text(header: &str, content: &str) -> String {
         out.push('\n');
         let remaining = MAX_EMBED_TEXT_BYTES.saturating_sub(out.len());
         if line.len() > remaining {
-            out.push_str(&line[..remaining]);
+            // Find a valid UTF-8 char boundary (max 4 bytes back)
+            let cut = (remaining.saturating_sub(3)..=remaining)
+                .rev()
+                .find(|&i| line.is_char_boundary(i))
+                .unwrap_or(0);
+            out.push_str(&line[..cut]);
             break;
         }
         out.push_str(line);
@@ -132,11 +137,14 @@ fn is_insignificant_line(line: &str) -> bool {
     if matches!(trimmed, "}" | "})" | "};" | "end" | ")" | "]" | "])") {
         return true;
     }
-    // Comment-only lines across common languages
+    // Comment-only lines across common languages.
+    // Carefully excludes:
+    //   - Rust attributes: #[...] and #![...]
+    //   - Python *args/**kwargs and C/Rust pointer derefs: *foo, **bar
     if trimmed.starts_with("//")
-        || trimmed.starts_with('#')
+        || (trimmed.starts_with('#') && !trimmed.starts_with("#[") && !trimmed.starts_with("#!["))
         || trimmed.starts_with("--")
-        || trimmed.starts_with('*')
+        || (trimmed.starts_with("* ") || trimmed == "*")
         || trimmed.starts_with("/*")
         || trimmed.starts_with("'''")
         || trimmed.starts_with("\"\"\"")
@@ -349,6 +357,7 @@ mod tests {
 
     #[test]
     fn test_is_insignificant_line() {
+        // Should be insignificant (skipped)
         assert!(is_insignificant_line(""));
         assert!(is_insignificant_line("   "));
         assert!(is_insignificant_line("// comment"));
@@ -359,11 +368,60 @@ mod tests {
         assert!(is_insignificant_line("end"));
         assert!(is_insignificant_line("  * javadoc line"));
         assert!(is_insignificant_line("  \"\"\"docstring\"\"\""));
+        assert!(is_insignificant_line("  * "));
+        assert!(is_insignificant_line("*"));
 
+        // Should be significant (kept)
         assert!(!is_insignificant_line("let x = 1;"));
         assert!(!is_insignificant_line("@login_required"));
         assert!(!is_insignificant_line("def foo():"));
         assert!(!is_insignificant_line("  return x + y"));
         assert!(!is_insignificant_line("  hash_map.insert(key, value);"));
+    }
+
+    #[test]
+    fn test_is_insignificant_line_rust_attributes() {
+        assert!(!is_insignificant_line("#[derive(Debug, Clone)]"));
+        assert!(!is_insignificant_line("#![allow(unused)]"));
+        assert!(!is_insignificant_line("  #[test]"));
+        assert!(!is_insignificant_line("#[cfg(test)]"));
+    }
+
+    #[test]
+    fn test_is_insignificant_line_python_star_args() {
+        assert!(!is_insignificant_line("def foo(*args, **kwargs):"));
+        assert!(!is_insignificant_line("  *args"));
+        assert!(!is_insignificant_line("  **kwargs"));
+    }
+
+    #[test]
+    fn test_is_insignificant_line_c_pointer_deref() {
+        assert!(!is_insignificant_line("*ptr = 42;"));
+        assert!(!is_insignificant_line("  *self.data"));
+    }
+
+    #[test]
+    fn test_compact_embedding_text_utf8_boundary() {
+        // Build a header that leaves very little room, then content with multi-byte chars
+        let header = "h".repeat(MAX_EMBED_TEXT_BYTES - 20);
+        let content = "café résumé naïve"; // multi-byte chars (é = 2 bytes)
+        let result = compact_embedding_text(&header, content);
+        // Should not panic and should be valid UTF-8
+        assert!(result.len() <= MAX_EMBED_TEXT_BYTES + 10);
+        assert!(std::str::from_utf8(result.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_compact_embedding_text_all_insignificant() {
+        let header = "header";
+        let content = "# comment\n\n// another\n  }\n\nend";
+        let result = compact_embedding_text(header, content);
+        assert_eq!(result, "header");
+    }
+
+    #[test]
+    fn test_embedding_format_version_is_current() {
+        // Ensures the constant is kept in sync — update when adding migrations
+        assert_eq!(EMBEDDING_FORMAT_VERSION, 2);
     }
 }

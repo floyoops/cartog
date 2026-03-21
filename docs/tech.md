@@ -129,8 +129,10 @@ Returns the first non-empty result. Only FTS5 syntax errors trigger fallback —
 | `EMBED_BATCH_SIZE` | 64 | Limits ONNX padding waste when text lengths vary |
 | `CHUNK_SIZE` | 512 | Symbols per embedding engine call |
 | `DB_BATCH_LIMIT` | 256 | Pending DB writes before flush |
-| `MAX_CONTENT_BYTES` | 2048 | ~512 tokens at code's char/token ratio |
+| `MAX_CONTENT_BYTES` | 2048 | ~512 tokens at code's char/token ratio (stored for FTS5 + reranker) |
 | `MIN_CONTENT_BYTES` | 50 | Below this → noise, not embedded |
+| `MAX_EMBED_TEXT_BYTES` | 800 | ~200 tokens for bi-encoder input (AST-aware significant lines) |
+| `EMBEDDING_FORMAT_VERSION` | 2 | Auto-triggers re-embed when embedding strategy changes |
 | `RERANK_MAX` | 50 | Cross-encoder candidate cap |
 | RRF `k` | 60.0 | Standard constant from Cormack et al. 2009 |
 | Over-retrieval | `limit × 3` (min 20) | Enough candidates for effective RRF merge |

@@ -117,7 +117,7 @@ cartog/
 - **rag/mod.rs**: RAG pipeline constants (`EMBEDDING_DIM = 384`), shared model cache directory (`model_cache_dir()` — XDG-compliant, avoids per-project model downloads), and `is_embedding_model_cached()` / `is_reranker_model_cached()` helpers for cache detection (mirrors hf-hub's `CacheRepo::get()` logic).
 - **rag/setup.rs**: Triggers model download by instantiating fastembed engines (models auto-downloaded from HuggingFace on first use).
 - **rag/embeddings.rs**: ONNX Runtime inference via fastembed (`BAAI/bge-small-en-v1.5`). Logs download/load status via tracing for non-TTY visibility. Serialization helpers for sqlite-vec byte format.
-- **rag/indexer.rs**: Embeds all symbols with content, stores in sqlite-vec. Supports incremental (skip existing) and force modes.
+- **rag/indexer.rs**: Embeds all symbols with content, stores in sqlite-vec. Uses AST-aware chunking (header + significant body lines, skipping blanks/comments/braces) for embedding text. Supports incremental (skip existing), force, and auto-upgrade modes via `EMBEDDING_FORMAT_VERSION`.
 - **rag/search.rs**: Hybrid search combining FTS5 keyword (BM25) + vector KNN (cosine), merged via Reciprocal Rank Fusion (RRF, k=60). Optional cross-encoder re-ranking when model is available.
 - **rag/reranker.rs**: Cross-encoder re-ranking via fastembed (`BAAI/bge-reranker-base`). Scores (query, document) pairs jointly. Logs download/load status via tracing. Graceful degradation when model unavailable.
 - **types.rs**: Shared data structures. No logic beyond Display/serialization.

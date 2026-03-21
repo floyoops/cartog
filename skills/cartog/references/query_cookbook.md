@@ -126,6 +126,8 @@ cartog rag index .        # incremental — only new/changed symbols
 cartog rag index . --force  # re-embed everything
 ```
 
+After upgrading cartog, `rag index` auto-detects embedding format changes and re-embeds automatically.
+
 ### RAG query quality tips
 
 | Query | Quality | Why |
