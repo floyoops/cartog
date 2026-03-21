@@ -1331,7 +1331,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT sc.symbol_id FROM symbol_content sc
              JOIN symbols s ON s.id = sc.symbol_id
-             WHERE s.kind != ?1
+             WHERE s.kind NOT IN (?1, ?2)
              AND NOT EXISTS (
                  SELECT 1 FROM symbol_embedding_map em
                  JOIN symbol_vec sv ON sv.rowid = em.id
@@ -1339,7 +1339,13 @@ impl Database {
              )",
         )?;
         let rows = stmt
-            .query_map(params![SymbolKind::Variable.as_str()], |row| row.get(0))?
+            .query_map(
+                params![
+                    SymbolKind::Variable.as_str(),
+                    SymbolKind::Import.as_str(),
+                ],
+                |row| row.get(0),
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -1351,16 +1357,22 @@ impl Database {
             .query_row("SELECT COUNT(*) FROM symbol_content", [], |row| row.get(0))?)
     }
 
-    /// Get all symbol IDs that have content stored (excluding variables).
+    /// Get all symbol IDs that have content stored (excluding variables and imports).
     pub fn all_content_symbol_ids(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT sc.symbol_id FROM symbol_content sc
              JOIN symbols s ON s.id = sc.symbol_id
-             WHERE s.kind != ?1
+             WHERE s.kind NOT IN (?1, ?2)
              ORDER BY sc.symbol_id",
         )?;
         let rows = stmt
-            .query_map(params![SymbolKind::Variable.as_str()], |row| row.get(0))?
+            .query_map(
+                params![
+                    SymbolKind::Variable.as_str(),
+                    SymbolKind::Import.as_str(),
+                ],
+                |row| row.get(0),
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }

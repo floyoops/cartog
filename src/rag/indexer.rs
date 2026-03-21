@@ -80,14 +80,20 @@ fn flush_embedding_batch(
 ///
 /// Stored in metadata as `embedding_format_version`. When the stored version differs
 /// from this constant, `index_embeddings` automatically forces a full re-embed.
-pub const EMBEDDING_FORMAT_VERSION: u32 = 2;
+pub const EMBEDDING_FORMAT_VERSION: u32 = 3;
 
 /// Maximum bytes for the embedding text sent to the model.
 ///
-/// BGE-small-en-v1.5 has a 512-token limit. At ~3-4 chars/token for code,
-/// 800 bytes ≈ 200-270 tokens — well within budget while leaving room for the
-/// query in the model's attention window.
-const MAX_EMBED_TEXT_BYTES: usize = 800;
+/// BGE-small-en-v1.5 has a 512-token limit. Code tokenizes at ~3-4 chars/token,
+/// so 500 bytes ≈ 125-170 tokens. Header + signature + first meaningful lines
+/// capture the semantic core; full content remains in `symbol_content` for FTS5
+/// and cross-encoder re-ranking.
+const MAX_EMBED_TEXT_BYTES: usize = 500;
+
+/// Minimum bytes of embedding text (after compaction) to be worth embedding.
+/// Symbols that produce less than this are too trivial for vector similarity
+/// (e.g. empty modules, bare re-exports). They remain searchable via FTS5.
+const MIN_EMBED_TEXT_BYTES: usize = 40;
 
 /// Build embedding text for a symbol: header + signature + significant body lines.
 ///
@@ -202,61 +208,54 @@ pub fn index_embeddings(db: &Database, force: bool) -> Result<RagIndexResult> {
 
     info!("Embedding {} symbols...", symbol_ids.len());
 
-    let mut db_batch: Vec<(i64, Vec<u8>)> = Vec::with_capacity(DB_BATCH_LIMIT);
-    let mut texts: Vec<String> = Vec::with_capacity(CHUNK_SIZE);
-    let mut text_symbol_ids: Vec<String> = Vec::with_capacity(CHUNK_SIZE);
-
     let total = symbol_ids.len();
-    let mut processed = 0usize;
 
-    // Process in chunks, batch-fetching content for each chunk
+    // Build all (text, symbol_id) pairs upfront, then sort by text length.
+    // Sorting minimises padding waste in the ONNX model: texts of similar
+    // token count land in the same batch, avoiding short texts being padded
+    // to the longest text's length. This can cut inference time 30-50%.
+    let mut pairs: Vec<(String, String)> = Vec::with_capacity(total);
     for chunk in symbol_ids.chunks(CHUNK_SIZE) {
         let chunk_vec: Vec<String> = chunk.to_vec();
         let content_map = db.get_symbol_contents_batch(&chunk_vec)?;
-
         for symbol_id in chunk {
-            let (content, header) = match content_map.get(symbol_id) {
-                Some(c) => c,
+            match content_map.get(symbol_id) {
+                Some((content, header)) => {
+                    let text = compact_embedding_text(header, content);
+                    if text.len() < MIN_EMBED_TEXT_BYTES {
+                        result.symbols_skipped += 1;
+                        continue;
+                    }
+                    pairs.push((text, symbol_id.clone()));
+                }
                 None => {
                     result.symbols_skipped += 1;
-                    continue;
-                }
-            };
-
-            texts.push(compact_embedding_text(header, content));
-            text_symbol_ids.push(symbol_id.clone());
-
-            if texts.len() >= CHUNK_SIZE {
-                let count = flush_embedding_batch(
-                    &mut engine,
-                    db,
-                    &texts,
-                    &text_symbol_ids,
-                    &mut db_batch,
-                    &mut result,
-                )?;
-                processed += count;
-                texts.clear();
-                text_symbol_ids.clear();
-
-                if processed % 1000 < CHUNK_SIZE {
-                    info!("  {processed}/{total} symbols embedded");
                 }
             }
         }
     }
+    pairs.sort_by_key(|(text, _)| text.len());
 
-    // Flush remaining texts
-    if !texts.is_empty() {
+    let mut db_batch: Vec<(i64, Vec<u8>)> = Vec::with_capacity(DB_BATCH_LIMIT);
+    let mut processed = 0usize;
+
+    for batch in pairs.chunks(CHUNK_SIZE) {
+        let texts: Vec<String> = batch.iter().map(|(t, _)| t.clone()).collect();
+        let sids: Vec<String> = batch.iter().map(|(_, s)| s.clone()).collect();
+
         let count = flush_embedding_batch(
             &mut engine,
             db,
             &texts,
-            &text_symbol_ids,
+            &sids,
             &mut db_batch,
             &mut result,
         )?;
         processed += count;
+
+        if processed % 1000 < CHUNK_SIZE {
+            info!("  {processed}/{total} symbols embedded");
+        }
     }
 
     // Flush remaining DB writes
@@ -422,6 +421,6 @@ mod tests {
     #[test]
     fn test_embedding_format_version_is_current() {
         // Ensures the constant is kept in sync — update when adding migrations
-        assert_eq!(EMBEDDING_FORMAT_VERSION, 2);
+        assert_eq!(EMBEDDING_FORMAT_VERSION, 3);
     }
 }
