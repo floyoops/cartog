@@ -63,7 +63,7 @@ Each language extractor implements the `Extractor` trait from `src/languages/mod
 fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult>
 ```
 
-Returns `Vec<Symbol>` + `Vec<Edge>`. After all files are extracted, `db.resolve_edges()` links edges by name (same file > same dir > unique project match).
+Returns `Vec<Symbol>` + `Vec<Edge>`. After all files are extracted, `db.resolve_edges()` links edges by name using 6-tier priority (same file > import-path > same dir > parent scope > unique global > kind disambiguation). Runs two passes so import edges resolved in pass 1 feed import-path resolution in pass 2.
 
 ## Adding a New Language
 

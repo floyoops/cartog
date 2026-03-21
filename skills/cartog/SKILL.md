@@ -136,7 +136,7 @@ cartog search parse --limit 10               # cap results
 ```
 Returns symbols ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
 
-Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`.
+Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`.
 
 ### RAG Search (hybrid keyword + semantic)
 ```bash
@@ -159,7 +159,7 @@ Output shows symbols with types, signatures, and line ranges — no need to read
 cartog refs validate_token               # all reference types
 cartog refs validate_token --kind calls  # only call sites
 ```
-Available `--kind` values: `calls`, `imports`, `inherits`, `references`, `raises`.
+Available `--kind` values: `calls`, `imports`, `inherits`, `references`, `raises`, `implements`, `type-of`.
 
 ### Callees (what does this call?)
 ```bash

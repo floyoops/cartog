@@ -364,4 +364,100 @@ async function getUser(id: number): Promise<User> {
         assert!(targets.contains(&"Promise"));
         assert!(targets.contains(&"User"));
     }
+
+    #[test]
+    fn test_abstract_class() {
+        let result = extract_ts(
+            r#"
+export abstract class BaseCache implements CacheBackend {
+    protected name: string;
+
+    constructor(name: string) {
+        this.name = name;
+    }
+
+    abstract get(key: string): unknown | null;
+
+    stats(): { hits: number } {
+        return { hits: 0 };
+    }
+}
+"#,
+        );
+
+        let class = result.symbols.iter().find(|s| s.name == "BaseCache");
+        assert!(class.is_some(), "abstract class should be extracted");
+        assert_eq!(class.unwrap().kind, SymbolKind::Class);
+
+        let stats_method = result.symbols.iter().find(|s| s.name == "stats");
+        assert!(
+            stats_method.is_some(),
+            "method inside abstract class should be extracted"
+        );
+
+        let implements: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Implements)
+            .collect();
+        assert_eq!(implements.len(), 1);
+        assert_eq!(implements[0].target_name, "CacheBackend");
+    }
+
+    #[test]
+    fn test_abstract_class_nested_in_export() {
+        let result = extract_ts(
+            r#"
+export abstract class Service {
+    abstract run(): void;
+}
+
+export class ConcreteService extends Service {
+    run(): void {}
+}
+"#,
+        );
+
+        let abs = result.symbols.iter().find(|s| s.name == "Service");
+        assert!(abs.is_some());
+
+        let concrete = result.symbols.iter().find(|s| s.name == "ConcreteService");
+        assert!(concrete.is_some());
+
+        let inherits: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Inherits)
+            .collect();
+        assert_eq!(inherits.len(), 1);
+        assert_eq!(inherits[0].target_name, "Service");
+    }
+
+    #[test]
+    fn test_renamed_import() {
+        let result = extract_ts(
+            r#"
+import { validate as validateUser } from '../validators/user';
+"#,
+        );
+
+        let import_edges: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Imports)
+            .collect();
+
+        let targets: Vec<&str> = import_edges
+            .iter()
+            .map(|e| e.target_name.as_str())
+            .collect();
+        // Import edge uses the original exported name for cross-file resolution.
+        // Known limitation: calls using the alias (validateUser) won't resolve
+        // to the original symbol without alias tracking in the edge model.
+        assert!(
+            targets.contains(&"validate"),
+            "should have original name for resolution: got {:?}",
+            targets
+        );
+    }
 }

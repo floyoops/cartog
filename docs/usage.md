@@ -45,7 +45,7 @@ function  validate_user     services/user.py:12
 
 Results ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
 
-Available `--kind` values: `function`, `class`, `method`, `variable`, `import`.
+Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`.
 
 ### `cartog outline <file>`
 
@@ -110,7 +110,7 @@ inherits AdminService  auth/service.py:47
 references  process  routes/auth.py:22
 ```
 
-Available `--kind` values: `calls`, `imports`, `inherits`, `references`, `raises`.
+Available `--kind` values: `calls`, `imports`, `inherits`, `references`, `raises`, `implements`, `type-of`.
 
 ### `cartog hierarchy <class>`
 
@@ -224,7 +224,7 @@ cartog rag search "database connection" --limit 5
 
 Combines keyword (BM25/FTS5) and vector similarity search, merged via RRF, then re-ranked by a cross-encoder model.
 
-Available `--kind` values: `function`, `class`, `method`, `variable`, `import`.
+Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`.
 
 ## Recommended Workflow
 
@@ -260,9 +260,38 @@ Returns arrays of objects with fields like `name`, `kind`, `file_path`, `start_l
 
 **Errors**: if the index doesn't exist yet, query commands print an error message and exit with a non-zero status. Run `cartog index .` first. If a symbol or file isn't found, the result is an empty array (not an error).
 
+## Claude Plugin
+
+cartog is available as a [Claude Code plugin](https://docs.anthropic.com/en/docs/claude-code) — the recommended way to install for Claude Code users. Plugins bundle skills, scripts, and MCP server configuration into a single installable package.
+
+### Installation
+
+```bash
+claude plugin add jrollin/cartog
+```
+
+This installs the plugin from GitHub, which includes:
+
+- The agent skill (behavioral instructions in `skills/cartog/SKILL.md`)
+- Setup and install scripts
+- Plugin manifest (`.claude-plugin/plugin.json`)
+
+### Plugin Structure
+
+```
+.claude-plugin/
+└── plugin.json          # Plugin manifest
+skills/
+└── cartog/
+    ├── SKILL.md         # Agent skill instructions
+    ├── scripts/         # install.sh, ensure_indexed.sh
+    ├── tests/           # Behavioral evals
+    └── references/      # Query cookbook, language support
+```
+
 ## Agent Skill
 
-cartog ships as an [Agent Skill](https://agentskills.io) — behavioral instructions that teach your AI agent *when and how* to use cartog, including search routing, refactoring workflows, and fallback heuristics. This is the **primary** distribution method (works with any LLM that has bash access).
+cartog also ships as an [Agent Skill](https://agentskills.io) — behavioral instructions that teach your AI agent *when and how* to use cartog, including search routing, refactoring workflows, and fallback heuristics. Use this method for non-Claude Code environments or any LLM with bash access.
 
 ### Installation
 
@@ -460,13 +489,14 @@ Logs go to stderr. Default level is `info` (server start/stop only). Set `RUST_L
 RUST_LOG=debug cartog serve   # per-request tool call logging
 ```
 
-### MCP vs Skill
+### Plugin vs MCP vs Skill
 
-| | MCP Server | Agent Skill |
-|-|-----------|-------------|
-| Context cost | Zero (tools are protocol-level) | ~150 lines of prompt |
-| Workflow guidance | Basic (via `instructions` field) | Full heuristics |
-| Compatibility | MCP clients only | Any LLM with bash |
-| Latency | Persistent process | Fork+exec per command |
+| | Claude Plugin | MCP Server | Agent Skill |
+|-|--------------|-----------|-------------|
+| Install | `claude plugin add jrollin/cartog` | `claude mcp add cartog -- cartog serve` | `npx skills add jrollin/cartog` |
+| Context cost | ~150 lines of prompt | Zero (tools are protocol-level) | ~150 lines of prompt |
+| Workflow guidance | Full heuristics | Basic (via `instructions` field) | Full heuristics |
+| Compatibility | Claude Code only | MCP clients only | Any LLM with bash |
+| Latency | Fork+exec per command | Persistent process | Fork+exec per command |
 
-Use MCP when available for lower token cost. Use the skill for Claude.ai or non-MCP clients.
+Use the **plugin** for Claude Code (simplest setup, includes skill + scripts). Use **MCP** when you want lower token cost with an MCP-compatible client. Use the **skill** for non-Claude Code environments.

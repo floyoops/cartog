@@ -274,19 +274,37 @@ fn extract_impl(
     }
 
     let start_line = node.start_position().row as u32 + 1;
-    let end_line = node.end_position().row as u32 + 1;
-    let impl_parent_id = symbol_id(file_path, &impl_type, start_line);
 
-    // Emit a Class symbol for the impl block so edges have a valid source_id
-    symbols.push(Symbol::new(
-        impl_type.clone(),
-        SymbolKind::Class,
-        file_path,
-        start_line,
-        end_line,
-        node.start_byte() as u32,
-        node.end_byte() as u32,
-    ));
+    // Try to reuse the existing struct/enum/trait symbol as parent.
+    // Filter to type-definition kinds to avoid matching a function with the same name.
+    let existing_parent = symbols
+        .iter()
+        .find(|s| {
+            s.name == impl_type
+                && s.file_path == file_path
+                && matches!(
+                    s.kind,
+                    SymbolKind::Class | SymbolKind::Enum | SymbolKind::Trait
+                )
+        })
+        .map(|s| s.id.clone());
+
+    let impl_parent_id = existing_parent.unwrap_or_else(|| {
+        // No prior struct/enum/trait — emit a Class symbol so edges have a valid source_id.
+        // This happens for impl blocks on types defined in other files.
+        let id = symbol_id(file_path, &impl_type, start_line);
+        let end_line = node.end_position().row as u32 + 1;
+        symbols.push(Symbol::new(
+            impl_type.clone(),
+            SymbolKind::Class,
+            file_path,
+            start_line,
+            end_line,
+            node.start_byte() as u32,
+            node.end_byte() as u32,
+        ));
+        id
+    });
 
     // Check if this is a trait impl: impl Trait for Type
     let trait_name = node
@@ -742,9 +760,11 @@ fn rust_visibility(node: Node, source: &str) -> Visibility {
         if let Some(child) = node.child(i) {
             if child.kind() == "visibility_modifier" {
                 let text = node_text(child, source);
-                if text.contains("pub") {
-                    return Visibility::Public;
-                }
+                return match text {
+                    "pub" => Visibility::Public,
+                    _ if text.starts_with("pub(") => Visibility::Protected,
+                    _ => Visibility::Public,
+                };
             }
         }
     }
@@ -885,9 +905,18 @@ impl UserService {
 "#,
         );
 
-        let s = result.symbols.iter().find(|s| s.name == "UserService");
-        assert!(s.is_some());
-        assert_eq!(s.unwrap().kind, SymbolKind::Class);
+        // struct + impl should produce exactly ONE class symbol, not two
+        let user_services: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.name == "UserService")
+            .collect();
+        assert_eq!(
+            user_services.len(),
+            1,
+            "impl block should reuse struct symbol, not create duplicate"
+        );
+        assert_eq!(user_services[0].kind, SymbolKind::Class);
 
         let new_fn = result.symbols.iter().find(|s| s.name == "new");
         assert!(new_fn.is_some());
@@ -925,6 +954,57 @@ impl Serializable for UserService {
             .collect();
         assert_eq!(inherits.len(), 1);
         assert_eq!(inherits[0].target_name, "Serializable");
+    }
+
+    #[test]
+    fn test_struct_with_multiple_impl_blocks() {
+        let result = extract(
+            r#"
+pub struct AppError {
+    message: String,
+    code: u16,
+}
+
+impl AppError {
+    pub fn new(message: String, code: u16) -> Self {
+        Self { message, code }
+    }
+}
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+"#,
+        );
+
+        // struct + 2 impl blocks should produce exactly ONE class symbol
+        let app_errors: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.name == "AppError")
+            .collect();
+        assert_eq!(
+            app_errors.len(),
+            1,
+            "multiple impl blocks should reuse struct symbol"
+        );
+
+        // Methods from both impls should be extracted
+        let new_fn = result.symbols.iter().find(|s| s.name == "new");
+        assert!(new_fn.is_some());
+        let fmt_fn = result.symbols.iter().find(|s| s.name == "fmt");
+        assert!(fmt_fn.is_some());
+
+        // trait impl should create Implements edge
+        let implements: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Implements)
+            .collect();
+        assert_eq!(implements.len(), 1);
+        assert_eq!(implements[0].target_name, "Display");
     }
 
     #[test]
@@ -1034,7 +1114,7 @@ pub(crate) fn crate_fn() {}
         assert_eq!(private.unwrap().visibility, Visibility::Private);
 
         let crate_fn = result.symbols.iter().find(|s| s.name == "crate_fn");
-        assert_eq!(crate_fn.unwrap().visibility, Visibility::Public);
+        assert_eq!(crate_fn.unwrap().visibility, Visibility::Protected);
     }
 
     #[test]

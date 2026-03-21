@@ -400,13 +400,31 @@ impl Database {
 
     /// Resolve target_name → target_id for all unresolved edges.
     ///
-    /// 5-tier priority resolution:
+    /// Runs two passes so that import edges resolved in pass 1 enable
+    /// import-path resolution (tier 2) for non-import edges in pass 2.
+    ///
+    /// 6-tier priority resolution (per pass):
     /// 1. Same file — symbol with matching name in the same file
-    /// 2. Import-path — follow imports to find the target in the imported file
+    /// 2. Import-path — follow resolved imports to find the target in the imported file
     /// 3. Same directory — symbol in a file in the same directory
     /// 4. Parent scope preference — when multiple global matches, prefer same parent scope
     /// 5. Unique project-wide match — exactly one symbol with that name globally
+    /// 6. Class over constructor — when exactly 2 matches and one is a class, prefer class
     pub fn resolve_edges(&self) -> Result<u32> {
+        let mut total_resolved = 0u32;
+
+        for _pass in 0..2 {
+            let resolved = self.resolve_edges_pass()?;
+            if resolved == 0 {
+                break;
+            }
+            total_resolved += resolved;
+        }
+
+        Ok(total_resolved)
+    }
+
+    fn resolve_edges_pass(&self) -> Result<u32> {
         let mut resolved = 0u32;
 
         let mut unresolved_stmt = self.conn.prepare(
@@ -429,8 +447,6 @@ impl Database {
         // Import-path resolution: if this file has a resolved import edge for the
         // target name, follow it to find the target's file, then look for a
         // non-import symbol with that name in that file.
-        // Only works when the import edge was already resolved (e.g. via same-file
-        // match in an earlier iteration); otherwise returns no rows and falls through.
         let mut import_resolve_stmt = self.conn.prepare(
             "SELECT s.id FROM symbols s
              INNER JOIN edges ie ON ie.kind = 'imports' AND ie.target_name = ?1
@@ -456,7 +472,7 @@ impl Database {
 
         let mut anywhere_stmt = self
             .conn
-            .prepare("SELECT id FROM symbols WHERE name = ?1 AND kind != 'import' LIMIT 2")?;
+            .prepare("SELECT id, kind FROM symbols WHERE name = ?1 AND kind != 'import' LIMIT 3")?;
 
         let mut update_stmt = self
             .conn
@@ -518,11 +534,28 @@ impl Database {
                 continue;
             }
 
-            // 5) Unique project-wide match — fetch at most 2 rows; resolve only if exactly 1
+            // 5+6) Project-wide: unique match, or class-over-constructor disambiguation
             let mut rows = anywhere_stmt.query(params![simple_name])?;
-            let first = rows.next()?.and_then(|r| r.get::<_, String>(0).ok());
-            let has_second = rows.next()?.is_some();
-            if let (Some(tid), false) = (first, has_second) {
+            let mut matches: Vec<(String, String)> = Vec::new();
+            while let Some(row) = rows.next()? {
+                matches.push((row.get(0)?, row.get(1)?));
+                if matches.len() == 3 {
+                    break;
+                }
+            }
+            drop(rows);
+
+            let resolved_id = match matches.len() {
+                // 5) Unique project-wide match
+                1 => Some(&matches[0].0),
+                // 6) Disambiguate exactly 2 matches by preferring one kind over another:
+                //    - type def (class/interface/enum/trait) over method (constructor)
+                //    - function over method (bare call prefers top-level function)
+                2 => disambiguate_two(&matches[0], &matches[1]),
+                _ => None,
+            };
+
+            if let Some(tid) = resolved_id {
                 update_stmt.execute(params![tid, edge_id])?;
                 resolved += 1;
             }
@@ -1121,13 +1154,27 @@ impl Database {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let mut result = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(sym) = self.get_symbol(id)? {
-                result.push(sym);
-            }
-        }
-        Ok(result)
+        let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
+        let sql = format!(
+            "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
+                    parent_id, signature, visibility, is_async, docstring
+             FROM symbols WHERE id IN ({})",
+            placeholders.join(",")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<Box<dyn rusqlite::types::ToSql>> = ids
+            .iter()
+            .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let rows: std::collections::HashMap<String, Symbol> = stmt
+            .query_map(param_refs.as_slice(), row_to_symbol)?
+            .filter_map(|r| r.ok())
+            .map(|s| (s.id.clone(), s))
+            .collect();
+        // Preserve caller's ordering
+        Ok(ids.iter().filter_map(|id| rows.get(id).cloned()).collect())
     }
 
     /// Get all symbol IDs that have content stored but no embedding yet.
@@ -1219,6 +1266,32 @@ fn row_to_symbol_offset(row: &rusqlite::Row<'_>, off: usize) -> rusqlite::Result
         is_async: row.get(off + 11)?,
         docstring: row.get(off + 12)?,
     })
+}
+
+/// When exactly 2 global matches exist, try to pick one unambiguously.
+/// This is a last-resort heuristic — only reached after same-file, import-path,
+/// same-directory, and parent-scope tiers all fail.
+///
+/// Patterns:
+/// - type def vs method (Java/TS constructor shares class name) → prefer type def
+/// - function vs method (Ruby/Go top-level fn vs module method) → prefer function
+fn disambiguate_two<'a>(a: &'a (String, String), b: &'a (String, String)) -> Option<&'a String> {
+    match kind_priority(&a.1).cmp(&kind_priority(&b.1)) {
+        std::cmp::Ordering::Greater => Some(&a.0),
+        std::cmp::Ordering::Less => Some(&b.0),
+        std::cmp::Ordering::Equal => None,
+    }
+}
+
+/// Higher priority = preferred in disambiguation.
+/// Only values that differ trigger disambiguation; equal priorities → no resolution.
+fn kind_priority(kind: &str) -> u8 {
+    match kind {
+        "class" | "interface" | "enum" | "type_alias" | "trait" => 3,
+        "function" => 2,
+        "method" => 1,
+        _ => 0,
+    }
 }
 
 fn row_to_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<Edge> {
@@ -1468,6 +1541,173 @@ mod tests {
             .find(|(e, _)| e.kind == EdgeKind::Calls)
             .unwrap();
         assert_eq!(call_edge.0.target_id.as_ref().unwrap(), &same_file.id);
+    }
+
+    #[test]
+    fn test_resolve_edges_class_over_constructor() {
+        let db = Database::open_memory().unwrap();
+
+        // Java pattern: Logger class + Logger() constructor method in same file
+        let caller = test_symbol("handleLogin", SymbolKind::Method, "auth/Service.java", 10);
+        let logger_class = test_symbol("Logger", SymbolKind::Class, "util/Logger.java", 1);
+        let logger_ctor = test_symbol("Logger", SymbolKind::Method, "util/Logger.java", 5);
+        db.insert_symbols(&[caller.clone(), logger_class.clone(), logger_ctor])
+            .unwrap();
+
+        let edge = Edge {
+            source_id: caller.id.clone(),
+            target_name: "Logger".to_string(),
+            target_id: None,
+            kind: EdgeKind::References,
+            file_path: "auth/Service.java".to_string(),
+            line: 12,
+        };
+        db.insert_edge(&edge).unwrap();
+
+        let resolved = db.resolve_edges().unwrap();
+        assert_eq!(resolved, 1);
+
+        let refs = db.refs("Logger", None).unwrap();
+        let ref_edge = refs
+            .iter()
+            .find(|(e, _)| e.kind == EdgeKind::References)
+            .unwrap();
+        assert_eq!(ref_edge.0.target_id.as_ref().unwrap(), &logger_class.id);
+    }
+
+    #[test]
+    fn test_resolve_edges_class_over_constructor_still_ambiguous_with_three() {
+        let db = Database::open_memory().unwrap();
+
+        // Three matches: class + ctor + function — should NOT resolve
+        let caller = test_symbol("main", SymbolKind::Function, "app.java", 1);
+        let sym_class = test_symbol("Foo", SymbolKind::Class, "a/Foo.java", 1);
+        let sym_ctor = test_symbol("Foo", SymbolKind::Method, "a/Foo.java", 5);
+        let sym_func = test_symbol("Foo", SymbolKind::Function, "b/Foo.java", 1);
+        db.insert_symbols(&[caller.clone(), sym_class, sym_ctor, sym_func])
+            .unwrap();
+
+        let edge = Edge {
+            source_id: caller.id.clone(),
+            target_name: "Foo".to_string(),
+            target_id: None,
+            kind: EdgeKind::Calls,
+            file_path: "app.java".to_string(),
+            line: 5,
+        };
+        db.insert_edge(&edge).unwrap();
+
+        let resolved = db.resolve_edges().unwrap();
+        assert_eq!(resolved, 0);
+    }
+
+    #[test]
+    fn test_resolve_edges_multipass_import_then_call() {
+        let db = Database::open_memory().unwrap();
+
+        // File auth/service.java imports Logger from util/Logger.java
+        // and also calls Logger.info() — a reference to Logger
+        let import_sym = test_symbol("util.Logger", SymbolKind::Import, "auth/service.java", 1);
+        let caller = test_symbol("authenticate", SymbolKind::Method, "auth/service.java", 10);
+        let logger_class = test_symbol("Logger", SymbolKind::Class, "util/Logger.java", 1);
+        let logger_ctor = test_symbol("Logger", SymbolKind::Method, "util/Logger.java", 5);
+        db.insert_symbols(&[
+            import_sym.clone(),
+            caller.clone(),
+            logger_class.clone(),
+            logger_ctor,
+        ])
+        .unwrap();
+
+        // Import edge: auth/service.java imports "Logger"
+        let import_edge = Edge {
+            source_id: import_sym.id.clone(),
+            target_name: "Logger".to_string(),
+            target_id: None,
+            kind: EdgeKind::Imports,
+            file_path: "auth/service.java".to_string(),
+            line: 1,
+        };
+        db.insert_edge(&import_edge).unwrap();
+
+        // Reference edge: authenticate() references Logger
+        let ref_edge = Edge {
+            source_id: caller.id.clone(),
+            target_name: "Logger".to_string(),
+            target_id: None,
+            kind: EdgeKind::References,
+            file_path: "auth/service.java".to_string(),
+            line: 15,
+        };
+        db.insert_edge(&ref_edge).unwrap();
+
+        let resolved = db.resolve_edges().unwrap();
+        // Pass 1: import edge resolves via tier 6 (class over ctor)
+        // Pass 2: reference edge resolves via tier 2 (import-path)
+        assert_eq!(resolved, 2);
+
+        let refs = db.refs("Logger", None).unwrap();
+        let reference = refs
+            .iter()
+            .find(|(e, _)| e.kind == EdgeKind::References)
+            .unwrap();
+        assert_eq!(reference.0.target_id.as_ref().unwrap(), &logger_class.id);
+    }
+
+    #[test]
+    fn test_resolve_edges_function_over_method() {
+        let db = Database::open_memory().unwrap();
+
+        // Ruby pattern: get_logger as top-level function AND as module method
+        let caller = test_symbol("process", SymbolKind::Function, "app/main.rb", 1);
+        let top_fn = test_symbol("get_logger", SymbolKind::Function, "utils/helpers.rb", 6);
+        let mod_method = test_symbol("get_logger", SymbolKind::Method, "utils/logging.rb", 6);
+        db.insert_symbols(&[caller.clone(), top_fn.clone(), mod_method])
+            .unwrap();
+
+        let edge = Edge {
+            source_id: caller.id.clone(),
+            target_name: "get_logger".to_string(),
+            target_id: None,
+            kind: EdgeKind::Calls,
+            file_path: "app/main.rb".to_string(),
+            line: 5,
+        };
+        db.insert_edge(&edge).unwrap();
+
+        let resolved = db.resolve_edges().unwrap();
+        assert_eq!(resolved, 1);
+
+        let refs = db.refs("get_logger", None).unwrap();
+        let call_edge = refs
+            .iter()
+            .find(|(e, _)| e.kind == EdgeKind::Calls)
+            .unwrap();
+        assert_eq!(call_edge.0.target_id.as_ref().unwrap(), &top_fn.id);
+    }
+
+    #[test]
+    fn test_resolve_edges_two_functions_still_ambiguous() {
+        let db = Database::open_memory().unwrap();
+
+        // Two functions with same name in different files — should NOT resolve
+        let caller = test_symbol("main", SymbolKind::Function, "app.rb", 1);
+        let fn1 = test_symbol("helper", SymbolKind::Function, "a/utils.rb", 1);
+        let fn2 = test_symbol("helper", SymbolKind::Function, "b/utils.rb", 1);
+        db.insert_symbols(&[caller.clone(), fn1, fn2]).unwrap();
+
+        let edge = Edge {
+            source_id: caller.id.clone(),
+            target_name: "helper".to_string(),
+            target_id: None,
+            kind: EdgeKind::Calls,
+            file_path: "app.rb".to_string(),
+            line: 5,
+        };
+        db.insert_edge(&edge).unwrap();
+
+        let resolved = db.resolve_edges().unwrap();
+        assert_eq!(resolved, 0);
     }
 
     #[test]

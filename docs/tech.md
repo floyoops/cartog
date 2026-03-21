@@ -37,12 +37,12 @@
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Parser | tree-sitter | Incremental, multi-language, structural. Handles 90% of what LSP provides without running a language server |
+| Parser | tree-sitter (CST + query API) | Incremental, multi-language, structural. JS/TS and Python use declarative tree-sitter queries for call/throw/type-ref extraction; other languages use cursor walks. Handles 90% of what LSP provides without running a language server |
 | Storage | SQLite (single `.cartog.db`) | Zero infra, ~1 MB, persists across sessions. WAL mode enables concurrent readers (watcher + MCP server) |
 | Packaging | Skill (primary) | Changes agent workflow, not just adds a tool. Works with any LLM that has bash access |
 | MCP server | `cartog serve` (stdio) | Skill remains primary; MCP as secondary for zero-context-cost tool access. 1:1 mapping with CLI commands — same `db.*()` code paths |
 | Change detection | Git-based + SHA-256 fallback + `--force` | Git diff covers committed + staged + unstaged + untracked files. SHA-256 double-checks to skip touched-but-unmodified files. Deferred file reads — unchanged files are never read from disk |
-| Edge resolution | Name-based, scope-aware, post-extraction batch | Same file > same dir > unique global match. Deferred to after all files extracted so cross-file targets exist. Qualified names (`mod.Class.method`) resolved via `rsplit('.')` |
+| Edge resolution | Name-based, scope-aware, multi-pass batch | 6-tier priority: same file > import-path > same dir > parent scope > unique global > kind disambiguation (type def > function > method). Two passes so import edges resolved in pass 1 feed pass 2. Qualified names resolved via `rsplit('.')` |
 | Symbol ID | `file_path:name:start_line` | Deterministic, human-readable, no UUIDs. Reproducible across re-indexes |
 | Ignore strategy | Hardcoded 18 dirs + `starts_with('.')` | No `.gitignore` parsing — simpler, faster, predictable. Covers node_modules, \_\_pycache\_\_, target, venv, dist, build, .next, vendor, etc. |
 | Content truncation | 2048 bytes per symbol | ~512 tokens at code's ~2-3 chars/token ratio. Captures signature + leading body. Below 50 bytes → excluded (noise) |

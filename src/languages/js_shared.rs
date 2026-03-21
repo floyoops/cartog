@@ -123,8 +123,8 @@ fn extract_node(
                 node, source, file_path, parent_id, queries, symbols, edges,
             );
         }
-        // Classes
-        "class_declaration" => {
+        // Classes (including TypeScript abstract classes)
+        "class_declaration" | "abstract_class_declaration" => {
             extract_class(node, source, file_path, parent_id, queries, symbols, edges);
         }
         // Imports
@@ -691,6 +691,7 @@ const JS_SCOPE_KINDS: &[&str] = &[
     "arrow_function",
     "function_expression",
     "class_declaration",
+    "abstract_class_declaration",
     "method_definition",
 ];
 
@@ -780,6 +781,7 @@ fn walk_body_for_nested(
         match child.kind() {
             "function_declaration"
             | "class_declaration"
+            | "abstract_class_declaration"
             | "lexical_declaration"
             | "variable_declaration" => {
                 extract_node(
