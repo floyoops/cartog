@@ -229,10 +229,12 @@ fn migrate(conn: &Connection) {
     }
 
     // Store the new schema version
-    let _ = conn.execute(
+    if let Err(e) = conn.execute(
         "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
         params![SCHEMA_VERSION.to_string()],
-    );
+    ) {
+        warn!(error = %e, "failed to store schema version");
+    }
 }
 
 impl Database {
@@ -612,10 +614,18 @@ impl Database {
     pub fn compute_in_degrees(&self) -> Result<u32> {
         self.conn.execute("UPDATE symbols SET in_degree = 0", [])?;
 
+        // CTE computes counts once; the UPDATE applies them.
+        // Avoids a correlated subquery per symbol (O(n*m) → O(n+m)).
         let updated = self.conn.execute(
-            "UPDATE symbols SET in_degree = (
-                SELECT COUNT(*) FROM edges WHERE target_id = symbols.id
-            ) WHERE id IN (SELECT DISTINCT target_id FROM edges WHERE target_id IS NOT NULL)",
+            "WITH counts AS (
+                SELECT target_id, COUNT(*) AS cnt
+                FROM edges WHERE target_id IS NOT NULL
+                GROUP BY target_id
+            )
+            UPDATE symbols SET in_degree = (
+                SELECT cnt FROM counts WHERE counts.target_id = symbols.id
+            )
+            WHERE id IN (SELECT target_id FROM counts)",
             [],
         )?;
 
@@ -917,6 +927,10 @@ impl Database {
     ///
     /// Optionally filter by symbol kind. Only returns symbols for files that
     /// exist in the index. Files with no matching symbols are omitted.
+    /// SQLite variable limit per query. Chunking keeps us well under the default
+    /// `SQLITE_MAX_VARIABLE_NUMBER` (999 in older builds, 32766 in newer).
+    const FILE_CHUNK_SIZE: usize = 500;
+
     pub fn symbols_for_files(
         &self,
         file_paths: &[String],
@@ -925,32 +939,49 @@ impl Database {
         if file_paths.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders: Vec<_> = (1..=file_paths.len()).map(|i| format!("?{i}")).collect();
-        let kind_param_idx = file_paths.len() + 1;
+
         let kind_str = kind_filter.map(|k| k.as_str().to_string());
+        let mut all_results = Vec::new();
 
-        let sql = format!(
-            "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring, in_degree
-             FROM symbols
-             WHERE file_path IN ({})
-               AND (?{kind_param_idx} IS NULL OR kind = ?{kind_param_idx})
-             ORDER BY file_path, start_line",
-            placeholders.join(", ")
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
+        for chunk in file_paths.chunks(Self::FILE_CHUNK_SIZE) {
+            let placeholders: Vec<_> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+            let kind_param_idx = chunk.len() + 1;
 
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = file_paths
-            .iter()
-            .map(|p| Box::new(p.clone()) as Box<dyn rusqlite::types::ToSql>)
-            .collect();
-        param_values.push(Box::new(kind_str));
+            let sql = format!(
+                "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
+                        parent_id, signature, visibility, is_async, docstring, in_degree
+                 FROM symbols
+                 WHERE file_path IN ({})
+                   AND (?{kind_param_idx} IS NULL OR kind = ?{kind_param_idx})
+                 ORDER BY file_path, start_line",
+                placeholders.join(", ")
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
 
-        let params: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| &**p).collect();
-        let rows = stmt
-            .query_map(&*params, row_to_symbol)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+            let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = chunk
+                .iter()
+                .map(|p| Box::new(p.clone()) as Box<dyn rusqlite::types::ToSql>)
+                .collect();
+            param_values.push(Box::new(kind_str.clone()));
+
+            let params: Vec<&dyn rusqlite::types::ToSql> =
+                param_values.iter().map(|p| &**p).collect();
+            let rows = stmt
+                .query_map(&*params, row_to_symbol)?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            all_results.extend(rows);
+        }
+
+        // Re-sort across chunks to maintain file_path, start_line order
+        if file_paths.len() > Self::FILE_CHUNK_SIZE {
+            all_results.sort_by(|a, b| {
+                a.file_path
+                    .cmp(&b.file_path)
+                    .then(a.start_line.cmp(&b.start_line))
+            });
+        }
+
+        Ok(all_results)
     }
 
     /// Get all indexed file paths, sorted alphabetically.

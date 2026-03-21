@@ -30,15 +30,11 @@ fn truncate_to_budget(s: &str, max_tokens: u32) -> String {
     // Find a char boundary at or before max_bytes, leaving room for notice
     let notice = "\n... (truncated to fit token budget)";
     let target = max_bytes.saturating_sub(notice.len());
-    let cut = if s.is_char_boundary(target) {
-        target
-    } else {
-        // Walk backwards to find a valid char boundary
-        (0..target)
-            .rev()
-            .find(|&i| s.is_char_boundary(i))
-            .unwrap_or(0)
-    };
+    // UTF-8 chars are at most 4 bytes, so we only need to check 4 positions back.
+    let cut = (target.saturating_sub(3)..=target)
+        .rev()
+        .find(|&i| s.is_char_boundary(i))
+        .unwrap_or(0);
     let mut out = s[..cut].to_string();
     out.push_str(notice);
     out
