@@ -50,6 +50,13 @@ cartog deps src/routes/auth.py
 cartog refs SessionManager
 ```
 
+### "What code changed recently?"
+```bash
+cartog changes                           # last 5 commits + working tree
+cartog changes --commits 10              # last 10 commits
+cartog changes --kind function           # only functions that changed
+```
+
 ## Combining Commands
 
 Run each cartog command as a **separate tool call** — don't chain with `&&` or pipe through `grep`. Each CLI invocation opens a fresh SQLite connection with full initialization overhead. Separate calls let the agent inspect each result before deciding the next step.
@@ -144,6 +151,16 @@ cartog rag index . --force  # re-embed everything
 2. Check that the index is built: `cartog rag index .`
 3. Fall back to `cartog search` for name-based lookup
 4. Fall back to `grep` for string literals or config values
+
+## Token Budget
+
+Use `--tokens N` to limit output when working with constrained context windows:
+```bash
+cartog --tokens 500 search validate
+cartog --tokens 200 outline src/db.rs
+cartog --tokens 1000 changes
+```
+Ignored with `--json`. Uses len/4 byte-to-token approximation.
 
 ## Tips
 

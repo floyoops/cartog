@@ -101,6 +101,14 @@ pub struct RagIndexParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChangesParams {
+    /// Number of recent commits to consider (default 5)
+    pub commits: Option<u32>,
+    /// Filter by symbol kind: function, class, method, variable, import
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct RagSearchParams {
     /// Natural language query for semantic code search
     pub query: String,
@@ -529,6 +537,56 @@ impl CartogServer {
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
     }
 
+    /// Show symbols affected by recent git changes.
+    #[tool(
+        description = "Show symbols affected by recent git changes. Returns changed files and their indexed symbols from the last N commits plus working tree changes. Use to understand what code was recently modified."
+    )]
+    async fn cartog_changes(
+        &self,
+        Parameters(params): Parameters<ChangesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let commits = params.commits.unwrap_or(5);
+        let kind_str = params.kind;
+        let db = Arc::clone(&self.db);
+
+        tokio::task::spawn_blocking(move || {
+            let kind_filter = kind_str
+                .as_deref()
+                .map(|s| {
+                    s.parse::<crate::types::SymbolKind>().map_err(|_| {
+                        mcp_err(
+                            "invalid symbol kind. Valid: function, class, method, variable, import",
+                        )
+                    })
+                })
+                .transpose()?;
+
+            debug!(commits, kind = ?kind_filter, "changes");
+
+            let root = std::env::current_dir()
+                .map_err(|e| mcp_err(format!("cannot determine CWD: {e}")))?;
+
+            let changed_files = indexer::git_recently_changed_files(&root, commits)
+                .map_err(|e| mcp_err(format!("git changes failed: {e}")))?;
+
+            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+            let symbols = db
+                .symbols_for_files(&changed_files, kind_filter)
+                .map_err(|e| mcp_err(format!("symbols query failed: {e}")))?;
+
+            let result = crate::types::ChangesResult {
+                changed_files,
+                symbols,
+            };
+
+            let json = serde_json::to_string_pretty(&result)
+                .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
+            json_response(&db, json)
+        })
+        .await
+        .map_err(|e| mcp_err(format!("task join failed: {e}")))?
+    }
+
     /// Build embedding index for semantic code search.
     #[tool(
         description = "Build embedding index for semantic code search. Requires the embedding model to be downloaded first (run 'cartog rag setup' from CLI). Embeds all code symbols for vector similarity search."
@@ -629,7 +687,8 @@ impl ServerHandler for CartogServer {
                   4. Use cartog_refs to find all usages of a symbol (filter with kind param).\n\
                   5. Use cartog_impact before refactoring to assess blast radius.\n\
                   6. Re-run cartog_index after making code changes to keep the graph current.\n\
-                  7. Only fall back to reading files when you need actual implementation logic.\n\n\
+                  7. Use cartog_changes to see symbols affected by recent git commits.\n\
+                  8. Only fall back to reading files when you need actual implementation logic.\n\n\
                   Semantic search (if embedding model is installed):\n\
                   - Run cartog_rag_index to build the embedding index (after cartog_index).\n\
                   - Use cartog_rag_search for natural language queries about code functionality.\n\

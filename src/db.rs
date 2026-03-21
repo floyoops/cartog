@@ -837,6 +837,46 @@ impl Database {
             .is_some())
     }
 
+    /// Get symbols for a set of file paths, grouped by file, ordered by line.
+    ///
+    /// Optionally filter by symbol kind. Only returns symbols for files that
+    /// exist in the index. Files with no matching symbols are omitted.
+    pub fn symbols_for_files(
+        &self,
+        file_paths: &[String],
+        kind_filter: Option<SymbolKind>,
+    ) -> Result<Vec<Symbol>> {
+        if file_paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders: Vec<_> = (1..=file_paths.len()).map(|i| format!("?{i}")).collect();
+        let kind_param_idx = file_paths.len() + 1;
+        let kind_str = kind_filter.map(|k| k.as_str().to_string());
+
+        let sql = format!(
+            "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
+                    parent_id, signature, visibility, is_async, docstring
+             FROM symbols
+             WHERE file_path IN ({})
+               AND (?{kind_param_idx} IS NULL OR kind = ?{kind_param_idx})
+             ORDER BY file_path, start_line",
+            placeholders.join(", ")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = file_paths
+            .iter()
+            .map(|p| Box::new(p.clone()) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        param_values.push(Box::new(kind_str));
+
+        let params: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| &**p).collect();
+        let rows = stmt
+            .query_map(&*params, row_to_symbol)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Get all indexed file paths, sorted alphabetically.
     pub fn all_files(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare("SELECT path FROM files ORDER BY path")?;
@@ -2466,5 +2506,55 @@ mod tests {
 
         let not_found = db.get_symbol("nonexistent").unwrap();
         assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_symbols_for_files_basic() {
+        let db = Database::open_memory().unwrap();
+        let s1 = test_symbol("func_a", SymbolKind::Function, "src/a.py", 1);
+        let s2 = test_symbol("func_b", SymbolKind::Function, "src/a.py", 10);
+        let s3 = test_symbol("ClassC", SymbolKind::Class, "src/b.py", 1);
+        let s4 = test_symbol("func_d", SymbolKind::Function, "src/c.py", 1);
+        db.insert_symbols(&[s1, s2, s3, s4]).unwrap();
+
+        // Query for two files
+        let files = vec!["src/a.py".to_string(), "src/b.py".to_string()];
+        let results = db.symbols_for_files(&files, None).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].file_path, "src/a.py");
+        assert_eq!(results[2].file_path, "src/b.py");
+    }
+
+    #[test]
+    fn test_symbols_for_files_kind_filter() {
+        let db = Database::open_memory().unwrap();
+        let s1 = test_symbol("func_a", SymbolKind::Function, "src/a.py", 1);
+        let s2 = test_symbol("ClassB", SymbolKind::Class, "src/a.py", 10);
+        db.insert_symbols(&[s1, s2]).unwrap();
+
+        let files = vec!["src/a.py".to_string()];
+        let results = db
+            .symbols_for_files(&files, Some(SymbolKind::Function))
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "func_a");
+    }
+
+    #[test]
+    fn test_symbols_for_files_empty_input() {
+        let db = Database::open_memory().unwrap();
+        let results = db.symbols_for_files(&[], None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_symbols_for_files_no_matching_files() {
+        let db = Database::open_memory().unwrap();
+        let s1 = test_symbol("func_a", SymbolKind::Function, "src/a.py", 1);
+        db.insert_symbol(&s1).unwrap();
+
+        let files = vec!["src/nonexistent.py".to_string()];
+        let results = db.symbols_for_files(&files, None).unwrap();
+        assert!(results.is_empty());
     }
 }

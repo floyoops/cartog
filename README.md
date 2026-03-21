@@ -31,7 +31,7 @@ Measured across 13 scenarios, 5 languages ([full benchmark suite](benchmarks/)).
 - **100% offline** — tree-sitter parsing + SQLite storage + ONNX embeddings. Your code never leaves your machine, ever.
 - **Smart search routing** — keyword search (sub-ms, symbol names) and semantic search (natural language queries) work together. Run both in parallel when unsure.
 - **Live index** — `cartog watch` auto re-indexes on file changes. Your agent always queries fresh data.
-- **MCP server** — `cartog serve` exposes 11 tools over stdio. Plug into Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible agent.
+- **MCP server** — `cartog serve` exposes 12 tools over stdio. Plug into Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible agent.
 
 ![cartog demo](docs/demo.gif)
 
@@ -140,7 +140,7 @@ cartog watch .                              # Watch for changes, re-index automa
 cartog watch . --rag                        # Also re-embed symbols (deferred)
 
 # MCP Server
-cartog serve                                # MCP server over stdio (11 tools)
+cartog serve                                # MCP server over stdio (12 tools)
 cartog serve --watch                        # With background file watcher
 cartog serve --watch --rag                  # Watcher + deferred RAG embedding
 ```
@@ -221,7 +221,7 @@ Re-indexing is incremental: only files with changed content hashes are re-parsed
 
 ## MCP Server
 
-cartog runs as an [MCP](https://modelcontextprotocol.io/) server, exposing 11 tools (9 core + 2 RAG) over stdio.
+cartog runs as an [MCP](https://modelcontextprotocol.io/) server, exposing 12 tools (10 core + 2 RAG) over stdio.
 
 ```bash
 # Claude Code

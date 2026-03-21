@@ -34,7 +34,7 @@ Measured across 13 scenarios, 5 languages. Best gains on call chain tracing (88%
 - **Instant queries**: Pre-computed graph — 8us for outline, 100us for search, 450us for refs.
 - **Incremental indexing**: Git-based change detection, only re-indexes modified files.
 - **Live index**: `cartog watch` auto re-indexes on file changes. Agent always queries fresh data.
-- **MCP server**: `cartog serve` exposes 11 tools over stdio. Plug into any MCP-compatible client.
+- **MCP server**: `cartog serve` exposes 12 tools over stdio. Plug into any MCP-compatible client.
 - **100% local**: tree-sitter parsing, SQLite storage, ONNX embeddings. No API keys, no telemetry. Code never leaves your machine.
 - **Dual search**: keyword search (sub-ms, symbol names) + semantic search (natural language, ~300ms). Run both when unsure.
 

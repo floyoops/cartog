@@ -55,7 +55,7 @@ main.rs → cli.rs (clap) → command handlers (sync)
 
          → Rag    → rag/*.rs (setup, embeddings, indexer, search, reranker)
          → Watch  → watch.rs (debounced re-index + deferred RAG)
-         → Serve  → mcp.rs (MCP server over stdio, 11 tools)
+         → Serve  → mcp.rs (MCP server over stdio, 12 tools)
 ```
 
 Each language extractor implements the `Extractor` trait from `src/languages/mod.rs`:
@@ -113,9 +113,11 @@ After implementation, mark checklist items complete — the spec stays as a desi
 ## Current State
 
 - **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java
-- **CLI**: 9 commands + MCP server (11 tools: 9 core + 2 RAG)
+- **CLI**: 10 commands + MCP server (12 tools: 10 core + 2 RAG)
 - **Indexing**: incremental (git-based + SHA-256 fallback), `--force` re-index
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
 - **Watch**: `cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding
 - **CI/CD**: fmt, clippy, test, coverage, release to crates.io + GitHub Releases
+- **Token budget**: `--tokens N` global flag for context-window-aware output truncation
+- **Recent changes**: `cartog changes` shows symbols affected by recent git commits
 - **Pending**: Java extractor improvements

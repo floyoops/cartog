@@ -261,6 +261,13 @@ pub struct FileInfo {
     pub num_symbols: u32,
 }
 
+/// Result of a recent-changes query: changed files and their indexed symbols.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChangesResult {
+    pub changed_files: Vec<String>,
+    pub symbols: Vec<Symbol>,
+}
+
 /// Build a symbol ID from its components: `file_path:name:line`
 pub fn symbol_id(file_path: &str, name: &str, line: u32) -> String {
     format!("{file_path}:{name}:{line}")

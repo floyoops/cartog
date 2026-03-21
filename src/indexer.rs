@@ -300,6 +300,45 @@ fn git_head_commit(root: &Path) -> Option<String> {
     }
 }
 
+/// Get files changed in the last N commits + working tree changes (staged, unstaged, untracked).
+///
+/// Returns a sorted, deduplicated list of file paths relative to `root`.
+/// Returns `Err` if not inside a git repository.
+pub fn git_recently_changed_files(root: &Path, commits: u32) -> Result<Vec<String>> {
+    use std::collections::BTreeSet;
+    let mut changed = BTreeSet::new();
+
+    // Files changed in last N commits
+    let output = git_cmd(
+        root,
+        &[
+            "log",
+            "--name-only",
+            "--pretty=format:",
+            &format!("-{commits}"),
+        ],
+    )
+    .context("Failed to run git — are you in a git repository?")?;
+    if output.status.success() {
+        changed.extend(parse_git_lines(&output.stdout));
+    }
+
+    // Working tree changes (unstaged + staged + untracked)
+    for args in [
+        &["diff", "--name-only"][..],
+        &["diff", "--name-only", "--cached"][..],
+        &["ls-files", "--others", "--exclude-standard"][..],
+    ] {
+        if let Some(out) = git_cmd(root, args) {
+            if out.status.success() {
+                changed.extend(parse_git_lines(&out.stdout));
+            }
+        }
+    }
+
+    Ok(changed.into_iter().collect())
+}
+
 /// Run a git command with stdin suppressed to prevent interactive prompts.
 fn git_cmd(root: &Path, args: &[&str]) -> Option<std::process::Output> {
     std::process::Command::new("git")

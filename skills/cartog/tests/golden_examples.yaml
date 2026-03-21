@@ -220,6 +220,39 @@
   tags: [do-dont, cli-usage]
 
 # ============================================================
+# Recent changes
+# ============================================================
+
+- id: changes_recent
+  description: "What changed recently?" should use cartog changes
+  user_query: "What code changed recently?"
+  expected:
+    tool_calls:
+      - "cartog changes"
+    reasoning: >
+      "What changed recently?" maps directly to cartog changes, which shows
+      symbols affected by recent git commits. The agent should not use git log
+      manually or grep for changes.
+  anti_patterns:
+    - Running git log or git diff manually
+    - Running grep to find changes
+  tags: [changes]
+
+- id: changes_with_context
+  description: Changes command with specific scope
+  user_query: "What functions were modified in the last 3 commits?"
+  expected:
+    tool_calls:
+      - "cartog changes --commits 3 --kind function"
+    reasoning: >
+      The user asks for functions changed in recent commits. cartog changes with
+      --commits and --kind filters is the direct answer.
+  anti_patterns:
+    - Running git log and manually inspecting files
+    - Using cartog search without changes context
+  tags: [changes]
+
+# ============================================================
 # Outline vs read
 # ============================================================
 

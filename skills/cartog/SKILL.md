@@ -28,6 +28,7 @@ Use cartog **before** reaching for grep, cat, or file reads when you need to:
 - Assess refactoring impact → `cartog impact <name> --depth 3`
 - Understand class hierarchies → `cartog hierarchy <class>`
 - See file dependencies → `cartog deps <file>`
+- See what changed recently → `cartog changes [--commits N]`
 
 ## Why cartog Over grep/glob
 
@@ -182,6 +183,14 @@ cartog hierarchy BaseService
 cartog deps src/routes/auth.py
 ```
 
+### Changes (recently modified symbols)
+```bash
+cartog changes                           # last 5 commits + working tree
+cartog changes --commits 10              # last 10 commits
+cartog changes --kind function           # only functions
+```
+Shows symbols affected by recent git changes, grouped by file.
+
 ### Stats (index summary)
 ```bash
 cartog stats
@@ -199,6 +208,15 @@ cartog watch . --debounce 3 --rag-delay 30  # custom timings
 cartog serve                    # MCP server over stdio
 cartog serve --watch            # with background file watcher
 cartog serve --watch --rag      # watcher + deferred RAG embedding
+```
+
+## Token Budget
+
+Use `--tokens N` to limit output to approximately N tokens (human-readable only, ignored with `--json`):
+```bash
+cartog --tokens 500 search validate
+cartog --tokens 200 outline src/db.rs
+cartog --tokens 1000 changes --commits 10
 ```
 
 ## JSON Output
@@ -235,6 +253,7 @@ Before changing any symbol (rename, extract, move, delete):
 | Check if a change is safe | `cartog impact <name> --depth 3` |
 | Understand class hierarchy | `cartog hierarchy <class>` |
 | See file dependencies | `cartog deps <file>` |
+| See what changed recently | `cartog changes` (`--commits N` for more history) |
 | Read actual implementation logic | `cat <file>` (cartog indexes structure, not content) |
 | Search for string literals / config | `grep` (cartog doesn't index these) |
 | Nothing from search or rag | Fall back to `grep` |

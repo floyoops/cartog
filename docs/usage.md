@@ -162,6 +162,32 @@ Symbols by kind:
   variable: 40
 ```
 
+### `cartog changes [--commits N] [--kind <kind>]`
+
+Show symbols affected by recent git changes — answers "what code changed recently?".
+
+```bash
+cartog changes                        # last 5 commits + working tree
+cartog changes --commits 10           # last 10 commits
+cartog changes --kind function        # only functions that changed
+```
+
+```
+27 files changed in last 5 commits, 158 symbols affected
+
+src/commands.rs:
+  function open_db() -> Result<Database>  L14-16
+  function cmd_index(path: &str, force: bool, json: bool) -> Result<()>  L62-75
+  ...
+
+3 changed files not in index:
+  README.md
+  Cargo.lock
+  .gitignore
+```
+
+Symbols are grouped by file. Files changed but not indexed (e.g., markdown, config) are listed separately.
+
 ### `cartog watch [path] [--debounce N] [--rag] [--rag-delay N]`
 
 Watch for file changes and auto-re-index. Keeps the code graph fresh during development.
@@ -245,6 +271,18 @@ cartog rag index        # embed symbols
 cartog rag search "..."  # natural language queries
 ```
 
+## Token Budget
+
+All query commands accept `--tokens N` to limit human-readable output to approximately N tokens. Useful for LLM agents with limited context windows.
+
+```bash
+cartog --tokens 500 search validate        # cap output to ~500 tokens
+cartog --tokens 200 outline src/db.rs      # compact file outline
+cartog --tokens 1000 changes --commits 10  # budget-aware recent changes
+```
+
+Uses a `len / 4` byte-to-token approximation. Output is truncated at a character boundary with a notice. Ignored when `--json` is used (agents handle their own truncation with `--limit`).
+
 ## JSON Output
 
 All commands accept `--json` for structured output. The flag can go before or after the subcommand:
@@ -326,7 +364,7 @@ bash scripts/ensure_indexed.sh
 
 ## MCP Server
 
-`cartog serve` runs cartog as an MCP server over stdio, exposing 11 tools (9 core + 2 RAG) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
+`cartog serve` runs cartog as an MCP server over stdio, exposing 12 tools (10 core + 2 RAG) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
 
 ```bash
 cartog serve                  # basic MCP server
@@ -470,6 +508,7 @@ The config pattern is always the same — point the client at `cartog serve` ove
 | `cartog_hierarchy` | `name` | Inheritance tree |
 | `cartog_deps` | `file` | File-level imports |
 | `cartog_stats` | — | Index summary |
+| `cartog_changes` | `commits?`, `kind?` | Symbols affected by recent git changes |
 | `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search |
 | `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |
 

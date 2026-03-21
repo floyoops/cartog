@@ -15,12 +15,51 @@ fn open_db() -> Result<Database> {
     Database::open(DB_FILE).context("Failed to open cartog database")
 }
 
+/// Estimate token count from a string using chars/4 approximation.
+#[cfg(test)]
+fn estimate_tokens(s: &str) -> u32 {
+    (s.len() as u32 + 3) / 4
+}
+
+/// Truncate a string to fit within a token budget, appending a truncation notice.
+fn truncate_to_budget(s: &str, max_tokens: u32) -> String {
+    let max_bytes = (max_tokens as usize) * 4;
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    // Find a char boundary at or before max_bytes, leaving room for notice
+    let notice = "\n... (truncated to fit token budget)";
+    let target = max_bytes.saturating_sub(notice.len());
+    let cut = if s.is_char_boundary(target) {
+        target
+    } else {
+        // Walk backwards to find a valid char boundary
+        (0..target)
+            .rev()
+            .find(|&i| s.is_char_boundary(i))
+            .unwrap_or(0)
+    };
+    let mut out = s[..cut].to_string();
+    out.push_str(notice);
+    out
+}
+
 /// Print `data` as pretty JSON if `json` is true, otherwise call `human_fmt`.
-fn output<T: Serialize>(data: &T, json: bool, human_fmt: impl FnOnce(&T)) -> Result<()> {
+/// When `token_budget` is Some, truncate human-readable output to fit.
+fn output<T: Serialize>(
+    data: &T,
+    json: bool,
+    token_budget: Option<u32>,
+    human_fmt: impl FnOnce(&T) -> String,
+) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(data)?);
     } else {
-        human_fmt(data);
+        let text = human_fmt(data);
+        match token_budget {
+            Some(budget) => print!("{}", truncate_to_budget(&text, budget)),
+            None => print!("{}", text),
+        }
     }
     Ok(())
 }
@@ -32,194 +71,207 @@ pub fn cmd_index(path: &str, force: bool, json: bool) -> Result<()> {
 
     let result = indexer::index_directory(&db, root, force)?;
 
-    output(&result, json, |r| {
-        println!(
-            "Indexed {} files ({} skipped, {} removed)",
-            r.files_indexed, r.files_skipped, r.files_removed
-        );
-        println!(
-            "  {} symbols, {} edges ({} resolved)",
-            r.symbols_added, r.edges_added, r.edges_resolved
-        );
+    output(&result, json, None, |r| {
+        format!(
+            "Indexed {} files ({} skipped, {} removed)\n  {} symbols, {} edges ({} resolved)\n",
+            r.files_indexed,
+            r.files_skipped,
+            r.files_removed,
+            r.symbols_added,
+            r.edges_added,
+            r.edges_resolved
+        )
     })
 }
 
 /// Show symbols and structure of a file.
-pub fn cmd_outline(file: &str, json: bool) -> Result<()> {
+pub fn cmd_outline(file: &str, json: bool, token_budget: Option<u32>) -> Result<()> {
     let db = open_db()?;
     let symbols = db.outline(file)?;
+    let file = file.to_string();
 
-    output(&symbols, json, |syms| {
+    output(&symbols, json, token_budget, |syms| {
         if syms.is_empty() {
-            println!("No symbols found in {file}");
-            return;
+            return format!("No symbols found in {file}\n");
         }
+        let mut out = String::new();
         for sym in syms {
             let indent = if sym.parent_id.is_some() { "  " } else { "" };
             let async_prefix = if sym.is_async { "async " } else { "" };
             match sym.kind {
                 SymbolKind::Import => {
                     let text = sym.signature.as_deref().unwrap_or(&sym.name);
-                    println!("{indent}{text}  L{}", sym.start_line);
+                    out.push_str(&format!("{indent}{text}  L{}\n", sym.start_line));
                 }
                 _ => {
                     let sig = sym.signature.as_deref().unwrap_or("");
-                    println!(
-                        "{indent}{async_prefix}{kind} {name}{sig}  L{start}-{end}",
+                    out.push_str(&format!(
+                        "{indent}{async_prefix}{kind} {name}{sig}  L{start}-{end}\n",
                         kind = sym.kind,
                         name = sym.name,
                         start = sym.start_line,
                         end = sym.end_line,
-                    );
+                    ));
                 }
             }
         }
+        out
     })
 }
 
 /// Find what a symbol calls.
-pub fn cmd_callees(name: &str, json: bool) -> Result<()> {
+pub fn cmd_callees(name: &str, json: bool, token_budget: Option<u32>) -> Result<()> {
     let db = open_db()?;
     let edges = db.callees(name)?;
+    let name = name.to_string();
 
-    output(&edges, json, |edges| {
+    output(&edges, json, token_budget, |edges| {
         if edges.is_empty() {
-            println!("No callees found for '{name}'");
-            return;
+            return format!("No callees found for '{name}'\n");
         }
+        let mut out = String::new();
         for edge in edges {
-            println!(
-                "{target}  {file}:{line}",
+            out.push_str(&format!(
+                "{target}  {file}:{line}\n",
                 target = edge.target_name,
                 file = edge.file_path,
                 line = edge.line,
-            );
+            ));
         }
+        out
     })
 }
 
 /// Transitive impact analysis — what breaks if this changes?
-pub fn cmd_impact(name: &str, depth: u32, json: bool) -> Result<()> {
+pub fn cmd_impact(name: &str, depth: u32, json: bool, token_budget: Option<u32>) -> Result<()> {
     let db = open_db()?;
     let results = db.impact(name, depth)?;
+    let name = name.to_string();
 
-    if json {
-        let items: Vec<_> = results
-            .iter()
-            .map(|(edge, d)| {
-                serde_json::json!({
-                    "edge": edge,
-                    "depth": d,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&items)?);
-    } else {
-        if results.is_empty() {
-            println!("No impact found for '{name}'");
-            return Ok(());
-        }
-        for (edge, depth) in &results {
-            let indent = "  ".repeat(*depth as usize);
-            println!(
-                "{indent}{kind}  {source}  {file}:{line}",
-                kind = edge.kind,
-                source = edge.source_id,
-                file = edge.file_path,
-                line = edge.line,
-            );
-        }
+    #[derive(Serialize)]
+    struct ImpactEntry {
+        edge: crate::types::Edge,
+        depth: u32,
     }
 
-    Ok(())
+    let items: Vec<ImpactEntry> = results
+        .into_iter()
+        .map(|(edge, d)| ImpactEntry { edge, depth: d })
+        .collect();
+
+    output(&items, json, token_budget, |items| {
+        if items.is_empty() {
+            return format!("No impact found for '{name}'\n");
+        }
+        let mut out = String::new();
+        for entry in items {
+            let indent = "  ".repeat(entry.depth as usize);
+            out.push_str(&format!(
+                "{indent}{kind}  {source}  {file}:{line}\n",
+                kind = entry.edge.kind,
+                source = entry.edge.source_id,
+                file = entry.edge.file_path,
+                line = entry.edge.line,
+            ));
+        }
+        out
+    })
 }
 
 /// All references to a symbol (calls, imports, inherits, references, raises).
-pub fn cmd_refs(name: &str, kind: Option<EdgeKindFilter>, json: bool) -> Result<()> {
+pub fn cmd_refs(
+    name: &str,
+    kind: Option<EdgeKindFilter>,
+    json: bool,
+    token_budget: Option<u32>,
+) -> Result<()> {
     let db = open_db()?;
     let kind_filter = kind.map(EdgeKind::from);
     let results = db.refs(name, kind_filter)?;
+    let name = name.to_string();
 
-    if json {
-        let items: Vec<_> = results
-            .iter()
-            .map(|(edge, sym)| {
-                serde_json::json!({
-                    "edge": edge,
-                    "source": sym,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&items)?);
-    } else {
-        if results.is_empty() {
-            println!("No references found for '{name}'");
-            return Ok(());
-        }
-        for (edge, sym) in &results {
-            let source_name = sym
-                .as_ref()
-                .map(|s| s.name.as_str())
-                .unwrap_or(&edge.source_id);
-            println!(
-                "{kind}  {source}  {file}:{line}",
-                kind = edge.kind,
-                source = source_name,
-                file = edge.file_path,
-                line = edge.line,
-            );
-        }
+    #[derive(Serialize)]
+    struct RefEntry {
+        edge: crate::types::Edge,
+        source: Option<crate::types::Symbol>,
     }
 
-    Ok(())
+    let items: Vec<RefEntry> = results
+        .into_iter()
+        .map(|(edge, sym)| RefEntry { edge, source: sym })
+        .collect();
+
+    output(&items, json, token_budget, |items| {
+        if items.is_empty() {
+            return format!("No references found for '{name}'\n");
+        }
+        let mut out = String::new();
+        for entry in items {
+            let source_name = entry
+                .source
+                .as_ref()
+                .map(|s| s.name.as_str())
+                .unwrap_or(&entry.edge.source_id);
+            out.push_str(&format!(
+                "{kind}  {source}  {file}:{line}\n",
+                kind = entry.edge.kind,
+                source = source_name,
+                file = entry.edge.file_path,
+                line = entry.edge.line,
+            ));
+        }
+        out
+    })
 }
 
 /// Show inheritance hierarchy for a class.
-pub fn cmd_hierarchy(name: &str, json: bool) -> Result<()> {
+pub fn cmd_hierarchy(name: &str, json: bool, token_budget: Option<u32>) -> Result<()> {
     let db = open_db()?;
     let pairs = db.hierarchy(name)?;
+    let name = name.to_string();
 
-    if json {
-        let items: Vec<_> = pairs
-            .iter()
-            .map(|(child, parent)| {
-                serde_json::json!({
-                    "child": child,
-                    "parent": parent,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&items)?);
-    } else {
-        if pairs.is_empty() {
-            println!("No hierarchy found for '{name}'");
-            return Ok(());
-        }
-        for (child, parent) in &pairs {
-            println!("{child} -> {parent}");
-        }
+    #[derive(Serialize)]
+    struct HierarchyEntry {
+        child: String,
+        parent: String,
     }
 
-    Ok(())
+    let items: Vec<HierarchyEntry> = pairs
+        .into_iter()
+        .map(|(child, parent)| HierarchyEntry { child, parent })
+        .collect();
+
+    output(&items, json, token_budget, |items| {
+        if items.is_empty() {
+            return format!("No hierarchy found for '{name}'\n");
+        }
+        let mut out = String::new();
+        for entry in items {
+            out.push_str(&format!("{} -> {}\n", entry.child, entry.parent));
+        }
+        out
+    })
 }
 
 /// File-level import dependencies.
-pub fn cmd_deps(file: &str, json: bool) -> Result<()> {
+pub fn cmd_deps(file: &str, json: bool, token_budget: Option<u32>) -> Result<()> {
     let db = open_db()?;
     let edges = db.file_deps(file)?;
+    let file = file.to_string();
 
-    output(&edges, json, |edges| {
+    output(&edges, json, token_budget, |edges| {
         if edges.is_empty() {
-            println!("No dependencies found for '{file}'");
-            return;
+            return format!("No dependencies found for '{file}'\n");
         }
+        let mut out = String::new();
         for edge in edges {
-            println!(
-                "{target}  L{line}",
+            out.push_str(&format!(
+                "{target}  L{line}\n",
                 target = edge.target_name,
                 line = edge.line
-            );
+            ));
         }
+        out
     })
 }
 
@@ -230,26 +282,29 @@ pub fn cmd_search(
     file: Option<&str>,
     limit: u32,
     json: bool,
+    token_budget: Option<u32>,
 ) -> Result<()> {
     let db = open_db()?;
     let kind_filter = kind.map(crate::types::SymbolKind::from);
     let limit = limit.min(MAX_SEARCH_LIMIT);
     let symbols = db.search(query, kind_filter, file, limit)?;
+    let query = query.to_string();
 
-    output(&symbols, json, |syms| {
+    output(&symbols, json, token_budget, |syms| {
         if syms.is_empty() {
-            println!("No symbols found matching '{query}'");
-            return;
+            return format!("No symbols found matching '{query}'\n");
         }
+        let mut out = String::new();
         for sym in syms {
-            println!(
-                "{kind}  {name}  {file}:{line}",
+            out.push_str(&format!(
+                "{kind}  {name}  {file}:{line}\n",
                 kind = sym.kind,
                 name = sym.name,
                 file = sym.file_path,
                 line = sym.start_line,
-            );
+            ));
         }
+        out
     })
 }
 
@@ -258,25 +313,98 @@ pub fn cmd_stats(json: bool) -> Result<()> {
     let db = open_db()?;
     let stats = db.stats()?;
 
-    output(&stats, json, |stats| {
-        println!("Files:    {}", stats.num_files);
-        println!("Symbols:  {}", stats.num_symbols);
-        println!(
-            "Edges:    {} ({} resolved)",
+    output(&stats, json, None, |stats| {
+        let mut out = String::new();
+        out.push_str(&format!("Files:    {}\n", stats.num_files));
+        out.push_str(&format!("Symbols:  {}\n", stats.num_symbols));
+        out.push_str(&format!(
+            "Edges:    {} ({} resolved)\n",
             stats.num_edges, stats.num_resolved
-        );
+        ));
         if !stats.languages.is_empty() {
-            println!("Languages:");
+            out.push_str("Languages:\n");
             for (lang, count) in &stats.languages {
-                println!("  {lang}: {count} files");
+                out.push_str(&format!("  {lang}: {count} files\n"));
             }
         }
         if !stats.symbol_kinds.is_empty() {
-            println!("Symbols by kind:");
+            out.push_str("Symbols by kind:\n");
             for (kind, count) in &stats.symbol_kinds {
-                println!("  {kind}: {count}");
+                out.push_str(&format!("  {kind}: {count}\n"));
             }
         }
+        out
+    })
+}
+
+/// Show symbols affected by recent git changes.
+pub fn cmd_changes(
+    commits: u32,
+    kind: Option<SymbolKindFilter>,
+    json: bool,
+    token_budget: Option<u32>,
+) -> Result<()> {
+    let db = open_db()?;
+    let root = std::env::current_dir()?;
+
+    let changed_files = indexer::git_recently_changed_files(&root, commits)?;
+
+    if changed_files.is_empty() {
+        if json {
+            println!("[]");
+        } else {
+            println!("No files changed in the last {commits} commits.");
+        }
+        return Ok(());
+    }
+
+    let kind_filter = kind.map(crate::types::SymbolKind::from);
+    let symbols = db.symbols_for_files(&changed_files, kind_filter)?;
+
+    let result = crate::types::ChangesResult {
+        changed_files,
+        symbols,
+    };
+
+    output(&result, json, token_budget, |r| {
+        let mut out = format!(
+            "{} files changed in last {} commits, {} symbols affected\n\n",
+            r.changed_files.len(),
+            commits,
+            r.symbols.len()
+        );
+        let mut current_file = "";
+        for sym in &r.symbols {
+            if sym.file_path != current_file {
+                current_file = &sym.file_path;
+                out.push_str(&format!("{current_file}:\n"));
+            }
+            let sig = sym.signature.as_deref().unwrap_or("");
+            out.push_str(&format!(
+                "  {kind} {name}{sig}  L{start}-{end}\n",
+                kind = sym.kind,
+                name = sym.name,
+                start = sym.start_line,
+                end = sym.end_line,
+            ));
+        }
+        let files_with_symbols: std::collections::HashSet<&str> =
+            r.symbols.iter().map(|s| s.file_path.as_str()).collect();
+        let unindexed: Vec<_> = r
+            .changed_files
+            .iter()
+            .filter(|f| !files_with_symbols.contains(f.as_str()))
+            .collect();
+        if !unindexed.is_empty() {
+            out.push_str(&format!(
+                "\n{} changed files not in index:\n",
+                unindexed.len()
+            ));
+            for f in unindexed {
+                out.push_str(&format!("  {f}\n"));
+            }
+        }
+        out
     })
 }
 
@@ -300,10 +428,11 @@ pub fn cmd_rag_setup(json: bool) -> Result<()> {
         reranker: rerank_result,
     };
 
-    output(&combined, json, |c| {
-        println!("Embedding model: {}", c.embedding.model_dir);
-        println!("Re-ranker model: {}", c.reranker.model_dir);
-        println!("Models ready. You can now run 'cartog rag index'.");
+    output(&combined, json, None, |c| {
+        format!(
+            "Embedding model: {}\nRe-ranker model: {}\nModels ready. You can now run 'cartog rag index'.\n",
+            c.embedding.model_dir, c.reranker.model_dir
+        )
     })
 }
 
@@ -316,11 +445,11 @@ pub fn cmd_rag_index(path: &str, force: bool, json: bool) -> Result<()> {
 
     let result = rag::indexer::index_embeddings(&db, force)?;
 
-    output(&result, json, |r| {
-        println!(
-            "Embedded {} symbols ({} skipped, {} total with content)",
+    output(&result, json, None, |r| {
+        format!(
+            "Embedded {} symbols ({} skipped, {} total with content)\n",
             r.symbols_embedded, r.symbols_skipped, r.total_content_symbols
-        );
+        )
     })
 }
 
@@ -330,22 +459,24 @@ pub fn cmd_rag_search(
     kind: Option<SymbolKindFilter>,
     limit: u32,
     json: bool,
+    token_budget: Option<u32>,
 ) -> Result<()> {
     let db = open_db()?;
     let kind_filter = kind.map(crate::types::SymbolKind::from);
 
     let search_result = rag::search::hybrid_search(&db, query, limit, kind_filter)?;
+    let query = query.to_string();
 
-    output(&search_result, json, |sr| {
+    output(&search_result, json, token_budget, |sr| {
         if sr.results.is_empty() {
-            println!("No results found for '{query}'");
+            let mut out = format!("No results found for '{query}'\n");
             if sr.fts_count == 0 && sr.vec_count == 0 {
-                println!("Hint: run 'cartog rag index' to build the semantic search index.");
+                out.push_str("Hint: run 'cartog rag index' to build the semantic search index.\n");
             }
-            return;
+            return out;
         }
-        println!(
-            "Found {} results (FTS: {}, vector: {}, merged: {})\n",
+        let mut out = format!(
+            "Found {} results (FTS: {}, vector: {}, merged: {})\n\n",
             sr.results.len(),
             sr.fts_count,
             sr.vec_count,
@@ -357,8 +488,8 @@ pub fn cmd_rag_search(
                 .rerank_score
                 .map(|s| format!(" rerank={s:.2}"))
                 .unwrap_or_default();
-            println!(
-                "{}. {} {}  {}:{}-{}  [{}] score={:.4}{rerank_str}",
+            out.push_str(&format!(
+                "{}. {} {}  {}:{}-{}  [{}] score={:.4}{rerank_str}\n",
                 i + 1,
                 r.symbol.kind,
                 r.symbol.name,
@@ -367,18 +498,18 @@ pub fn cmd_rag_search(
                 r.symbol.end_line,
                 sources,
                 r.rrf_score,
-            );
+            ));
             if let Some(ref content) = r.content {
-                // Show first 3 lines of content as preview
                 let preview: String = content
                     .lines()
                     .take(3)
                     .map(|l| format!("    {l}"))
                     .collect::<Vec<_>>()
                     .join("\n");
-                println!("{preview}\n");
+                out.push_str(&format!("{preview}\n\n"));
             }
         }
+        out
     })
 }
 
@@ -390,4 +521,49 @@ pub fn cmd_watch(path: &str, debounce: u64, rag: bool, rag_delay: u64) -> Result
     config.rag_delay = Duration::from_secs(rag_delay);
 
     watch::run_watch(config, DB_FILE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_estimate_tokens() {
+        assert_eq!(estimate_tokens(""), 0);
+        assert_eq!(estimate_tokens("a"), 1);
+        assert_eq!(estimate_tokens("abcd"), 1);
+        assert_eq!(estimate_tokens("abcde"), 2);
+        assert_eq!(estimate_tokens("abcdefgh"), 2);
+    }
+
+    #[test]
+    fn test_truncate_to_budget_within_limit() {
+        let text = "short text";
+        let result = truncate_to_budget(text, 100);
+        assert_eq!(result, text);
+    }
+
+    #[test]
+    fn test_truncate_to_budget_exceeds_limit() {
+        let text = "a".repeat(200);
+        let result = truncate_to_budget(&text, 10);
+        assert!(result.len() <= 40 + 50); // budget bytes + notice
+        assert!(result.ends_with("... (truncated to fit token budget)"));
+    }
+
+    #[test]
+    fn test_truncate_to_budget_exact_boundary() {
+        let text = "abcd"; // 4 bytes = 1 token
+        let result = truncate_to_budget(text, 1);
+        assert_eq!(result, "abcd");
+    }
+
+    #[test]
+    fn test_truncate_to_budget_unicode() {
+        // Each emoji is 4 bytes
+        let text = "Hello 🌍🌍🌍🌍🌍🌍🌍🌍🌍🌍";
+        let result = truncate_to_budget(text, 5);
+        assert!(result.ends_with("... (truncated to fit token budget)"));
+        // Should not panic on char boundary issues
+    }
 }

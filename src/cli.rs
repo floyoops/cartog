@@ -13,6 +13,10 @@ pub struct Cli {
     /// Output as JSON
     #[arg(long, global = true)]
     pub json: bool,
+
+    /// Limit human-readable output to approximately N tokens (ignored with --json)
+    #[arg(long, global = true)]
+    pub tokens: Option<u32>,
 }
 
 /// Filter for symbol kinds in the search command.
@@ -149,6 +153,17 @@ pub enum Command {
         /// Maximum results to return (default: 30, max: 100)
         #[arg(long, default_value = "30")]
         limit: u32,
+    },
+
+    /// Show symbols affected by recent git changes
+    Changes {
+        /// Number of recent commits to consider (default: 5)
+        #[arg(long, default_value = "5")]
+        commits: u32,
+
+        /// Filter by symbol kind
+        #[arg(long)]
+        kind: Option<SymbolKindFilter>,
     },
 
     /// Watch for file changes and auto-re-index
