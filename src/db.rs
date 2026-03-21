@@ -1340,10 +1340,7 @@ impl Database {
         )?;
         let rows = stmt
             .query_map(
-                params![
-                    SymbolKind::Variable.as_str(),
-                    SymbolKind::Import.as_str(),
-                ],
+                params![SymbolKind::Variable.as_str(), SymbolKind::Import.as_str(),],
                 |row| row.get(0),
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1367,10 +1364,7 @@ impl Database {
         )?;
         let rows = stmt
             .query_map(
-                params![
-                    SymbolKind::Variable.as_str(),
-                    SymbolKind::Import.as_str(),
-                ],
+                params![SymbolKind::Variable.as_str(), SymbolKind::Import.as_str(),],
                 |row| row.get(0),
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;

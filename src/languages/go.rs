@@ -197,7 +197,7 @@ fn extract_receiver_type(node: Node, source: &str) -> Option<String> {
             // Fallback: last named child
             let count = child.named_child_count();
             if count > 0 {
-                if let Some(last) = child.named_child(count - 1) {
+                if let Some(last) = child.named_child((count - 1) as u32) {
                     return Some(extract_type_name(last, source));
                 }
             }

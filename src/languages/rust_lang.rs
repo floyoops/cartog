@@ -736,14 +736,14 @@ fn collect_type_refs_recursive(
 
 fn has_child_kind(node: Node, kind: &str) -> bool {
     for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
+        if let Some(child) = node.child(i as u32) {
             if child.kind() == kind {
                 return true;
             }
             // Check inside function_modifiers for async/const/unsafe
             if child.kind() == "function_modifiers" {
                 for j in 0..child.child_count() {
-                    if let Some(gc) = child.child(j) {
+                    if let Some(gc) = child.child(j as u32) {
                         if gc.kind() == kind {
                             return true;
                         }
@@ -757,7 +757,7 @@ fn has_child_kind(node: Node, kind: &str) -> bool {
 
 fn rust_visibility(node: Node, source: &str) -> Visibility {
     for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
+        if let Some(child) = node.child(i as u32) {
             if child.kind() == "visibility_modifier" {
                 let text = node_text(child, source);
                 return match text {

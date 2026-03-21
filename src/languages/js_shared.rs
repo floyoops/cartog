@@ -331,7 +331,7 @@ fn extract_class(
 
     // Inheritance: class_heritage contains extends_clause (TS) or direct identifier (JS)
     for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
+        if let Some(child) = node.child(i as u32) {
             if child.kind() == "class_heritage" {
                 for clause in child.named_children(&mut child.walk()) {
                     match clause.kind() {
@@ -605,7 +605,7 @@ fn extract_interface(
 
     // interface Foo extends Bar, Baz
     for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
+        if let Some(child) = node.child(i as u32) {
             if child.kind() == "extends_type_clause" {
                 for tc in child.named_children(&mut child.walk()) {
                     let base_name = extract_type_name(tc, source);
@@ -863,7 +863,7 @@ fn is_function_like(kind: &str) -> bool {
 fn has_async_keyword(node: Node, source: &str) -> bool {
     // Check for "async" keyword as a child, or in the source prefix
     for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
+        if let Some(child) = node.child(i as u32) {
             if child.kind() == "async" {
                 return true;
             }
@@ -931,7 +931,7 @@ fn parse_jsdoc(text: &str) -> Option<String> {
 fn js_visibility_from_node(node: Node, source: &str) -> Visibility {
     // Check for TS accessibility modifiers
     for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
+        if let Some(child) = node.child(i as u32) {
             if child.kind() == "accessibility_modifier" {
                 let text = node_text(child, source);
                 return match text {

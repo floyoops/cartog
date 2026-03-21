@@ -725,7 +725,7 @@ fn extract_imported_names(node: Node, source: &str) -> Vec<String> {
             if names.is_empty() {
                 let mut past_import = false;
                 for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
+                    if let Some(child) = node.child(i as u32) {
                         if child.kind() == "import" {
                             past_import = true;
                             continue;

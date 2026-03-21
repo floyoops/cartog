@@ -1,10 +1,9 @@
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use rmcp::schemars;
 use rmcp::{
-    handler::server::{router::tool::ToolRouter, tool::Parameters},
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
     tool, tool_handler, tool_router,
     transport::stdio,
@@ -669,14 +668,10 @@ impl CartogServer {
 #[tool_handler]
 impl ServerHandler for CartogServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::LATEST,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation {
-                name: "cartog".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-            },
-            instructions: Some(
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("cartog", env!("CARGO_PKG_VERSION")))
+            .with_protocol_version(ProtocolVersion::LATEST)
+            .with_instructions(
                 "cartog is a code graph indexer with semantic search. It pre-computes a graph of symbols \
                  (functions, classes, methods, imports) and edges (calls, imports, inherits, \
                  type references, raises) using tree-sitter, stored in SQLite.\n\n\
@@ -693,10 +688,8 @@ impl ServerHandler for CartogServer {
                   - Run cartog_rag_index to build the embedding index (after cartog_index).\n\
                   - Use cartog_rag_search for natural language queries about code functionality.\n\
                   - Combines keyword (BM25) and vector similarity search for best results.\n\n\
-                 Supports: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java."
-                    .into(),
-            ),
-        }
+                 Supports: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java.",
+            )
     }
 }
 

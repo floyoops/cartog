@@ -243,14 +243,8 @@ pub fn index_embeddings(db: &Database, force: bool) -> Result<RagIndexResult> {
         let texts: Vec<String> = batch.iter().map(|(t, _)| t.clone()).collect();
         let sids: Vec<String> = batch.iter().map(|(_, s)| s.clone()).collect();
 
-        let count = flush_embedding_batch(
-            &mut engine,
-            db,
-            &texts,
-            &sids,
-            &mut db_batch,
-            &mut result,
-        )?;
+        let count =
+            flush_embedding_batch(&mut engine, db, &texts, &sids, &mut db_batch, &mut result)?;
         processed += count;
 
         if processed % 1000 < CHUNK_SIZE {
