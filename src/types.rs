@@ -15,6 +15,7 @@ pub struct Symbol {
     pub visibility: Visibility,
     pub is_async: bool,
     pub docstring: Option<String>,
+    pub in_degree: u32,
 }
 
 impl Symbol {
@@ -48,6 +49,7 @@ impl Symbol {
             visibility: Visibility::Public,
             is_async: false,
             docstring: None,
+            in_degree: 0,
         }
     }
 

@@ -337,6 +337,96 @@ pub fn cmd_stats(json: bool) -> Result<()> {
     })
 }
 
+/// Token-budget-aware codebase summary: file tree + top symbols ranked by centrality.
+pub fn cmd_map(tokens: u32, json: bool) -> Result<()> {
+    let db = open_db()?;
+    let files = db.all_files()?;
+
+    if files.is_empty() {
+        if json {
+            println!("{{}}");
+        } else {
+            println!("No files indexed. Run 'cartog index .' first.");
+        }
+        return Ok(());
+    }
+
+    if json {
+        // For JSON, return structured data without budget constraints
+        let symbols = db.top_symbols(200)?;
+
+        #[derive(Serialize)]
+        struct MapResult {
+            files: Vec<String>,
+            top_symbols: Vec<crate::types::Symbol>,
+        }
+
+        let result = MapResult {
+            files,
+            top_symbols: symbols,
+        };
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    // Human-readable: build file tree, then fill remaining budget with symbols
+    let budget_bytes = (tokens as usize) * 4;
+
+    // Phase 1: file tree
+    let mut out = String::new();
+    out.push_str(&format!("# Codebase Map ({} files)\n\n", files.len()));
+    for file in &files {
+        out.push_str(&format!("  {file}\n"));
+    }
+
+    let tree_bytes = out.len();
+    let remaining = budget_bytes.saturating_sub(tree_bytes);
+
+    if remaining < 100 {
+        print!("{}", truncate_to_budget(&out, tokens));
+        return Ok(());
+    }
+
+    // Phase 2: top symbols by centrality, grouped by file
+    out.push_str("\n# Top Symbols (by reference count)\n\n");
+
+    let symbols = db.top_symbols(500)?;
+    let mut current_file = "";
+
+    for sym in &symbols {
+        if out.len() >= budget_bytes {
+            break;
+        }
+
+        if sym.file_path != current_file {
+            let header = format!("\n{}:\n", sym.file_path);
+            if out.len() + header.len() > budget_bytes {
+                break;
+            }
+            out.push_str(&header);
+            current_file = &sym.file_path;
+        }
+
+        let sig = sym.signature.as_deref().unwrap_or("");
+        let line = format!(
+            "  {kind} {name}{sig}  L{start}-{end}  ({refs} refs)\n",
+            kind = sym.kind,
+            name = sym.name,
+            start = sym.start_line,
+            end = sym.end_line,
+            refs = sym.in_degree,
+        );
+
+        if out.len() + line.len() > budget_bytes {
+            break;
+        }
+        out.push_str(&line);
+    }
+
+    print!("{out}");
+    Ok(())
+}
+
 /// Show symbols affected by recent git changes.
 pub fn cmd_changes(
     commits: u32,

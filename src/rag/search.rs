@@ -185,6 +185,20 @@ pub fn hybrid_search(
         rerank_candidates(engine, query, rerank_slice);
     });
 
+    // 5b. Stable tiebreaker: within same score, prefer higher in-degree (more referenced).
+    candidates.sort_by(|a, b| {
+        let score_cmp = match (a.rerank_score, b.rerank_score) {
+            (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => b
+                .rrf_score
+                .partial_cmp(&a.rrf_score)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        };
+        score_cmp.then(b.symbol.in_degree.cmp(&a.symbol.in_degree))
+    });
+
     // 6. Apply kind filter + limit on (re-ranked) candidates.
     let mut results = Vec::new();
     for candidate in candidates {

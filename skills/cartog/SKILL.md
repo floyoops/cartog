@@ -28,6 +28,7 @@ Use cartog **before** reaching for grep, cat, or file reads when you need to:
 - Assess refactoring impact → `cartog impact <name> --depth 3`
 - Understand class hierarchies → `cartog hierarchy <class>`
 - See file dependencies → `cartog deps <file>`
+- Get a codebase overview → `cartog map [--tokens N]`
 - See what changed recently → `cartog changes [--commits N]`
 
 ## Why cartog Over grep/glob
@@ -183,6 +184,14 @@ cartog hierarchy BaseService
 cartog deps src/routes/auth.py
 ```
 
+### Map (codebase overview)
+```bash
+cartog map                               # default 4000 tokens
+cartog map --tokens 2000                 # compact
+cartog map --tokens 8000                 # detailed
+```
+File tree + top symbols ranked by reference count (centrality). Use at the start of a session for context loading.
+
 ### Changes (recently modified symbols)
 ```bash
 cartog changes                           # last 5 commits + working tree
@@ -253,6 +262,7 @@ Before changing any symbol (rename, extract, move, delete):
 | Check if a change is safe | `cartog impact <name> --depth 3` |
 | Understand class hierarchy | `cartog hierarchy <class>` |
 | See file dependencies | `cartog deps <file>` |
+| Get a codebase overview | `cartog map` (`--tokens N` for budget control) |
 | See what changed recently | `cartog changes` (`--commits N` for more history) |
 | Read actual implementation logic | `cat <file>` (cartog indexes structure, not content) |
 | Search for string literals / config | `grep` (cartog doesn't index these) |

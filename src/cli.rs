@@ -155,6 +155,13 @@ pub enum Command {
         limit: u32,
     },
 
+    /// Token-budget-aware codebase summary (file tree + top symbols by centrality)
+    Map {
+        /// Approximate token budget for the output (default: 4000)
+        #[arg(long, default_value = "4000")]
+        tokens: u32,
+    },
+
     /// Show symbols affected by recent git changes
     Changes {
         /// Number of recent commits to consider (default: 5)

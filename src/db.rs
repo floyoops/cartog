@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS symbols (
     signature TEXT,
     visibility TEXT,
     is_async BOOLEAN DEFAULT FALSE,
-    docstring TEXT
+    docstring TEXT,
+    in_degree INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS edges (
@@ -198,6 +199,42 @@ pub fn register_sqlite_vec() {
     });
 }
 
+/// Current schema version. Increment when adding migrations.
+const SCHEMA_VERSION: u32 = 2;
+
+/// Run schema migrations for existing databases.
+///
+/// Uses the `metadata` table to track the current schema version.
+/// Each migration runs once and is idempotent. New databases start at
+/// the latest version (SCHEMA already includes all columns).
+fn migrate(conn: &Connection) {
+    let current: u32 = conn
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(1); // pre-versioning databases are version 1
+
+    if current >= SCHEMA_VERSION {
+        return;
+    }
+
+    // Migration 1 → 2: add in_degree column for centrality ranking
+    if current < 2 {
+        let _ = conn.execute(
+            "ALTER TABLE symbols ADD COLUMN in_degree INTEGER DEFAULT 0",
+            [],
+        );
+    }
+
+    // Store the new schema version
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
+        params![SCHEMA_VERSION.to_string()],
+    );
+}
+
 impl Database {
     /// Open or create the database at the given path.
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
@@ -218,6 +255,7 @@ impl Database {
             .context("Failed to create RAG schema")?;
         conn.execute_batch(RAG_VEC_SCHEMA)
             .context("Failed to create sqlite-vec table")?;
+        migrate(&conn);
         Ok(Self { conn })
     }
 
@@ -230,6 +268,7 @@ impl Database {
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(RAG_SCHEMA)?;
         conn.execute_batch(RAG_VEC_SCHEMA)?;
+        migrate(&conn);
         Ok(Self { conn })
     }
 
@@ -565,6 +604,24 @@ impl Database {
         Ok(resolved)
     }
 
+    /// Compute and store in-degree centrality for all symbols.
+    ///
+    /// In-degree = number of resolved incoming edges (calls, imports, inherits, etc.).
+    /// Higher in-degree means the symbol is referenced more across the codebase.
+    /// Resets all in-degree values to 0 first, then batch-updates from the edges table.
+    pub fn compute_in_degrees(&self) -> Result<u32> {
+        self.conn.execute("UPDATE symbols SET in_degree = 0", [])?;
+
+        let updated = self.conn.execute(
+            "UPDATE symbols SET in_degree = (
+                SELECT COUNT(*) FROM edges WHERE target_id = symbols.id
+            ) WHERE id IN (SELECT DISTINCT target_id FROM edges WHERE target_id IS NOT NULL)",
+            [],
+        )?;
+
+        Ok(updated as u32)
+    }
+
     // ── Queries ──
 
     /// Search for symbols by name — case-insensitive, prefix match ranks before substring.
@@ -600,7 +657,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, kind, file_path, start_line, end_line,
                     start_byte, end_byte, parent_id, signature, visibility,
-                    is_async, docstring,
+                    is_async, docstring, in_degree,
                     (CASE
                        WHEN LOWER(name) = LOWER(?1)                    THEN 0
                        WHEN LOWER(name) LIKE LOWER(?2) || '%' ESCAPE '\\' THEN 1
@@ -619,6 +676,7 @@ impl Database {
                AND (?3 IS NULL OR kind = ?3)
                AND (?4 IS NULL OR file_path = ?4)
              ORDER BY rank,
+                      in_degree DESC,
                       CASE kind
                         WHEN 'function' THEN 0
                         WHEN 'method'   THEN 1
@@ -628,7 +686,7 @@ impl Database {
                       file_path, start_line
              LIMIT ?5",
         )?;
-        // rank is column 13 — row_to_symbol reads columns 0–12 and ignores it
+        // in_degree is column 13, rank is column 14 — row_to_symbol reads 0–13
         // ?1 = raw query (exact equality), ?2 = escaped query (LIKE patterns), ?3 = kind, ?4 = file, ?5 = limit
         let rows = stmt
             .query_map(
@@ -643,7 +701,7 @@ impl Database {
     pub fn outline(&self, file_path: &str) -> Result<Vec<Symbol>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring
+                    parent_id, signature, visibility, is_async, docstring, in_degree
              FROM symbols WHERE file_path = ?1
              ORDER BY start_line",
         )?;
@@ -699,7 +757,7 @@ impl Database {
                 "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                        s.is_async, s.docstring
+                        s.is_async, s.docstring, s.in_degree
                  FROM edges e
                  LEFT JOIN symbols s ON e.source_id = s.id
                  LEFT JOIN symbols sym2 ON e.target_id = sym2.id
@@ -715,7 +773,7 @@ impl Database {
                 "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                        s.is_async, s.docstring
+                        s.is_async, s.docstring, s.in_degree
                  FROM edges e
                  LEFT JOIN symbols s ON e.source_id = s.id
                  LEFT JOIN symbols sym2 ON e.target_id = sym2.id
@@ -825,6 +883,24 @@ impl Database {
         })
     }
 
+    /// Get all non-import symbols ordered by in-degree (highest first), then by file.
+    ///
+    /// Used by `cartog map` to produce a centrality-ranked codebase summary.
+    pub fn top_symbols(&self, limit: u32) -> Result<Vec<Symbol>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
+                    parent_id, signature, visibility, is_async, docstring, in_degree
+             FROM symbols
+             WHERE kind != 'import' AND kind != 'variable'
+             ORDER BY in_degree DESC, file_path, start_line
+             LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![limit], row_to_symbol)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Returns `true` if at least one file has been indexed.
     ///
     /// Cheaper than [`stats`] for the common "is the index empty?" check —
@@ -855,7 +931,7 @@ impl Database {
 
         let sql = format!(
             "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring
+                    parent_id, signature, visibility, is_async, docstring, in_degree
              FROM symbols
              WHERE file_path IN ({})
                AND (?{kind_param_idx} IS NULL OR kind = ?{kind_param_idx})
@@ -1180,7 +1256,7 @@ impl Database {
         self.conn
             .query_row(
                 "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                        parent_id, signature, visibility, is_async, docstring
+                        parent_id, signature, visibility, is_async, docstring, in_degree
                  FROM symbols WHERE id = ?1",
                 params![id],
                 row_to_symbol,
@@ -1197,7 +1273,7 @@ impl Database {
         let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
         let sql = format!(
             "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring
+                    parent_id, signature, visibility, is_async, docstring, in_degree
              FROM symbols WHERE id IN ({})",
             placeholders.join(",")
         );
@@ -1305,6 +1381,7 @@ fn row_to_symbol_offset(row: &rusqlite::Row<'_>, off: usize) -> rusqlite::Result
         visibility: Visibility::from_str_lossy(&vis_str),
         is_async: row.get(off + 11)?,
         docstring: row.get(off + 12)?,
+        in_degree: row.get(off + 13).unwrap_or(0),
     })
 }
 
@@ -2556,5 +2633,128 @@ mod tests {
         let files = vec!["src/nonexistent.py".to_string()];
         let results = db.symbols_for_files(&files, None).unwrap();
         assert!(results.is_empty());
+    }
+
+    // ── In-degree centrality tests ──
+
+    #[test]
+    fn test_compute_in_degrees() {
+        let db = Database::open_memory().unwrap();
+        let s1 = test_symbol("func_a", SymbolKind::Function, "a.py", 1);
+        let s2 = test_symbol("func_b", SymbolKind::Function, "b.py", 1);
+        let s3 = test_symbol("func_c", SymbolKind::Function, "c.py", 1);
+        db.insert_symbols(&[s1.clone(), s2.clone(), s3.clone()])
+            .unwrap();
+
+        // func_b calls func_a (2 call sites), func_c calls func_a (1 call site)
+        let e1 = Edge::new(&s2.id, "func_a", EdgeKind::Calls, "b.py", 5);
+        let e2 = Edge::new(&s2.id, "func_a", EdgeKind::Calls, "b.py", 10);
+        let e3 = Edge::new(&s3.id, "func_a", EdgeKind::Calls, "c.py", 3);
+        // func_c also calls func_b
+        let e4 = Edge::new(&s3.id, "func_b", EdgeKind::Calls, "c.py", 7);
+        db.insert_edges(&[e1, e2, e3, e4]).unwrap();
+        db.resolve_edges().unwrap();
+        db.compute_in_degrees().unwrap();
+
+        let sym_a = db.get_symbol(&s1.id).unwrap().unwrap();
+        let sym_b = db.get_symbol(&s2.id).unwrap().unwrap();
+        let sym_c = db.get_symbol(&s3.id).unwrap().unwrap();
+
+        assert_eq!(sym_a.in_degree, 3, "func_a should have 3 incoming edges");
+        assert_eq!(sym_b.in_degree, 1, "func_b should have 1 incoming edge");
+        assert_eq!(sym_c.in_degree, 0, "func_c should have 0 incoming edges");
+    }
+
+    #[test]
+    fn test_compute_in_degrees_resets() {
+        let db = Database::open_memory().unwrap();
+        let s1 = test_symbol("func_a", SymbolKind::Function, "a.py", 1);
+        db.insert_symbol(&s1).unwrap();
+
+        // Manually set in_degree to 99
+        db.conn
+            .execute(
+                "UPDATE symbols SET in_degree = 99 WHERE id = ?1",
+                params![s1.id],
+            )
+            .unwrap();
+
+        // compute_in_degrees should reset to 0 (no edges)
+        db.compute_in_degrees().unwrap();
+        let sym = db.get_symbol(&s1.id).unwrap().unwrap();
+        assert_eq!(sym.in_degree, 0);
+    }
+
+    #[test]
+    fn test_top_symbols_ordered_by_centrality() {
+        let db = Database::open_memory().unwrap();
+        let s1 = test_symbol("hub", SymbolKind::Function, "a.py", 1);
+        let s2 = test_symbol("leaf", SymbolKind::Function, "b.py", 1);
+        let s3 = test_symbol("mid", SymbolKind::Function, "c.py", 1);
+        db.insert_symbols(&[s1.clone(), s2.clone(), s3.clone()])
+            .unwrap();
+
+        // Set in-degrees directly for testing
+        db.conn
+            .execute(
+                "UPDATE symbols SET in_degree = 10 WHERE id = ?1",
+                params![s1.id],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "UPDATE symbols SET in_degree = 1 WHERE id = ?1",
+                params![s2.id],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "UPDATE symbols SET in_degree = 5 WHERE id = ?1",
+                params![s3.id],
+            )
+            .unwrap();
+
+        let top = db.top_symbols(10).unwrap();
+        assert_eq!(top.len(), 3);
+        assert_eq!(top[0].name, "hub");
+        assert_eq!(top[0].in_degree, 10);
+        assert_eq!(top[1].name, "mid");
+        assert_eq!(top[2].name, "leaf");
+    }
+
+    #[test]
+    fn test_search_uses_in_degree_tiebreaker() {
+        let db = Database::open_memory().unwrap();
+        // Two functions with same name prefix, different centrality
+        let s1 = test_symbol("parse_request", SymbolKind::Function, "a.py", 1);
+        let s2 = test_symbol("parse_response", SymbolKind::Function, "b.py", 1);
+        db.insert_symbols(&[s1.clone(), s2.clone()]).unwrap();
+
+        db.conn
+            .execute(
+                "UPDATE symbols SET in_degree = 20 WHERE id = ?1",
+                params![s1.id],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "UPDATE symbols SET in_degree = 5 WHERE id = ?1",
+                params![s2.id],
+            )
+            .unwrap();
+
+        let results = db.search("parse", None, None, 10).unwrap();
+        assert_eq!(results.len(), 2);
+        // parse_request (in_degree=20) should come before parse_response (in_degree=5)
+        assert_eq!(results[0].name, "parse_request");
+        assert_eq!(results[1].name, "parse_response");
+    }
+
+    #[test]
+    fn test_schema_version_stored() {
+        let db = Database::open_memory().unwrap();
+        let version = db.get_metadata("schema_version").unwrap();
+        assert!(version.is_some());
+        assert_eq!(version.unwrap(), SCHEMA_VERSION.to_string());
     }
 }

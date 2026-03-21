@@ -62,6 +62,7 @@ fn main() -> Result<()> {
             file,
             limit,
         } => commands::cmd_search(&query, kind, file.as_deref(), limit, cli.json, token_budget),
+        Command::Map { tokens } => commands::cmd_map(tokens, cli.json),
         Command::Changes { commits, kind } => {
             commands::cmd_changes(commits, kind, cli.json, token_budget)
         }

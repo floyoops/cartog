@@ -162,6 +162,35 @@ Symbols by kind:
   variable: 40
 ```
 
+### `cartog map [--tokens N]`
+
+Token-budget-aware codebase summary — file tree + top symbols ranked by reference count (in-degree centrality).
+
+```bash
+cartog map                    # default 4000 tokens
+cartog map --tokens 2000      # compact summary
+cartog map --tokens 8000      # detailed summary
+```
+
+```
+# Codebase Map (42 files)
+
+  src/auth/tokens.py
+  src/auth/service.py
+  ...
+
+# Top Symbols (by reference count)
+
+src/auth/tokens.py:
+  function validate_token(token: str) -> bool  L30-45  (15 refs)
+  function generate_token(user_id: int) -> str  L10-28  (9 refs)
+src/auth/service.py:
+  class AuthService  L8-95  (12 refs)
+  ...
+```
+
+Phase 1 shows the file tree; phase 2 fills remaining budget with symbols ordered by centrality (most-referenced first). Use `--json` for structured output.
+
 ### `cartog changes [--commits N] [--kind <kind>]`
 
 Show symbols affected by recent git changes — answers "what code changed recently?".

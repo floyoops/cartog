@@ -2,6 +2,12 @@
 
 ## Common Patterns
 
+### "Give me an overview of this codebase"
+```bash
+cartog map                           # file tree + top symbols (4000 tokens)
+cartog map --tokens 8000             # more detail
+```
+
 ### "Where is this symbol defined?"
 
 Start broad, then narrow only if needed:

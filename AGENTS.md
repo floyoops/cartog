@@ -113,11 +113,14 @@ After implementation, mark checklist items complete — the spec stays as a desi
 ## Current State
 
 - **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java
-- **CLI**: 10 commands + MCP server (12 tools: 10 core + 2 RAG)
+- **CLI**: 11 commands + MCP server (12 tools: 10 core + 2 RAG)
 - **Indexing**: incremental (git-based + SHA-256 fallback), `--force` re-index
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
 - **Watch**: `cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding
 - **CI/CD**: fmt, clippy, test, coverage, release to crates.io + GitHub Releases
+- **Centrality**: in-degree ranking — search results prefer highly-referenced symbols
+- **Codebase map**: `cartog map --tokens N` produces budget-aware file tree + top symbols
 - **Token budget**: `--tokens N` global flag for context-window-aware output truncation
 - **Recent changes**: `cartog changes` shows symbols affected by recent git commits
+- **Schema versioning**: metadata-based migration system for DB schema evolution
 - **Pending**: Java extractor improvements

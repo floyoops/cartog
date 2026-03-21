@@ -179,6 +179,9 @@ pub fn index_directory(db: &Database, root: &Path, force: bool) -> Result<IndexR
     // Resolve edges
     result.edges_resolved = db.resolve_edges()?;
 
+    // Compute in-degree centrality for all symbols
+    db.compute_in_degrees()?;
+
     // Store the current git commit as last indexed
     if let Some(commit) = git_head_commit(&root) {
         db.set_metadata("last_commit", &commit)?;

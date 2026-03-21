@@ -220,6 +220,24 @@
   tags: [do-dont, cli-usage]
 
 # ============================================================
+# Codebase overview
+# ============================================================
+
+- id: map_overview
+  description: Codebase overview should use cartog map
+  user_query: "Give me an overview of this codebase"
+  expected:
+    tool_calls:
+      - "cartog map"
+    reasoning: >
+      "Overview" or "what's in this codebase" maps to cartog map,
+      which shows file tree + top symbols ranked by centrality.
+  anti_patterns:
+    - Manually running ls or find to list files
+    - Reading random files to understand the codebase
+  tags: [map, overview]
+
+# ============================================================
 # Recent changes
 # ============================================================
 
