@@ -39,6 +39,11 @@ cartog/
 │   │   ├── ruby.rs          # Ruby extractor
 │   │   ├── java.rs          # Java extractor
 │   │   └── queries.rs       # Tree-sitter query API helpers (CachedQuery, scope checking)
+│   ├── lsp/                 # Optional LSP-based edge resolution (feature-gated)
+│   │   ├── mod.rs           # Public API: lsp_resolve_edges(), column detection
+│   │   ├── client.rs        # JSON-RPC over stdio (Content-Length framing)
+│   │   ├── manager.rs       # LspManager: spawn, initialize, definition, shutdown
+│   │   └── servers.rs       # Static registry: language → binary + args + languageId
 │   ├── rag/
 │   │   ├── mod.rs           # RAG module root, constants (EMBEDDING_DIM)
 │   │   ├── setup.rs         # Model download (triggers fastembed auto-download)
@@ -112,6 +117,7 @@ cartog/
 - **commands.rs**: Command handlers for all CLI commands including `rag setup/index/search` and `watch`. Formats output (human-readable or `--json`).
 - **mcp.rs**: MCP server over stdio. `CartogServer` struct with 12 `#[tool]` handlers (10 core + 2 RAG). Path validation restricts `index` to CWD subtree. Uses `spawn_blocking` for sync DB/indexer calls. Optionally spawns a background file watcher (`--watch` flag).
 - **watch.rs**: File watcher using `notify-debouncer-mini`. Debounces filesystem events, triggers incremental `index_directory()`. Optionally defers RAG embedding after a configurable delay. Used standalone (`cartog watch`) or embedded in MCP server (`cartog serve --watch`). See [spec-watch.md](spec-watch.md) for design details.
+- **lsp/mod.rs**: (Feature-gated: `lsp`) Resolves edges left unresolved by heuristics using LSP `textDocument/definition`. Spawns language servers at index time, maps responses back to cartog symbol IDs, shuts down after. Gracefully skips when no servers are available.
 - **languages/mod.rs**: Maps file extensions to extractors, defines the `Extractor` trait and shared `node_text` helper. Each extractor implements `fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult>`.
 - **languages/queries.rs**: Tree-sitter query API helpers. `CachedQuery` wraps compiled queries for reuse across files. `is_inside_nested_scope` checks if a match node is inside a nested function/class scope (used by JS/TS and Python extractors to avoid double-counting calls). Replaces manual `TreeCursor` walks with declarative query patterns for call/throw/type-ref extraction.
 - **rag/mod.rs**: RAG pipeline constants (`EMBEDDING_DIM = 384`), shared model cache directory (`model_cache_dir()` — XDG-compliant, avoids per-project model downloads), and `is_embedding_model_cached()` / `is_reranker_model_cached()` helpers for cache detection (mirrors hf-hub's `CacheRepo::get()` logic).

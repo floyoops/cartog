@@ -73,7 +73,7 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 
 6. **Only fall back to grep/read** when cartog doesn't have what you need (e.g., reading actual implementation logic, string literals, config values).
 
-7. **After making code changes**, run `cartog index .` to update the graph.
+7. **After making code changes**, run `cartog index . --no-lsp` to quickly update the graph.
 
 ## Do / Don't
 
@@ -131,10 +131,13 @@ transparently once background embedding completes.
 
 ### Index (build/rebuild)
 ```bash
-cartog index .                    # Index current directory
+cartog index .                    # Index current directory (with LSP if available)
+cartog index . --no-lsp           # Fast heuristic-only index (~1-4s)
 cartog index src/                 # Index specific directory
 cartog index . --force            # Re-index all files (ignore cache)
 ```
+
+When compiled with `--features lsp`, `cartog index .` auto-detects language servers on PATH and uses them to resolve additional edges. LSP results are **persisted in the database** — subsequent queries benefit without re-running LSP. Use `--no-lsp` for fast day-to-day indexing.
 
 ### Search (find symbols by partial name)
 ```bash
@@ -219,12 +222,16 @@ cartog watch . --rag                     # also re-embed symbols (deferred)
 cartog watch . --debounce 3 --rag-delay 30  # custom timings
 ```
 
+Watch always uses heuristic-only indexing (no LSP) for speed. Previously LSP-resolved edges are preserved in the DB.
+
 ### Serve (MCP server)
 ```bash
 cartog serve                    # MCP server over stdio
 cartog serve --watch            # with background file watcher
 cartog serve --watch --rag      # watcher + deferred RAG embedding
 ```
+
+When an agent calls `cartog_index` via MCP, LSP servers are started once and **kept warm** for the session. Subsequent index calls reuse warm servers (~2s instead of 60s). Background watch re-indexing stays heuristic-only.
 
 ## Token Budget
 
@@ -248,13 +255,36 @@ cartog --json rag search "authentication"
 
 Before changing any symbol (rename, extract, move, delete):
 
+### Phase 1: Narrow with heuristic graph (~1s)
+
 1. **Identify** — `cartog search <name>` to confirm the exact symbol name and file
 2. **Map references** — `cartog refs <name>` to find every usage
 3. **Assess blast radius** — `cartog impact <name> --depth 3` for transitive dependents
 4. **Check hierarchy** — `cartog hierarchy <name>` if it's a class (subclasses need updating too)
+
+### Phase 2: Upgrade to LSP if needed (~15-60s first call)
+
+Upgrade to LSP when the heuristic graph has gaps:
+- `refs` returns **fewer results than expected** (you know more callers exist)
+- **Ambiguous symbol** — two classes have the same method name, `impact` can't tell which is called
+- `--json` output shows `target_id: null` on edges you care about
+
+```bash
+cartog index .                   # re-index with LSP auto-detected (if compiled with lsp feature)
+cartog impact <name> --depth 3   # re-check — more edges resolved
+```
+
+If no LSP servers are on PATH, indexing silently falls back to heuristic-only.
+Use `--no-lsp` to skip LSP when you want speed over precision.
+
+> **Performance tip**: each `cartog index .` via Bash spawns LSP servers from scratch (~15-60s).
+> If you plan multiple index calls in a session (refactoring loop), use `cartog serve` as an MCP server instead — it keeps LSP servers warm across calls, making the 2nd+ index near-instant.
+
+### Phase 3: Apply and verify
+
 5. **Plan change order** — update leaf dependents first, work inward toward the source
 6. **Apply changes** — modify files
-7. **Re-index** — `cartog index .` to update the graph
+7. **Re-index** — `cartog index . --no-lsp` to quickly update the graph
 8. **Verify** — re-run `cartog refs <name>` to confirm no stale references remain
 
 ## Decision Heuristics
@@ -271,16 +301,27 @@ Before changing any symbol (rename, extract, move, delete):
 | See file dependencies | `cartog deps <file>` |
 | Get a codebase overview | `cartog map` (`--tokens N` for budget control) |
 | See what changed recently | `cartog changes` (`--commits N` for more history) |
+| Improve graph precision for a refactoring | `cartog index .` (with LSP auto-detected) |
+| Fast re-index after code changes | `cartog index . --no-lsp` |
 | Read actual implementation logic | `cat <file>` (cartog indexes structure, not content) |
 | Search for string literals / config | `grep` (cartog doesn't index these) |
 | Nothing from search or rag | Fall back to `grep` |
 
 ## Limitations
 
-- Structural/heuristic resolution, not full semantic. ~90% accuracy for cross-file references.
+- Heuristic resolution is name-based (~25% of edges resolved). With LSP enabled, ~42-81% resolved depending on language. Remaining unresolved edges are mostly calls to external libraries.
 - Currently supports: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java.
 - Does not index string literals, comments (except docstrings), or config values.
-- Method resolution is name-based — `foo.bar()` resolves `bar`, not `Foo.bar` specifically.
+- Method resolution is name-based without LSP — `foo.bar()` resolves `bar`, not `Foo.bar` specifically. LSP resolves to the exact type when a language server is available.
+
+### LSP limitations
+
+- **Opt-in feature**: requires `cargo install cartog --features lsp`. Without the feature, `--no-lsp` is implied.
+- **Auto-detected**: if language servers are on PATH, they are used automatically during `cartog index`. Use `--no-lsp` to skip.
+- **Startup latency**: language servers take 15-60s to load a project on first call. Day-to-day indexing should use `--no-lsp`.
+- **CLI vs MCP**: each `cartog index .` via Bash spawns and kills LSP servers (cold start). Use `cartog serve` (MCP mode) for sessions with multiple index calls — it keeps servers warm across tool calls.
+- **Supported servers**: rust-analyzer, pyright-langserver, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls. Install hints shown when servers are missing.
+- **External crate edges stay unresolved**: LSP resolves definitions within the project. Calls to std/external crates remain unresolved regardless.
 
 ### RAG search limitations
 

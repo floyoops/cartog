@@ -101,6 +101,42 @@
     - Skipping impact analysis entirely
   tags: [routing, refactoring]
 
+- id: refactoring_lsp_escalation
+  description: When heuristic refs seem incomplete, escalate to LSP before refactoring
+  user_query: "I want to rename validate in AuthService but refs only shows 2 callers, I know there are more"
+  context: "cartog refs validate --kind calls already returned only 2 results"
+  expected:
+    tool_calls:
+      - "cartog index ."
+      - "cartog refs validate --kind calls"
+    reasoning: >
+      The user reports that heuristic refs are incomplete. The agent should
+      re-index with LSP (auto-detected) to improve edge resolution, then
+      re-run refs to see the fuller picture. Do NOT skip straight to refactoring
+      with incomplete information.
+  anti_patterns:
+    - Proceeding with refactoring without re-indexing
+    - Using cartog index . --no-lsp (defeats the purpose of LSP escalation)
+    - Using only grep to find additional callers
+  tags: [refactoring, lsp]
+
+- id: refactoring_fast_reindex_after_changes
+  description: After applying code changes, re-index fast with --no-lsp
+  user_query: "I've finished renaming the method, verify nothing is broken"
+  context: "User just applied rename changes across multiple files"
+  expected:
+    tool_calls:
+      - "cartog index . --no-lsp"
+      - "cartog refs old_method_name"
+    reasoning: >
+      After code changes, re-index quickly with --no-lsp (heuristic only, ~1s)
+      to update the graph, then verify no stale references remain. LSP is not
+      needed here — speed matters for the verify loop.
+  anti_patterns:
+    - Re-indexing with LSP (unnecessary latency for verification)
+    - Skipping re-index entirely
+  tags: [refactoring, lsp]
+
 - id: no_parallel_double_call
   description: Single rag search call, not multiple parallel searches
   user_query: "Find code related to contract management and timesheet signing"
