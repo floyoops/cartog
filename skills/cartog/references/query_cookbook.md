@@ -82,12 +82,34 @@ cartog callees authenticate            # What does authenticate call?
 cartog callees validate_token          # Keep going deeper
 ```
 
-### Assess refactoring scope
+### Assess refactoring scope (narrow first, LSP if needed)
+
+**Step 1 — Fast heuristic pass (~1s):**
 ```bash
 cartog search OldClassName             # Confirm exact name and file first
 cartog refs OldClassName               # All references
 cartog hierarchy OldClassName          # Subclasses to update
 cartog impact OldClassName --depth 5   # Full blast radius
+```
+
+If results look complete → proceed with refactoring.
+
+**Step 2 — Upgrade to LSP if gaps found (~15-60s):**
+
+Signs you need LSP:
+- `refs` shows fewer callers than expected
+- Two classes share the same method name and `impact` can't disambiguate
+- `--json` output has `target_id: null` on edges you care about
+
+```bash
+cartog index .                         # Re-index with LSP (auto-detected if on PATH)
+cartog impact OldClassName --depth 5   # Re-check with higher-precision graph
+```
+
+**Step 3 — After refactoring:**
+```bash
+cartog index . --no-lsp                # Fast re-index to update the graph
+cartog refs OldClassName               # Verify no stale references remain
 ```
 
 ### Anti-patterns to avoid

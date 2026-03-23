@@ -61,21 +61,30 @@ fn output<T: Serialize>(
 }
 
 /// Build or rebuild the code graph index.
-pub fn cmd_index(path: &str, force: bool, json: bool) -> Result<()> {
+pub fn cmd_index(path: &str, force: bool, lsp: bool, json: bool) -> Result<()> {
     let root = Path::new(path);
     let db = open_db()?;
 
-    let result = indexer::index_directory(&db, root, force)?;
+    let result = indexer::index_directory(&db, root, force, lsp)?;
 
     output(&result, json, None, |r| {
+        let lsp_part = if r.edges_lsp_resolved > 0 {
+            format!(
+                " ({} heuristic + {} LSP)",
+                r.edges_resolved, r.edges_lsp_resolved
+            )
+        } else {
+            String::new()
+        };
         format!(
-            "Indexed {} files ({} skipped, {} removed)\n  {} symbols, {} edges ({} resolved)\n",
+            "Indexed {} files ({} skipped, {} removed)\n  {} symbols, {} edges ({} resolved{})\n",
             r.files_indexed,
             r.files_skipped,
             r.files_removed,
             r.symbols_added,
             r.edges_added,
-            r.edges_resolved
+            r.edges_resolved + r.edges_lsp_resolved,
+            lsp_part,
         )
     })
 }
@@ -527,7 +536,7 @@ pub fn cmd_rag_index(path: &str, force: bool, json: bool) -> Result<()> {
     // First ensure the standard code graph index is up to date
     let root = Path::new(path);
     let db = open_db()?;
-    let _index_result = indexer::index_directory(&db, root, false)?;
+    let _index_result = indexer::index_directory(&db, root, false, false)?;
 
     let result = rag::indexer::index_embeddings(&db, force)?;
 

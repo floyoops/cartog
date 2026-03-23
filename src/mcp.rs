@@ -226,6 +226,9 @@ pub struct CartogServer {
     /// Canonicalized CWD captured at server start to avoid repeated syscalls.
     /// Wrapped in `Arc` so clones (required by `#[derive(Clone)]`) are cheap.
     cwd: Arc<Path>,
+    /// Persistent LSP manager for warm server reuse across index calls.
+    #[cfg(feature = "lsp")]
+    lsp_manager: Arc<Mutex<crate::lsp::manager::LspManager>>,
 }
 
 #[tool_router]
@@ -239,6 +242,8 @@ impl CartogServer {
         Ok(Self {
             tool_router: Self::tool_router(),
             db: Arc::new(Mutex::new(db)),
+            #[cfg(feature = "lsp")]
+            lsp_manager: Arc::new(Mutex::new(crate::lsp::manager::LspManager::new(&cwd))),
             cwd: Arc::from(cwd),
         })
     }
@@ -255,14 +260,45 @@ impl CartogServer {
         let force = params.force;
         let db = Arc::clone(&self.db);
         let cwd = Arc::clone(&self.cwd);
+        #[cfg(feature = "lsp")]
+        let lsp_manager = Arc::clone(&self.lsp_manager);
 
         tokio::task::spawn_blocking(move || {
             let validated = validate_path_within_cwd_canonical(&path, &cwd).map_err(mcp_err)?;
             debug!(path = %validated.display(), force, "indexing directory");
 
-            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
-            let result = indexer::index_directory(&db, &validated, force)
-                .map_err(|e| mcp_err(format!("indexing failed: {e}")))?;
+            // Phase 1: heuristic indexing (hold DB lock briefly)
+            #[allow(unused_mut)]
+            let mut result = {
+                let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+                indexer::index_directory(&db, &validated, force, false)
+                    .map_err(|e| mcp_err(format!("indexing failed: {e}")))?
+                // db lock released here
+            };
+
+            // Phase 2: LSP resolution (holds both locks during LSP IO).
+            // This blocks other tool calls for the duration of LSP resolution.
+            // Acceptable because MCP serves a single agent session with sequential tool calls.
+            // Future optimization: collect LSP results without DB lock, batch-write after.
+            #[cfg(feature = "lsp")]
+            {
+                let mut mgr = lsp_manager
+                    .lock()
+                    .map_err(|_| mcp_err("LSP manager lock poisoned"))?;
+                let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+                match crate::lsp::lsp_resolve_edges(&db, &validated, Some(&mut mgr)) {
+                    Ok(n) => {
+                        result.edges_lsp_resolved = n;
+                        if n > 0 {
+                            let _ = db.compute_in_degrees();
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("LSP resolution failed: {e:#}");
+                    }
+                }
+                // db + mgr locks released here
+            }
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
@@ -606,7 +642,7 @@ impl CartogServer {
             let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
 
             // Ensure the code graph index is up to date first
-            let _ = indexer::index_directory(&db, &validated, false)
+            let _ = indexer::index_directory(&db, &validated, false, false)
                 .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
 
             let result = rag::indexer::index_embeddings(&db, force)

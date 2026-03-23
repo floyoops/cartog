@@ -27,8 +27,9 @@ Measured across 13 scenarios, 5 languages ([full benchmark suite](benchmarks/)).
 
 ### What you get immediately
 
-- **Single binary, self-contained** — `cargo install cartog` and you're done. No language server, no Docker, no config.
+- **Single binary, self-contained** — `cargo install cartog` and you're done. No Docker, no config.
 - **100% offline** — tree-sitter parsing + SQLite storage + ONNX embeddings. Your code never leaves your machine, ever.
+- **Optional LSP precision** — auto-detects language servers on PATH to boost edge resolution from ~25% to ~42-81%. Works without them, better with them.
 - **Smart search routing** — keyword search (sub-ms, symbol names) and semantic search (natural language queries) work together. Run both in parallel when unsure.
 - **Live index** — `cartog watch` auto re-indexes on file changes. Your agent always queries fresh data.
 - **MCP server** — `cartog serve` exposes 12 tools over stdio. Plug into Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible agent.
@@ -61,8 +62,11 @@ Models are downloaded once to `~/.cache/cartog/models/` and run locally via ONNX
 ### From crates.io
 
 ```bash
-cargo install cartog
+cargo install cartog                    # core (heuristic resolution only)
+cargo install cartog --features lsp     # + LSP-based resolution (recommended)
 ```
+
+The `lsp` feature adds ~50KB to the binary. It auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph) and uses them to resolve edges that heuristic matching can't. No extra config needed — if a server is on PATH, it's used automatically.
 
 ### Pre-built binaries
 
@@ -117,7 +121,8 @@ cartog search auth & cartog rag search "authentication and authorization"
 
 ```bash
 # Index
-cartog index .                              # Build the graph (incremental)
+cartog index .                              # Build the graph (with LSP if available)
+cartog index . --no-lsp                     # Fast heuristic-only (~1-4s)
 cartog index . --force                      # Re-index all files
 
 # Search
@@ -211,9 +216,10 @@ graph LR
 
 1. **Index** — walks your project, parses each file with tree-sitter, extracts symbols (functions, classes, methods, imports, variables) and edges (calls, imports, inherits, raises, type references)
 2. **Store** — writes everything to a local `.cartog.db` SQLite file
-3. **Resolve** — links edges by name with scope-aware heuristic matching (same file > same directory > unique project match)
-4. **Embed** (optional) — generates vector embeddings locally with ONNX Runtime (`BAAI/bge-small-en-v1.5`), stored in sqlite-vec
-5. **Query** — instant lookups against the pre-computed graph, hybrid FTS5 + vector search with RRF merge and cross-encoder re-ranking
+3. **Resolve (heuristic)** — links edges by name with scope-aware matching (same file > import path > same directory > unique project match)
+4. **Resolve (LSP, optional)** — for edges the heuristic couldn't resolve, sends `textDocument/definition` to language servers for compiler-grade precision. Results persist in the DB.
+5. **Embed** (optional) — generates vector embeddings locally with ONNX Runtime (`BAAI/bge-small-en-v1.5`), stored in sqlite-vec
+6. **Query** — instant lookups against the pre-computed graph, hybrid FTS5 + vector search with RRF merge and cross-encoder re-ranking
 
 Re-indexing is incremental: only files with changed content hashes are re-parsed. `cartog watch` automates this on file changes.
 
@@ -309,10 +315,25 @@ Query latency (criterion benchmarks on the same fixture):
 | refs | 258-471 us |
 | impact (depth 3) | 2.7-17 ms |
 
+## Edge Resolution: Heuristic vs LSP
+
+cartog uses a two-tier resolution strategy. The heuristic pass runs instantly; LSP is optional and adds precision.
+
+| Project type | Language | Heuristic only | With LSP | Time (LSP) |
+|---------|----------|---------------|----------|------------|
+| TS microservice (230 files) | TypeScript | 37% | **81%** | 13s |
+| Vue.js SPA (739 files) | Vue/TS/JS | 31% | **72%** | 25s |
+| Rust CLI (358 files) | Rust | 25% | **44%** | 72s |
+
+Remaining unresolved edges are mostly calls to external libraries (std, node_modules, crates) — definitions outside the project boundary.
+
+**When to use LSP**: before a major refactoring, when `refs` or `impact` seem incomplete.
+**When to skip** (`--no-lsp`): day-to-day exploration, post-change verification, watch mode.
+
 ## Design Trade-offs
 
-- **Structural, not semantic** — name-based resolution (~90% accuracy), not full type analysis. Good enough for navigation; LSP can be layered on later.
-- **Self-contained** — single binary, all dependencies compiled in. No language server, no cloud service, no separate database process.
+- **Two-tier resolution** — fast heuristic pass (~1s) for daily use, optional LSP for precision refactoring. Results persist in SQLite — pay the LSP cost once.
+- **Self-contained** — single binary, all dependencies compiled in. LSP is opt-in via language servers already on your PATH.
 - **Incremental** — SHA256 hash per file, only re-indexes what changed.
 - **Local-first** — embedding models run via ONNX Runtime on your CPU. Slower than API calls, but your code stays private.
 

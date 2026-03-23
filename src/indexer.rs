@@ -19,6 +19,12 @@ pub struct IndexResult {
     pub symbols_added: u32,
     pub edges_added: u32,
     pub edges_resolved: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub edges_lsp_resolved: u32,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 /// Index a directory, updating the database incrementally.
@@ -27,7 +33,7 @@ pub struct IndexResult {
 /// 1. `force = true` → re-index everything, no checks
 /// 2. Git-based → diff `last_commit..HEAD` to find changed files, skip the rest without reading
 /// 3. SHA-256 fallback → read file, hash it, compare to stored hash
-pub fn index_directory(db: &Database, root: &Path, force: bool) -> Result<IndexResult> {
+pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Result<IndexResult> {
     let mut result = IndexResult::default();
 
     let root = root.canonicalize().context("Failed to resolve root path")?;
@@ -178,6 +184,15 @@ pub fn index_directory(db: &Database, root: &Path, force: bool) -> Result<IndexR
 
     // Resolve edges
     result.edges_resolved = db.resolve_edges()?;
+
+    // LSP-based resolution for edges the heuristic couldn't resolve.
+    // Auto-detected when `lsp` feature is compiled in; silently skipped otherwise.
+    #[cfg(feature = "lsp")]
+    if lsp {
+        result.edges_lsp_resolved = crate::lsp::lsp_resolve_edges(db, &root, None)?;
+    }
+    #[cfg(not(feature = "lsp"))]
+    let _ = lsp; // suppress unused warning when feature is off
 
     // Compute in-degree centrality for all symbols
     db.compute_in_degrees()?;
@@ -539,16 +554,16 @@ mod tests {
 
         if fixtures.exists() {
             // First index
-            let r1 = index_directory(&db, &fixtures, false).unwrap();
+            let r1 = index_directory(&db, &fixtures, false, false).unwrap();
             assert!(r1.files_indexed > 0);
 
             // Second index without force — should skip all files
-            let r2 = index_directory(&db, &fixtures, false).unwrap();
+            let r2 = index_directory(&db, &fixtures, false, false).unwrap();
             assert_eq!(r2.files_indexed, 0);
             assert!(r2.files_skipped > 0);
 
             // Force re-index — should re-index all files
-            let r3 = index_directory(&db, &fixtures, true).unwrap();
+            let r3 = index_directory(&db, &fixtures, true, false).unwrap();
             assert_eq!(r3.files_indexed, r1.files_indexed);
             assert_eq!(r3.files_skipped, 0);
         }

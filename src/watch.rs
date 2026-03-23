@@ -139,7 +139,7 @@ fn watch_loop(
     );
 
     // Initial incremental index to ensure DB is current
-    match indexer::index_directory(&db, root, false) {
+    match indexer::index_directory(&db, root, false, false) {
         Ok(r) => info!(
             files = r.files_indexed,
             skipped = r.files_skipped,
@@ -190,7 +190,7 @@ fn watch_loop(
                         count = events.len(),
                         "file change events received, re-indexing"
                     );
-                    match indexer::index_directory(&db, root, false) {
+                    match indexer::index_directory(&db, root, false, false) {
                         Ok(r) => {
                             if r.files_indexed > 0 || r.files_removed > 0 {
                                 info!(
