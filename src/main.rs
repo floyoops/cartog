@@ -6,6 +6,8 @@ mod mcp;
 pub use cartog::db;
 pub use cartog::indexer;
 pub use cartog::languages;
+#[cfg(feature = "lsp")]
+pub use cartog::lsp;
 pub use cartog::rag;
 pub use cartog::types;
 pub use cartog::watch;
@@ -46,7 +48,11 @@ fn main() -> Result<()> {
     let token_budget = if cli.json { None } else { cli.tokens };
 
     match cli.command {
-        Command::Index { path, force } => commands::cmd_index(&path, force, cli.json),
+        Command::Index {
+            path,
+            force,
+            no_lsp,
+        } => commands::cmd_index(&path, force, !no_lsp, cli.json),
         Command::Outline { file } => commands::cmd_outline(&file, cli.json, token_budget),
         Command::Callees { name } => commands::cmd_callees(&name, cli.json, token_budget),
         Command::Impact { name, depth } => {

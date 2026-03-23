@@ -1377,6 +1377,57 @@ impl Database {
         self.conn.execute("DELETE FROM symbol_embedding_map", [])?;
         Ok(())
     }
+
+    // ── LSP Resolution Helpers ──
+
+    /// Return all edges with `target_id IS NULL` (unresolved after heuristic pass).
+    #[cfg(feature = "lsp")]
+    pub fn unresolved_edges(&self) -> Result<Vec<crate::lsp::UnresolvedEdge>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, e.target_name, e.file_path, e.line
+             FROM edges e
+             WHERE e.target_id IS NULL",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::lsp::UnresolvedEdge {
+                edge_id: row.get(0)?,
+                target_name: row.get(1)?,
+                file_path: row.get(2)?,
+                line: row.get(3)?,
+            })
+        })?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// Find the tightest-enclosing symbol at a given file + line.
+    #[cfg(feature = "lsp")]
+    pub fn find_symbol_at_location(&self, file_path: &str, line: u32) -> Result<Option<String>> {
+        let id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT id FROM symbols
+                 WHERE file_path = ?1 AND start_line <= ?2 AND end_line >= ?2
+                 ORDER BY (end_line - start_line) ASC
+                 LIMIT 1",
+                params![file_path, line],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(id)
+    }
+
+    /// Update a single edge's target_id.
+    #[cfg(feature = "lsp")]
+    pub fn update_edge_target(&self, edge_id: i64, target_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE edges SET target_id = ?1 WHERE id = ?2",
+            params![target_id, edge_id],
+        )?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

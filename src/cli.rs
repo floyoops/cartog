@@ -88,6 +88,10 @@ pub enum Command {
         /// Force full re-index, bypassing change detection
         #[arg(long)]
         force: bool,
+
+        /// Disable LSP-based edge resolution (auto-detected by default when servers are on PATH)
+        #[arg(long)]
+        no_lsp: bool,
     },
 
     /// Show symbols and structure of a file
