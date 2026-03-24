@@ -31,6 +31,40 @@ Use cartog **before** reaching for grep, cat, or file reads when you need to:
 - Get a codebase overview → `cartog map [--tokens N]`
 - See what changed recently → `cartog changes [--commits N]`
 
+## How to Run
+
+cartog has two modes — **CLI** and **MCP server**. Use whichever is available:
+
+| Check | Mode | How to invoke |
+|---|---|---|
+| MCP tools named `cartog_*` exist in your tool list | **MCP** | Call the MCP tools directly |
+| No `cartog_*` MCP tools available | **CLI** | Run commands via the **Bash tool** |
+
+**Do not** fall back to grep/glob if MCP tools are missing — use the Bash tool instead.
+
+**Rules for both modes:**
+- Run independent `cartog` commands as **parallel tool calls** — whether MCP or Bash
+- **Subagents**: MCP tools are only available to the main agent. Subagents should always use CLI mode via Bash. Skip setup — assume the parent has already indexed
+
+**CLI mode:** every `cartog` command in the examples below must be run via a **Bash tool call**. Do not chain with `&&` or `|` — use separate Bash calls.
+
+All examples below use CLI syntax. MCP tool names and parameters:
+
+| CLI command | MCP tool | Parameters |
+|---|---|---|
+| `cartog index .` | `cartog_index` | `path`, `force` |
+| `cartog search <name>` | `cartog_search` | `query`, `kind?`, `file?`, `limit?` |
+| `cartog rag search "<query>"` | `cartog_rag_search` | `query`, `kind?`, `limit?` |
+| `cartog rag index .` | `cartog_rag_index` | `path`, `force` |
+| `cartog outline <file>` | `cartog_outline` | `file` |
+| `cartog refs <name>` | `cartog_refs` | `name`, `kind?` |
+| `cartog callees <name>` | `cartog_callees` | `name` |
+| `cartog impact <name>` | `cartog_impact` | `name`, `depth?` |
+| `cartog hierarchy <class>` | `cartog_hierarchy` | `name` |
+| `cartog deps <file>` | `cartog_deps` | `file` |
+| `cartog changes` | `cartog_changes` | `commits?`, `kind?` |
+| `cartog stats` | `cartog_stats` | — |
+
 ## Why cartog Over grep/glob
 
 cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores it in SQLite. Compared to grep/glob:
@@ -60,6 +94,7 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
    **Routing rules**:
    - Need to find code? → **A** (rag search) — always
    - Need a symbol name for `refs`/`callees`/`impact`? → **B** (search) first, then the structural command
+   - User already gave an exact symbol name? → call `refs`/`callees`/`impact` directly — skip `search`
 
 3. **When using `cartog search`** to locate a symbol before `refs`/`callees`/`impact`:
    - Exactly one result → use that symbol name and file, proceed.
@@ -67,7 +102,7 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
    - Multiple results, different names → add `--kind <kind>` to filter, then re-evaluate.
    - Never pass an ambiguous name to `refs`/`callees`/`impact` — the result will be wrong.
 
-4. **Use `cartog outline <file>`** instead of `cat <file>` when you need structure, not content.
+4. **Use `cartog outline <file>`** instead of `cat <file>` when you need structure, not content. Then use `Read` (with offset/limit) for the specific lines you need — this is more efficient than reading entire files.
 
 5. **Before refactoring**, run `cartog impact <symbol>` to see the blast radius.
 
