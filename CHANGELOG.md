@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.7.0] - 2026-03-23
+## [0.7.1] - 2026-03-24
 
 ### Bug Fixes
 
@@ -23,6 +23,7 @@
 - Consolidate documentation and add conventions ([`2afcb0a`](https://github.com/jrollin/cartog/commit/2afcb0aa9b42313b87138124ec3d3b570fa17cb8))
 - Rewrite tech.md with comprehensive design decisions and rationale ([`71d5a90`](https://github.com/jrollin/cartog/commit/71d5a9080094d4724c742d5d7e3e0820ca90eacd))
 - Update README, skill, and project docs for LSP feature ([`10eb869`](https://github.com/jrollin/cartog/commit/10eb86912a239fcd31590565da8920d3a0d2ed7f))
+- **skill**: Add CLI/MCP mode detection and usage guidance ([`2361676`](https://github.com/jrollin/cartog/commit/236167632a0dc40bd2242735496993205f2d638f))
 
 ### Features
 
@@ -39,6 +40,7 @@
 - **rag**: Skip imports from embedding, sort batches by length, bump format v3 ([`de9dce3`](https://github.com/jrollin/cartog/commit/de9dce336ace4801ab0b97dbbdb92e6910ced7a8))
 - **skill**: Add version check and version-aware install (#3) ([`0542ff0`](https://github.com/jrollin/cartog/commit/0542ff094463ceb6b9b98696af4881cc3fc0d9ad))
 - **lsp**: Add LSP-based edge resolution with persistent MCP server support ([`83e7cbc`](https://github.com/jrollin/cartog/commit/83e7cbcd811f6fb89c2d6fb08d843e2bac0d777b))
+- **site**: Add landing page and docs for GitHub Pages ([`3b4e9ef`](https://github.com/jrollin/cartog/commit/3b4e9ef75324c847f051f0e40f591ee80838eccb))
 
 ### Miscellaneous
 
