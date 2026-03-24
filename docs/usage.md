@@ -336,7 +336,11 @@ cartog is available as a [Claude Code plugin](https://docs.anthropic.com/en/docs
 ### Installation
 
 ```bash
-claude plugin add jrollin/cartog
+# Register the marketplace
+/plugin marketplace add jrollin/cartog
+
+# Install the plugin
+/plugin install cartog@cartog-plugins
 ```
 
 This installs the plugin from GitHub, which includes:
@@ -565,7 +569,7 @@ RUST_LOG=debug cartog serve   # per-request tool call logging
 
 | | Claude Plugin | MCP Server | Agent Skill |
 |-|--------------|-----------|-------------|
-| Install | `claude plugin add jrollin/cartog` | `claude mcp add cartog -- cartog serve` | `npx skills add jrollin/cartog` |
+| Install | `/plugin marketplace add jrollin/cartog` then `/plugin install cartog@cartog-plugins` | `claude mcp add cartog -- cartog serve` | `npx skills add jrollin/cartog` |
 | Context cost | ~150 lines of prompt | Zero (tools are protocol-level) | ~150 lines of prompt |
 | Workflow guidance | Full heuristics | Basic (via `instructions` field) | Full heuristics |
 | Compatibility | Claude Code only | MCP clients only | Any LLM with bash |
