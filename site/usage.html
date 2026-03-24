@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>cartog — Documentation</title>
+  <meta name="description" content="CLI reference, agent skill setup, MCP server configuration, and semantic search for cartog.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── Nav ──────────────────────────────────────── -->
+<header class="nav">
+  <div class="nav-inner">
+    <a href="index.html" class="nav-logo">cartog</a>
+    <button class="nav-toggle" aria-label="Toggle navigation" onclick="document.querySelector('.nav-links').classList.toggle('open')">
+      <span></span><span></span><span></span>
+    </button>
+    <ul class="nav-links">
+      <li><a href="index.html#features">Features</a></li>
+      <li><a href="index.html#why">Why cartog</a></li>
+      <li><a href="index.html#compare">Compare</a></li>
+      <li><a href="index.html#install">Install</a></li>
+      <li><a href="usage.html">Docs</a></li>
+      <li>
+        <a href="https://github.com/jrollin/cartog" class="github-link" aria-label="GitHub">
+          <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" fill="currentColor"/></svg>
+        </a>
+      </li>
+    </ul>
+  </div>
+</header>
+
+<!-- ── Docs Layout ─────────────────────────────── -->
+<div class="container">
+  <div class="docs-layout">
+
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <nav>
+        <div class="sidebar-group">
+          <div class="sidebar-label">Getting Started</div>
+          <a href="#quick-start">Quick Start</a>
+          <a href="#search-modes">Search Modes</a>
+          <a href="#workflow">Recommended Workflow</a>
+        </div>
+        <div class="sidebar-group">
+          <div class="sidebar-label">CLI Reference</div>
+          <a href="#cmd-index">cartog index</a>
+          <a href="#cmd-search">cartog search</a>
+          <a href="#cmd-outline">cartog outline</a>
+          <a href="#cmd-refs">cartog refs</a>
+          <a href="#cmd-callees">cartog callees</a>
+          <a href="#cmd-impact">cartog impact</a>
+          <a href="#cmd-hierarchy">cartog hierarchy</a>
+          <a href="#cmd-deps">cartog deps</a>
+          <a href="#cmd-stats">cartog stats</a>
+          <a href="#cmd-map">cartog map</a>
+          <a href="#cmd-changes">cartog changes</a>
+          <a href="#cmd-watch">cartog watch</a>
+          <a href="#cmd-serve">cartog serve</a>
+        </div>
+        <div class="sidebar-group">
+          <div class="sidebar-label">Semantic Search</div>
+          <a href="#rag-setup">rag setup</a>
+          <a href="#rag-index">rag index</a>
+          <a href="#rag-search">rag search</a>
+        </div>
+        <div class="sidebar-group">
+          <div class="sidebar-label">Integration</div>
+          <a href="#agent-skill">Agent Skill</a>
+          <a href="#mcp-server">MCP Server</a>
+          <a href="#mcp-clients">Per-Client Setup</a>
+        </div>
+        <div class="sidebar-group">
+          <div class="sidebar-label">Reference</div>
+          <a href="#json-output">JSON Output</a>
+          <a href="#token-budget">Token Budget</a>
+          <a href="#languages">Languages</a>
+          <a href="#performance">Performance</a>
+        </div>
+      </nav>
+    </aside>
+
+    <!-- Content -->
+    <main class="docs-content">
+
+      <p style="margin-bottom: 24px;">
+        <span class="badge">v0.7.0</span>
+        <a href="https://github.com/jrollin/cartog/releases/latest" style="margin-left: 8px; font-size: 13px;">View changelog →</a>
+      </p>
+
+      <h2 id="quick-start">Quick Start</h2>
+      <pre>cargo install cartog
+cd your-project
+cartog index .               <span class="comment"># build the graph (~95ms for 4k LOC)</span>
+cartog search validate       <span class="comment"># find symbols by name (sub-ms)</span>
+cartog refs validate_token   <span class="comment"># who calls/imports/references this?</span>
+cartog impact validate_token <span class="comment"># what breaks if I change this?</span></pre>
+
+      <h3>Add semantic search (optional, still fully local)</h3>
+      <pre>cartog rag setup             <span class="comment"># download models (~1.2GB, one-time)</span>
+cartog rag index .           <span class="comment"># embed all symbols</span>
+cartog rag search "authentication token validation"</pre>
+      <p>Models are downloaded once to <code>~/.cache/cartog/models/</code> and run locally via ONNX Runtime. No API keys needed.</p>
+
+      <h2 id="search-modes">Search Modes</h2>
+      <p>cartog offers two search modes that complement each other:</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Query type</th>
+            <th>Command</th>
+            <th>Speed</th>
+            <th>Best for</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Symbol name</td>
+            <td><code>cartog search parse</code></td>
+            <td>sub-ms</td>
+            <td>You know the name</td>
+          </tr>
+          <tr>
+            <td>Natural language</td>
+            <td><code>cartog rag search "error handling"</code></td>
+            <td>~150-500ms</td>
+            <td>You know the behavior</td>
+          </tr>
+          <tr>
+            <td>Broad / unsure</td>
+            <td>Run both in parallel</td>
+            <td>sub-ms + ~300ms</td>
+            <td>Catch names + semantics</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 id="workflow">Recommended Workflow</h2>
+      <pre>cartog index .          <span class="comment"># 1. build the graph</span>
+cartog search foo       <span class="comment"># 2. discover exact symbol names</span>
+cartog refs foo         <span class="comment"># 3. find all usages</span>
+cartog callees foo      <span class="comment"># 4. see what it depends on</span>
+cartog impact foo       <span class="comment"># 5. assess blast radius</span>
+cartog index .          <span class="comment"># 6. re-index after changes</span></pre>
+
+      <!-- ── CLI Reference ─────────────────────── -->
+
+      <h2 id="cmd-index"><code>cartog index &lt;path&gt;</code></h2>
+      <p>Build or update the code graph. Run this first, then again after code changes.</p>
+      <pre>cartog index .              <span class="comment"># index current directory</span>
+cartog index src/           <span class="comment"># index a subdirectory</span>
+cartog index . --force      <span class="comment"># full re-index</span>
+cartog index . --no-lsp     <span class="comment"># heuristic-only (~1-4s)</span></pre>
+      <p>Incremental by default — skips files whose content hash hasn't changed.</p>
+
+      <h2 id="cmd-search"><code>cartog search &lt;query&gt;</code></h2>
+      <p>Find symbols by partial name. Results ranked: exact match → prefix → substring.</p>
+      <pre>cartog search validate                   <span class="comment"># prefix + substring match</span>
+cartog search validate --kind function   <span class="comment"># functions only</span>
+cartog search config --file src/db.rs    <span class="comment"># scoped to one file</span>
+cartog search parse --limit 5            <span class="comment"># cap results</span></pre>
+      <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>.</p>
+
+      <h2 id="cmd-outline"><code>cartog outline &lt;file&gt;</code></h2>
+      <p>Show all symbols in a file with types, signatures, and line ranges. Use this instead of reading a file when you need structure.</p>
+      <pre>cartog outline src/db.rs</pre>
+
+      <h2 id="cmd-refs"><code>cartog refs &lt;name&gt;</code></h2>
+      <p>All references to a symbol — calls, imports, inherits, type references.</p>
+      <pre>cartog refs UserService                  <span class="comment"># all reference types</span>
+cartog refs validate_token --kind calls  <span class="comment"># only call sites</span></pre>
+      <p>Available <code>--kind</code> values: <code>calls</code>, <code>imports</code>, <code>inherits</code>, <code>references</code>, <code>raises</code>, <code>implements</code>, <code>type-of</code>.</p>
+
+      <h2 id="cmd-callees"><code>cartog callees &lt;name&gt;</code></h2>
+      <p>Find what a function calls — answers "what does this depend on?".</p>
+      <pre>cartog callees validate_token</pre>
+
+      <h2 id="cmd-impact"><code>cartog impact &lt;name&gt;</code></h2>
+      <p>Transitive impact analysis — follows the caller chain up to N hops (default 3).</p>
+      <pre>cartog impact validate_token --depth 3</pre>
+      <p>Indentation shows depth. Answers "what breaks if I change this?".</p>
+
+      <h2 id="cmd-hierarchy"><code>cartog hierarchy &lt;class&gt;</code></h2>
+      <p>Show inheritance relationships — both parents and children.</p>
+      <pre>cartog hierarchy AuthService</pre>
+
+      <h2 id="cmd-deps"><code>cartog deps &lt;file&gt;</code></h2>
+      <p>List symbols imported by a file — answers "what does this file depend on?".</p>
+      <pre>cartog deps src/routes/auth.py</pre>
+
+      <h2 id="cmd-stats"><code>cartog stats</code></h2>
+      <p>Summary of the index — file count, symbol count, edge resolution rate.</p>
+      <pre>cartog stats</pre>
+
+      <h2 id="cmd-map"><code>cartog map</code></h2>
+      <p>Token-budget-aware codebase summary — file tree + top symbols ranked by reference count.</p>
+      <pre>cartog map                    <span class="comment"># default 4000 tokens</span>
+cartog map --tokens 2000      <span class="comment"># compact</span>
+cartog map --tokens 8000      <span class="comment"># detailed</span></pre>
+
+      <h2 id="cmd-changes"><code>cartog changes</code></h2>
+      <p>Show symbols affected by recent git changes.</p>
+      <pre>cartog changes                    <span class="comment"># last 5 commits + working tree</span>
+cartog changes --commits 10       <span class="comment"># last 10 commits</span>
+cartog changes --kind function    <span class="comment"># only functions</span></pre>
+
+      <h2 id="cmd-watch"><code>cartog watch</code></h2>
+      <p>Watch for file changes and auto-re-index. Keeps the graph fresh during development.</p>
+      <pre>cartog watch                      <span class="comment"># watch CWD</span>
+cartog watch src/                 <span class="comment"># watch subdirectory</span>
+cartog watch --rag                <span class="comment"># also auto-embed</span>
+cartog watch --rag --rag-delay 60 <span class="comment"># embed after 60s idle</span>
+cartog watch --debounce 5         <span class="comment"># 5s debounce window</span></pre>
+
+      <h2 id="cmd-serve"><code>cartog serve</code></h2>
+      <p>Start cartog as an MCP server over stdio.</p>
+      <pre>cartog serve                  <span class="comment"># MCP server only</span>
+cartog serve --watch          <span class="comment"># + background file watcher</span>
+cartog serve --watch --rag    <span class="comment"># + watcher + auto RAG</span></pre>
+
+      <!-- ── Semantic Search ───────────────────── -->
+
+      <h2 id="rag-setup"><code>cartog rag setup</code></h2>
+      <p>Download embedding and re-ranker models from HuggingFace. Run once before using semantic search.</p>
+      <pre>cartog rag setup</pre>
+      <p>Downloads ~1.2GB of ONNX models (embedding ~80MB + reranker ~1.1GB). Cached in <code>~/.cache/cartog/models/</code>.</p>
+
+      <h2 id="rag-index"><code>cartog rag index</code></h2>
+      <p>Build the embedding index. Requires <code>cartog index</code> and <code>cartog rag setup</code> first.</p>
+      <pre>cartog rag index              <span class="comment"># embed all symbols</span>
+cartog rag index src/         <span class="comment"># embed subdirectory</span>
+cartog rag index --force      <span class="comment"># re-embed all</span></pre>
+
+      <h2 id="rag-search"><code>cartog rag search &lt;query&gt;</code></h2>
+      <p>Semantic search — use natural language to find code by behavior.</p>
+      <pre>cartog rag search "validate authentication tokens"
+cartog rag search "error handling" --kind function
+cartog rag search "database connection" --limit 5</pre>
+      <p>Combines keyword (BM25/FTS5) and vector similarity, merged via RRF, then re-ranked by a cross-encoder.</p>
+
+      <!-- ── Integration ───────────────────────── -->
+
+      <h2 id="agent-skill">Agent Skill</h2>
+      <p>Install cartog as an agent skill for Claude Code, Cursor, Copilot, and other compatible agents:</p>
+      <pre>npx skills add jrollin/cartog</pre>
+      <p>Or install manually:</p>
+      <pre>cp -r skills/cartog ~/.claude/skills/</pre>
+      <p>The skill teaches your AI agent when and how to use cartog — including search routing, refactoring workflows, and fallback heuristics.</p>
+
+      <h3>Claude Plugin</h3>
+      <p>For Claude Code users, the simplest setup:</p>
+      <pre>claude plugin add jrollin/cartog</pre>
+
+      <h2 id="mcp-server">MCP Server</h2>
+      <p><code>cartog serve</code> exposes 12 tools over stdio for MCP-compatible clients.</p>
+
+      <table>
+        <thead>
+          <tr><th>Tool</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>cartog_index</code></td><td>Build/update the code graph</td></tr>
+          <tr><td><code>cartog_search</code></td><td>Find symbols by partial name</td></tr>
+          <tr><td><code>cartog_outline</code></td><td>File structure (symbols, line ranges)</td></tr>
+          <tr><td><code>cartog_refs</code></td><td>All references to a symbol</td></tr>
+          <tr><td><code>cartog_callees</code></td><td>What a symbol calls</td></tr>
+          <tr><td><code>cartog_impact</code></td><td>Transitive impact analysis</td></tr>
+          <tr><td><code>cartog_hierarchy</code></td><td>Inheritance tree</td></tr>
+          <tr><td><code>cartog_deps</code></td><td>File-level imports</td></tr>
+          <tr><td><code>cartog_stats</code></td><td>Index summary</td></tr>
+          <tr><td><code>cartog_changes</code></td><td>Symbols affected by recent git changes</td></tr>
+          <tr><td><code>cartog_rag_index</code></td><td>Build embedding index</td></tr>
+          <tr><td><code>cartog_rag_search</code></td><td>Semantic search</td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="mcp-clients">Per-Client Setup</h2>
+
+      <h3>Claude Code</h3>
+      <pre>claude mcp add cartog -- cartog serve --watch</pre>
+      <p>Or edit <code>~/.claude/settings.json</code>:</p>
+      <pre>{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve", "--watch"]
+    }
+  }
+}</pre>
+
+      <h3>Claude Desktop</h3>
+      <p>Edit <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>:</p>
+      <pre>{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}</pre>
+
+      <h3>Cursor</h3>
+      <p>Edit <code>.cursor/mcp.json</code> in your project root:</p>
+      <pre>{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}</pre>
+
+      <h3>Windsurf</h3>
+      <p>Edit <code>~/.codeium/windsurf/mcp_config.json</code>:</p>
+      <pre>{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}</pre>
+
+      <h3>OpenCode</h3>
+      <p>Edit <code>.opencode.json</code>:</p>
+      <pre>{
+  "mcp": {
+    "cartog": {
+      "type": "stdio",
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}</pre>
+
+      <h3>Zed</h3>
+      <p>Edit <code>~/.config/zed/settings.json</code>:</p>
+      <pre>{
+  "context_servers": {
+    "cartog": {
+      "command": {
+        "path": "cartog",
+        "args": ["serve"]
+      }
+    }
+  }
+}</pre>
+
+      <h3>Any MCP client</h3>
+      <p>Point your client at <code>cartog serve</code> over stdio. Command: <code>cartog</code>, args: <code>["serve"]</code>.</p>
+
+      <!-- ── Reference ─────────────────────────── -->
+
+      <h2 id="json-output">JSON Output</h2>
+      <p>All commands accept <code>--json</code> for structured output:</p>
+      <pre>cartog --json refs validate_token
+cartog refs validate_token --json    <span class="comment"># equivalent</span>
+cartog --json stats</pre>
+
+      <h2 id="token-budget">Token Budget</h2>
+      <p>All query commands accept <code>--tokens N</code> to limit output:</p>
+      <pre>cartog --tokens 500 search validate
+cartog --tokens 200 outline src/db.rs</pre>
+      <p>Uses <code>len / 4</code> byte-to-token approximation. Ignored when <code>--json</code> is used.</p>
+
+      <h2 id="languages">Supported Languages</h2>
+      <table>
+        <thead>
+          <tr><th>Language</th><th>Extensions</th><th>Symbols</th><th>Edges</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Python</td><td>.py, .pyi</td><td>functions, classes, methods, imports, variables</td><td>calls, imports, inherits, raises, type refs</td></tr>
+          <tr><td>TypeScript</td><td>.ts, .tsx</td><td>functions, classes, methods, imports, variables</td><td>calls, imports, inherits, type refs, new</td></tr>
+          <tr><td>JavaScript</td><td>.js, .jsx, .mjs, .cjs</td><td>functions, classes, methods, imports, variables</td><td>calls, imports, inherits, new</td></tr>
+          <tr><td>Rust</td><td>.rs</td><td>functions, structs, traits, impls, imports</td><td>calls, imports, inherits, type refs</td></tr>
+          <tr><td>Go</td><td>.go</td><td>functions, structs, interfaces, imports</td><td>calls, imports, type refs</td></tr>
+          <tr><td>Ruby</td><td>.rb</td><td>functions, classes, modules, imports</td><td>calls, imports, inherits, raises</td></tr>
+          <tr><td>Java</td><td>.java</td><td>classes, interfaces, enums, methods, imports</td><td>calls, imports, inherits, raises, type refs, new</td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="performance">Performance</h2>
+      <p>Indexing: <strong>69 files / 4k LOC in 95ms</strong> (Python fixture, release build).</p>
+      <table>
+        <thead>
+          <tr><th>Query type</th><th>Latency</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>outline</td><td>8-14 μs</td></tr>
+          <tr><td>hierarchy</td><td>8-9 μs</td></tr>
+          <tr><td>deps</td><td>25 μs</td></tr>
+          <tr><td>stats</td><td>32 μs</td></tr>
+          <tr><td>search</td><td>81-102 μs</td></tr>
+          <tr><td>callees</td><td>177-180 μs</td></tr>
+          <tr><td>refs</td><td>258-471 μs</td></tr>
+          <tr><td>impact (depth 3)</td><td>2.7-17 ms</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Edge Resolution: Heuristic vs LSP</h3>
+      <table>
+        <thead>
+          <tr><th>Project</th><th>Language</th><th>Heuristic</th><th>With LSP</th><th>Time</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>TS microservice (230 files)</td><td>TypeScript</td><td>37%</td><td><span class="badge">81%</span></td><td>13s</td></tr>
+          <tr><td>Vue.js SPA (739 files)</td><td>Vue/TS/JS</td><td>31%</td><td><span class="badge">72%</span></td><td>25s</td></tr>
+          <tr><td>Rust CLI (358 files)</td><td>Rust</td><td>25%</td><td><span class="badge">44%</span></td><td>72s</td></tr>
+        </tbody>
+      </table>
+
+    </main>
+  </div>
+</div>
+
+<!-- ── Footer ──────────────────────────────────── -->
+<footer class="footer">
+  <div class="container">
+    <div class="footer-inner">
+      <span>cartog · MIT License · v0.7.0</span>
+      <ul class="footer-links">
+        <li><a href="https://github.com/jrollin/cartog">GitHub</a></li>
+        <li><a href="https://crates.io/crates/cartog">crates.io</a></li>
+        <li><a href="index.html">Home</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+// Highlight active sidebar link on scroll
+var links = document.querySelectorAll('.docs-sidebar a');
+var sections = [];
+links.forEach(function(link) {
+  var id = link.getAttribute('href').slice(1);
+  var el = document.getElementById(id);
+  if (el) sections.push({ id: id, el: el, link: link });
+});
+
+window.addEventListener('scroll', function() {
+  var scrollTop = window.scrollY + 80;
+  var current = '';
+  sections.forEach(function(s) {
+    if (s.el.offsetTop <= scrollTop) current = s.id;
+  });
+  links.forEach(function(l) { l.classList.remove('active'); });
+  if (current) {
+    var active = document.querySelector('.docs-sidebar a[href="#' + current + '"]');
+    if (active) active.classList.add('active');
+  }
+});
+</script>
+
+</body>
+</html>
