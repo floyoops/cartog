@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::types::{EdgeKind, SymbolKind};
@@ -17,6 +19,11 @@ pub struct Cli {
     /// Limit human-readable output to approximately N tokens (ignored with --json)
     #[arg(long, global = true)]
     pub tokens: Option<u32>,
+
+    /// Path to the cartog database (overrides .cartog.toml and auto-detection).
+    /// Can also be set via the CARTOG_DB environment variable.
+    #[arg(long, global = true, value_name = "PATH", env = "CARTOG_DB")]
+    pub db: Option<PathBuf>,
 }
 
 /// Filter for symbol kinds in the search command.

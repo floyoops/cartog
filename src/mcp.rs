@@ -13,7 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::db::{Database, DB_FILE, MAX_SEARCH_LIMIT};
+use crate::db::{Database, MAX_SEARCH_LIMIT};
 use crate::indexer;
 use crate::rag;
 use crate::types::EdgeKind;
@@ -233,9 +233,9 @@ pub struct CartogServer {
 
 #[tool_router]
 impl CartogServer {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(db_path: &std::path::Path) -> anyhow::Result<Self> {
         let db =
-            Database::open(DB_FILE).map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
+            Database::open(db_path).map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
         let cwd = std::env::current_dir()
             .and_then(|p| p.canonicalize())
             .map_err(|e| anyhow::anyhow!("cannot determine CWD: {e}"))?;
@@ -733,15 +733,16 @@ impl ServerHandler for CartogServer {
 ///
 /// When `watch` is true, a background file watcher keeps the index fresh.
 /// When `rag` is true (requires `watch`), embeddings are also auto-updated.
-pub async fn run_server(watch: bool, rag: bool) -> anyhow::Result<()> {
+pub async fn run_server(db_path: &std::path::Path, watch: bool, rag: bool) -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
 
     // Optionally spawn a background file watcher
+    let db_path_str = db_path.to_string_lossy().into_owned();
     let _watch_handle: Option<WatchHandle> = if watch {
         let cwd = std::env::current_dir()?;
         let mut config = WatchConfig::new(cwd);
         config.rag = rag;
-        match watch::spawn_watch(config, DB_FILE) {
+        match watch::spawn_watch(config, &db_path_str) {
             Ok(handle) => {
                 info!(rag, "background file watcher started");
                 Some(handle)
@@ -755,7 +756,7 @@ pub async fn run_server(watch: bool, rag: bool) -> anyhow::Result<()> {
         None
     };
 
-    let server = CartogServer::new()?;
+    let server = CartogServer::new(db_path)?;
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
 

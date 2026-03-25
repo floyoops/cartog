@@ -12,6 +12,49 @@ cargo build --release
 cargo install --path .
 ```
 
+## Configuration
+
+cartog resolves the database path using the following priority (highest wins):
+
+| Priority | Source | Example |
+|----------|--------|---------|
+| 1 | `--db` flag or `CARTOG_DB` env var | `cartog --db /tmp/proj.db index .` |
+| 2 | `.cartog.toml` in the project | `[database]\npath = "..."` |
+| 3 | Auto git-root detection | DB placed at the root of the git repo |
+| 4 | Current directory fallback | `.cartog.db` in cwd |
+
+### Project config: `.cartog.toml`
+
+Place `.cartog.toml` at the root of your project (or commit it to version control):
+
+```toml
+[database]
+# Absolute path, or use ~ for home directory expansion
+path = "~/.local/share/cartog/myproject.db"
+```
+
+This is useful when:
+- Indexing from a parent directory that contains multiple projects
+- Storing the DB outside the repo (e.g., to avoid committing it)
+- Sharing a consistent DB location across team members via `.cartog.toml`
+
+### Override examples
+
+```bash
+# Explicit flag (highest priority)
+cartog --db /tmp/myproj.db index .
+cartog --db /tmp/myproj.db search foo
+
+# Environment variable
+CARTOG_DB=~/.local/share/cartog/myproject.db cartog index .
+
+# --db applies globally to all subcommands
+cartog --db /tmp/x.db stats
+cartog --db /tmp/x.db map
+```
+
+---
+
 ## Commands
 
 ### `cartog index <path>`

@@ -22,12 +22,18 @@ setup() {
     # log file tracks command invocations in order
     export CARTOG_TEST_LOG="$TEST_DIR/commands.log"
     : > "$CARTOG_TEST_LOG"
-    # Clean up lock from any previous test
-    rmdir /tmp/cartog-rag-index.lock 2>/dev/null || true
+    # Use per-test lock directory to avoid cross-test interference
+    export CARTOG_LOCK_DIR="$TEST_DIR/rag-index.lock"
 }
 
 teardown() {
-    rmdir /tmp/cartog-rag-index.lock 2>/dev/null || true
+    # Wait for any background rag index to finish and release lock
+    local i=0
+    while [ -d "${CARTOG_LOCK_DIR:-}" ] && [ "$i" -lt 20 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    rmdir "${CARTOG_LOCK_DIR:-}" 2>/dev/null || true
     [ -n "$TEST_DIR" ] && rm -rf "$TEST_DIR"
 }
 
@@ -171,8 +177,8 @@ test_phase_order() {
     create_mock_cartog
 
     run_ensure_indexed > /dev/null
-    # Wait briefly for background process to log
-    sleep 0.3
+    # Wait for background rag index to log (mock sleeps 0.1s)
+    sleep 0.5
 
     local line1 line2 line3
     line1=$(sed -n '1p' "$CARTOG_TEST_LOG")
@@ -252,7 +258,7 @@ test_lock_prevents_concurrent_rag_index() {
     create_mock_cartog
 
     # Pre-create the lock directory to simulate an already-running rag index
-    mkdir /tmp/cartog-rag-index.lock
+    mkdir "$CARTOG_LOCK_DIR"
 
     local output
     output=$(run_ensure_indexed)
@@ -275,7 +281,7 @@ test_lock_cleaned_after_rag_index() {
     # Wait for background rag index to finish (mock sleeps 0.1s)
     sleep 0.5
 
-    if [ ! -d /tmp/cartog-rag-index.lock ]; then
+    if [ ! -d "$CARTOG_LOCK_DIR" ]; then
         echo "  PASS: lock directory cleaned up after completion"
         PASS=$((PASS + 1))
     else
@@ -287,14 +293,12 @@ test_lock_cleaned_after_rag_index() {
 
 test_stale_lock_removed() {
     echo "TEST: stale lock (>1 hour) is removed and rag index proceeds"
-    # Wait for any background rag index from previous tests to finish and release lock
-    sleep 0.5
     setup
     create_mock_cartog
 
     # Create a lock directory and backdate it to 2 hours ago
-    mkdir /tmp/cartog-rag-index.lock
-    touch -t "$(date -v-2H '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '2 hours ago' '+%Y%m%d%H%M.%S' 2>/dev/null)" /tmp/cartog-rag-index.lock
+    mkdir "$CARTOG_LOCK_DIR"
+    touch -t "$(date -v-2H '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '2 hours ago' '+%Y%m%d%H%M.%S' 2>/dev/null)" "$CARTOG_LOCK_DIR"
 
     local output
     output=$(run_ensure_indexed)
@@ -417,6 +421,136 @@ test_fetch_failure_continues() {
     teardown
 }
 
+# --- .cartog.toml DB path resolution tests ---
+
+# Helper: run ensure_indexed with a patched script that prints DB_FILE before
+# executing phases. This avoids sourcing issues with set -euo pipefail.
+run_ensure_indexed_print_db() {
+    local workdir="$1"
+    shift
+    (
+        export PATH="$TEST_DIR/bin:$PATH"
+        export HOME="$TEST_DIR/home"
+        mkdir -p "$HOME"
+        "$@"
+        cd "$workdir"
+        # Patch the script: insert an echo after DB_FILE resolution (just before REPO=)
+        sed 's/^REPO=/echo "DB_FILE=$DB_FILE"\nREPO=/' "$ENSURE_SCRIPT" | bash 2>&1
+    )
+}
+
+test_toml_cwd_database_path() {
+    echo "TEST: .cartog.toml in cwd sets DB_FILE from database.path"
+    setup
+    create_mock_cartog
+    create_mock_curl "0.6.1"
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir"
+    cat > "$workdir/.cartog.toml" <<'TOML'
+[database]
+path = "/custom/my.db"
+TOML
+
+    local output
+    output=$(run_ensure_indexed_print_db "$workdir")
+
+    assert_contains "uses toml path" "DB_FILE=/custom/my.db" "$output"
+    teardown
+}
+
+test_toml_git_root_database_path() {
+    echo "TEST: .cartog.toml at git root sets DB_FILE"
+    setup
+    create_mock_cartog
+    create_mock_curl "0.6.1"
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir/subdir"
+
+    cat > "$TEST_DIR/bin/git" <<MOCK
+#!/usr/bin/env bash
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--show-toplevel" ]; then
+    echo "$workdir"
+    exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/bin/git"
+
+    cat > "$workdir/.cartog.toml" <<'TOML'
+[database]
+path = "/root-level/cartog.db"
+TOML
+
+    local output
+    output=$(run_ensure_indexed_print_db "$workdir/subdir")
+
+    assert_contains "uses git root toml" "DB_FILE=/root-level/cartog.db" "$output"
+    teardown
+}
+
+test_toml_tilde_expansion() {
+    echo "TEST: .cartog.toml path with ~/ expands to HOME"
+    setup
+    create_mock_cartog
+    create_mock_curl "0.6.1"
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir"
+    cat > "$workdir/.cartog.toml" <<'TOML'
+[database]
+path = "~/projects/my.db"
+TOML
+
+    local output
+    output=$(run_ensure_indexed_print_db "$workdir")
+
+    assert_contains "tilde expanded" "DB_FILE=$TEST_DIR/home/projects/my.db" "$output"
+    teardown
+}
+
+test_cartog_db_env_overrides_toml() {
+    echo "TEST: CARTOG_DB env var overrides .cartog.toml"
+    setup
+    create_mock_cartog
+    create_mock_curl "0.6.1"
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir"
+    cat > "$workdir/.cartog.toml" <<'TOML'
+[database]
+path = "/toml/path.db"
+TOML
+
+    local output
+    output=$(run_ensure_indexed_print_db "$workdir" export CARTOG_DB="/env/override.db")
+
+    assert_contains "env overrides toml" "DB_FILE=/env/override.db" "$output"
+    teardown
+}
+
+test_no_toml_falls_back_to_git_root() {
+    echo "TEST: no .cartog.toml falls back to git root"
+    setup
+    create_mock_cartog
+    create_mock_curl "0.6.1"
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir"
+
+    cat > "$TEST_DIR/bin/git" <<MOCK
+#!/usr/bin/env bash
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--show-toplevel" ]; then
+    echo "$workdir"
+    exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/bin/git"
+
+    local output
+    output=$(run_ensure_indexed_print_db "$workdir")
+
+    assert_contains "falls back to git root" "DB_FILE=$workdir/.cartog.db" "$output"
+    teardown
+}
+
 # --- run all tests ---
 
 echo "=== ensure_indexed.sh unit tests ==="
@@ -453,6 +587,16 @@ echo ""
 test_newer_installed_no_notice
 echo ""
 test_fetch_failure_continues
+echo ""
+test_toml_cwd_database_path
+echo ""
+test_toml_git_root_database_path
+echo ""
+test_toml_tilde_expansion
+echo ""
+test_cartog_db_env_overrides_toml
+echo ""
+test_no_toml_falls_back_to_git_root
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

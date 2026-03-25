@@ -14,8 +14,37 @@ set -euo pipefail
 # Phase 3 adds vector/semantic matching in the background without blocking the agent.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DB_FILE=".cartog.db"
-LOCK_DIR="/tmp/cartog-rag-index.lock"
+LOCK_DIR="${CARTOG_LOCK_DIR:-/tmp/cartog-rag-index.lock}"
+
+# Resolve the database path using the same priority as the Rust binary:
+#   1. CARTOG_DB env var (explicit override)
+#   2. .cartog.toml database.path (local project config)
+#   3. Git root detection (walk up from cwd to find .git, place DB there)
+#   4. cwd fallback (.cartog.db in the current directory)
+if [ -n "${CARTOG_DB:-}" ]; then
+    DB_FILE="$CARTOG_DB"
+else
+    # Check .cartog.toml for database.path
+    TOML_DB=""
+    GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || true
+    for _dir in "." "$GIT_ROOT"; do
+        [ -n "$_dir" ] && [ -f "$_dir/.cartog.toml" ] && {
+            TOML_DB="$(sed -n '/^\[database\]/,/^\[/{s/^path[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p;}' "$_dir/.cartog.toml" 2>/dev/null)" || true
+            [ -n "$TOML_DB" ] && break
+        }
+    done
+    if [ -n "$TOML_DB" ]; then
+        # Expand leading ~/
+        case "$TOML_DB" in
+            "~/"*) DB_FILE="${HOME}${TOML_DB#\~}" ;;
+            *)     DB_FILE="$TOML_DB" ;;
+        esac
+    elif [ -n "$GIT_ROOT" ]; then
+        DB_FILE="${GIT_ROOT}/.cartog.db"
+    else
+        DB_FILE=".cartog.db"
+    fi
+fi
 REPO="jrollin/cartog"
 VERSION_CACHE="${HOME}/.cache/cartog/latest_version"
 VERSION_TTL=86400  # 24 hours

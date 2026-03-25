@@ -120,6 +120,104 @@ pub const DB_FILE: &str = ".cartog.db";
 /// Enforced here and referenced by CLI and MCP layers.
 pub const MAX_SEARCH_LIMIT: u32 = 100;
 
+/// Resolve the database path using the following priority:
+///
+/// 1. `explicit` — from `--db` flag or `CARTOG_DB` env var (already merged by clap)
+/// 2. `config.database.path` — from `.cartog.toml` at git root / cwd
+/// 3. Auto git-root detection — walk up from cwd to `.git`, place DB there
+/// 4. cwd fallback — `.cartog.db` in the current directory
+pub fn resolve_db_path(
+    explicit: Option<std::path::PathBuf>,
+    config: &crate::config::CartogConfig,
+) -> std::path::PathBuf {
+    use crate::config::expand_tilde;
+
+    // 1. Explicit override (--db / CARTOG_DB)
+    if let Some(p) = explicit {
+        return expand_tilde(p);
+    }
+
+    // 2. Local project config
+    if let Some(path_str) = config.database.as_ref().and_then(|d| d.path.as_deref()) {
+        return expand_tilde(std::path::PathBuf::from(path_str));
+    }
+
+    // 3. Walk up to git root
+    if let Ok(mut dir) = std::env::current_dir() {
+        loop {
+            if dir.join(".git").exists() {
+                return dir.join(DB_FILE);
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+    }
+
+    // 4. Fallback: DB_FILE relative to cwd
+    std::path::PathBuf::from(DB_FILE)
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+    use crate::config::{CartogConfig, DatabaseConfig};
+
+    fn config_with_path(p: &str) -> CartogConfig {
+        CartogConfig {
+            database: Some(DatabaseConfig {
+                path: Some(p.to_string()),
+            }),
+        }
+    }
+
+    #[test]
+    fn test_resolve_explicit_wins_over_config() {
+        let cfg = config_with_path("/config/path.db");
+        let result = resolve_db_path(Some(std::path::PathBuf::from("/explicit/path.db")), &cfg);
+        assert_eq!(result, std::path::PathBuf::from("/explicit/path.db"));
+    }
+
+    #[test]
+    fn test_resolve_config_path_used_when_no_explicit() {
+        let cfg = config_with_path("/config/proj.db");
+        let result = resolve_db_path(None, &cfg);
+        assert_eq!(result, std::path::PathBuf::from("/config/proj.db"));
+    }
+
+    #[test]
+    fn test_resolve_fallback_when_no_config_and_no_git() {
+        // In a temp dir with no .git and no config, should fall back to DB_FILE
+        let dir = tempfile::TempDir::new().unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let result = resolve_db_path(None, &CartogConfig::default());
+        std::env::set_current_dir(original).unwrap();
+
+        assert_eq!(result, std::path::PathBuf::from(DB_FILE));
+    }
+
+    #[test]
+    fn test_resolve_git_root_detection() {
+        // Create a temp dir structure: root/.git, root/subdir/
+        let dir = tempfile::TempDir::new().unwrap();
+        let canonical_root = dir.path().canonicalize().unwrap();
+        let git_dir = dir.path().join(".git");
+        std::fs::create_dir(&git_dir).unwrap();
+        let subdir = dir.path().join("subdir");
+        std::fs::create_dir(&subdir).unwrap();
+
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&subdir).unwrap();
+
+        let result = resolve_db_path(None, &CartogConfig::default());
+        std::env::set_current_dir(original).unwrap();
+
+        assert_eq!(result, canonical_root.join(DB_FILE));
+    }
+}
+
 /// Split a symbol name into lowercase words for FTS5 indexing.
 ///
 /// Handles camelCase, PascalCase, snake_case, SCREAMING_SNAKE_CASE, and

@@ -162,6 +162,25 @@ transparently once background embedding completes.
 > **First run**: tier 2 downloads ~1.2GB of ONNX models (cached in `~/.cache/cartog/models/`).
 > This may take a few minutes — do not abort. Subsequent runs are instant.
 
+## Database Location
+
+The index is stored in a SQLite database. cartog resolves the path automatically:
+
+| Priority | Source |
+|----------|--------|
+| 1 | `--db <path>` flag or `CARTOG_DB` env var |
+| 2 | `.cartog.toml` → `[database] path = "..."` at git root |
+| 3 | Auto git-root: DB placed at the root of the current git repository |
+| 4 | `.cartog.db` in the current directory (fallback) |
+
+For most projects, no configuration is needed — running `cartog index .` from any subdirectory will place the DB at the git root automatically.
+
+```bash
+# Override examples
+cartog --db /tmp/myproject.db index .
+CARTOG_DB=~/.local/share/cartog/proj.db cartog index .
+```
+
 ## Commands Reference
 
 ### Index (build/rebuild)
