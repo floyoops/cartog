@@ -13,7 +13,7 @@ use std::path::Path;
 
 use cartog::db::Database;
 use cartog::indexer::index_directory;
-use cartog::types::EdgeKind;
+use cartog::types::{EdgeKind, FileInfo};
 
 /// Build an indexed database from the Python benchmark fixture.
 fn setup_db() -> Database {
@@ -262,6 +262,48 @@ fn bench_java_stats(c: &mut Criterion) {
     c.bench_function("java_stats", |b| b.iter(|| db.stats().unwrap()));
 }
 
+// ── Indexing benchmarks ──
+
+fn bench_indexing(c: &mut Criterion) {
+    let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("benchmarks")
+        .join("fixtures")
+        .join("webapp_py");
+
+    // Full index (force=true): baseline
+    c.bench_function("index_full_force", |b| {
+        b.iter(|| {
+            let db = Database::open_memory().unwrap();
+            index_directory(&db, &fixture_dir, true, false).unwrap()
+        })
+    });
+
+    // Incremental no-op: all files already indexed with matching hashes
+    c.bench_function("index_incremental_noop", |b| {
+        let db = Database::open_memory().unwrap();
+        index_directory(&db, &fixture_dir, true, false).unwrap();
+        b.iter(|| index_directory(&db, &fixture_dir, false, false).unwrap())
+    });
+
+    // Incremental one-file change: invalidate one file's hash to force re-parse + Merkle diff
+    c.bench_function("index_incremental_one_file", |b| {
+        let db = Database::open_memory().unwrap();
+        index_directory(&db, &fixture_dir, true, false).unwrap();
+        b.iter(|| {
+            // Invalidate hash to simulate file change
+            db.upsert_file(&FileInfo {
+                path: "auth/service.py".to_string(),
+                last_modified: 0.0,
+                hash: "invalidated".to_string(),
+                language: "python".to_string(),
+                num_symbols: 0,
+            })
+            .unwrap();
+            index_directory(&db, &fixture_dir, false, false).unwrap()
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_search,
@@ -280,5 +322,6 @@ criterion_group!(
     bench_java_hierarchy,
     bench_java_deps,
     bench_java_stats,
+    bench_indexing,
 );
 criterion_main!(benches);
