@@ -114,7 +114,7 @@ After implementation, mark checklist items complete — the spec stays as a desi
 
 - **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java
 - **CLI**: 11 commands + MCP server (12 tools: 10 core + 2 RAG)
-- **Indexing**: incremental (git-based + SHA-256 fallback), `--force` re-index
+- **Indexing**: incremental (git-based + SHA-256 + Merkle-tree symbol diffing), `--force` re-index. Stable symbol IDs (`file:kind:qualified_name`) survive line movements. Scoped edge resolution for changed files only
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
 - **Watch**: `cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding
 - **CI/CD**: fmt, clippy, test, coverage, release to crates.io + GitHub Releases

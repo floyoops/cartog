@@ -153,7 +153,7 @@ cartog index .          <span class="comment"># 6. re-index after changes</span>
 cartog index src/           <span class="comment"># index a subdirectory</span>
 cartog index . --force      <span class="comment"># full re-index</span>
 cartog index . --no-lsp     <span class="comment"># heuristic-only (~1-4s)</span></pre>
-      <p>Incremental by default — skips files whose content hash hasn't changed.</p>
+      <p>Incremental by default — skips unchanged files (git + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols.</p>
 
       <h2 id="cmd-search"><code>cartog search &lt;query&gt;</code></h2>
       <p>Find symbols by partial name. Results ranked: exact match → prefix → substring.</p>
