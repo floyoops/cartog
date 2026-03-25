@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.7.2] - 2026-03-24
+## [0.8.0] - 2026-03-25
 
 ### Bug Fixes
 
@@ -25,6 +25,7 @@
 - Rewrite tech.md with comprehensive design decisions and rationale ([`71d5a90`](https://github.com/jrollin/cartog/commit/71d5a9080094d4724c742d5d7e3e0820ca90eacd))
 - Update README, skill, and project docs for LSP feature ([`10eb869`](https://github.com/jrollin/cartog/commit/10eb86912a239fcd31590565da8920d3a0d2ed7f))
 - **skill**: Add CLI/MCP mode detection and usage guidance ([`2361676`](https://github.com/jrollin/cartog/commit/236167632a0dc40bd2242735496993205f2d638f))
+- Update documentation for incremental reindexing feature ([`2776bb1`](https://github.com/jrollin/cartog/commit/2776bb1558ac66c02695f0a1a13e6cd2dffec316))
 
 ### Features
 
@@ -42,6 +43,8 @@
 - **skill**: Add version check and version-aware install (#3) ([`0542ff0`](https://github.com/jrollin/cartog/commit/0542ff094463ceb6b9b98696af4881cc3fc0d9ad))
 - **lsp**: Add LSP-based edge resolution with persistent MCP server support ([`83e7cbc`](https://github.com/jrollin/cartog/commit/83e7cbcd811f6fb89c2d6fb08d843e2bac0d777b))
 - **site**: Add landing page and docs for GitHub Pages ([`3b4e9ef`](https://github.com/jrollin/cartog/commit/3b4e9ef75324c847f051f0e40f591ee80838eccb))
+- **config**: Configurable database path via TOML config, --db flag, and env var ([`69bcb06`](https://github.com/jrollin/cartog/commit/69bcb067293cc8dad9262c08c23ffe110d1c79a5))
+- **index**: Incremental AST reindexing with stable IDs and Merkle-tree diffing ([`2a9c3fe`](https://github.com/jrollin/cartog/commit/2a9c3fe1bcfda8c9db778d8d48940046e0017ca1))
 
 ### Miscellaneous
 
