@@ -16,14 +16,20 @@ pub struct Symbol {
     pub is_async: bool,
     pub docstring: Option<String>,
     pub in_degree: u32,
+    pub content_hash: Option<String>,
+    pub subtree_hash: Option<String>,
 }
 
 impl Symbol {
-    /// Create a new symbol, computing the ID from `file_path:name:start_line`.
+    /// Create a new symbol with a stable ID: `file_path:kind:qualified_name`.
     ///
-    /// Optional fields (`signature`, `docstring`, `parent_id`) default to `None`,
+    /// `parent_name` is the unqualified name chain of the parent symbol (e.g. `"Outer.Inner"`).
+    /// It is used to build the stable ID and also stored as `parent_id` (the parent's full ID).
+    ///
+    /// Optional fields (`signature`, `docstring`) default to `None`,
     /// `visibility` defaults to `Public`, and `is_async` defaults to `false`.
     /// Use the builder-style setters to override.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: impl Into<String>,
         kind: SymbolKind,
@@ -32,9 +38,10 @@ impl Symbol {
         end_line: u32,
         start_byte: u32,
         end_byte: u32,
+        parent_name: Option<&str>,
     ) -> Self {
         let name = name.into();
-        let id = symbol_id(file_path, &name, start_line);
+        let id = symbol_id(file_path, kind.as_str(), &name, parent_name);
         Self {
             id,
             name,
@@ -50,6 +57,8 @@ impl Symbol {
             is_async: false,
             docstring: None,
             in_degree: 0,
+            content_hash: None,
+            subtree_hash: None,
         }
     }
 
@@ -270,7 +279,78 @@ pub struct ChangesResult {
     pub symbols: Vec<Symbol>,
 }
 
-/// Build a symbol ID from its components: `file_path:name:line`
-pub fn symbol_id(file_path: &str, name: &str, line: u32) -> String {
-    format!("{file_path}:{name}:{line}")
+/// Build a stable symbol ID: `file_path:kind:qualified_name`
+///
+/// The qualified name encodes the parent chain using `.` separators:
+/// - Top-level function: `src/auth.py:function:validate`
+/// - Method in class:    `src/auth.py:method:TokenService.validate`
+/// - Nested class:       `src/auth.py:class:Outer.Inner`
+///
+/// This ID is stable across line movements within a file.
+pub fn symbol_id(file_path: &str, kind: &str, name: &str, parent_name: Option<&str>) -> String {
+    match parent_name {
+        Some(pn) => format!("{file_path}:{kind}:{pn}.{name}"),
+        None => format!("{file_path}:{kind}:{name}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stable_id_top_level() {
+        assert_eq!(
+            symbol_id("src/auth.py", "function", "validate", None),
+            "src/auth.py:function:validate"
+        );
+    }
+
+    #[test]
+    fn stable_id_with_parent() {
+        assert_eq!(
+            symbol_id("src/auth.py", "method", "validate", Some("TokenService")),
+            "src/auth.py:method:TokenService.validate"
+        );
+    }
+
+    #[test]
+    fn stable_id_nested_parent() {
+        assert_eq!(
+            symbol_id("src/auth.py", "method", "do_work", Some("Outer.Inner")),
+            "src/auth.py:method:Outer.Inner.do_work"
+        );
+    }
+
+    #[test]
+    fn stable_id_invariant_to_line_changes() {
+        let sym_at_line_10 = Symbol::new(
+            "validate",
+            SymbolKind::Function,
+            "src/auth.py",
+            10,
+            20,
+            100,
+            500,
+            None,
+        );
+        let sym_at_line_50 = Symbol::new(
+            "validate",
+            SymbolKind::Function,
+            "src/auth.py",
+            50,
+            60,
+            800,
+            1200,
+            None,
+        );
+        assert_eq!(sym_at_line_10.id, sym_at_line_50.id);
+    }
+
+    #[test]
+    fn stable_id_differs_by_kind() {
+        let func_id = symbol_id("f.py", "function", "foo", None);
+        let var_id = symbol_id("f.py", "variable", "foo", None);
+        assert_ne!(func_id, var_id);
+    }
 }

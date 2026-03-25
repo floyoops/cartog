@@ -67,7 +67,7 @@ cartog index src/           # index a subdirectory only
 cartog index . --force      # full re-index, bypassing change detection
 ```
 
-Incremental by default — skips files whose content hash hasn't changed. Use `--force` when results seem stale or after updating cartog itself.
+Incremental by default — skips unchanged files (git diff + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. Stable symbol IDs (`file:kind:qualified_name`) survive line movements, so edges from unchanged files remain valid. Use `--force` when results seem stale or after updating cartog itself.
 
 ### `cartog search <query> [--kind <kind>] [--file <path>] [--limit N]`
 

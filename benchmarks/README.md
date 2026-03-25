@@ -76,6 +76,20 @@ cargo bench --bench queries -- --quick
 
 Benchmarked operations: `search`, `refs`, `impact`, `outline`, `callees`, `hierarchy`, `deps`, `stats`.
 
+### Indexing benchmarks
+
+Measures indexing performance including the incremental Merkle-tree diffing path:
+
+```bash
+cargo bench --bench queries -- index_
+```
+
+| Benchmark | What it measures |
+|-----------|-----------------|
+| `index_full_force` | Full index of fixture (force=true), baseline |
+| `index_incremental_noop` | Re-index with no changes (all files skipped via hash) |
+| `index_incremental_one_file` | One file's hash invalidated, triggers Merkle diff + scoped resolution |
+
 ## Benchmark any project
 
 `bench-project.sh` runs cartog vs grep on **any codebase** — no ground truth needed.

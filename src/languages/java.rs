@@ -40,6 +40,7 @@ impl Extractor for JavaExtractor {
             source,
             file_path,
             None,
+            None,
             &mut symbols,
             &mut edges,
         );
@@ -53,22 +54,55 @@ fn extract_node(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
     match node.kind() {
         "class_declaration" | "enum_declaration" | "annotation_type_declaration" => {
-            extract_class_like(node, source, file_path, parent_id, symbols, edges);
+            extract_class_like(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         "interface_declaration" => {
-            extract_interface(node, source, file_path, parent_id, symbols, edges);
+            extract_interface(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         "import_declaration" => {
-            extract_import(node, source, file_path, parent_id, symbols, edges);
+            extract_import(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         _ => {
             for child in node.named_children(&mut node.walk()) {
-                extract_node(child, source, file_path, parent_id, symbols, edges);
+                extract_node(
+                    child,
+                    source,
+                    file_path,
+                    parent_id,
+                    parent_qname,
+                    symbols,
+                    edges,
+                );
             }
         }
     }
@@ -81,6 +115,7 @@ fn extract_class_like(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -94,19 +129,25 @@ fn extract_class_like(
     let visibility = java_visibility(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let kind = if node.kind() == "enum_declaration" {
+        SymbolKind::Enum
+    } else {
+        SymbolKind::Class
+    };
+    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let class_qname = match parent_qname {
+        Some(pq) => format!("{pq}.{name}"),
+        None => name.clone(),
+    };
     let mut sym = Symbol::new(
         name.clone(),
-        if node.kind() == "enum_declaration" {
-            SymbolKind::Enum
-        } else {
-            SymbolKind::Class
-        },
+        kind,
         file_path,
         start_line,
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
+        parent_qname,
     )
     .with_parent(parent_id)
     .with_docstring(docstring);
@@ -142,7 +183,15 @@ fn extract_class_like(
         _ => "body",
     };
     if let Some(body) = node.child_by_field_name(body_field) {
-        extract_class_body(body, source, file_path, &sym_id, symbols, edges);
+        extract_class_body(
+            body,
+            source,
+            file_path,
+            &sym_id,
+            &class_qname,
+            symbols,
+            edges,
+        );
     }
 }
 
@@ -153,6 +202,7 @@ fn extract_interface(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -166,7 +216,11 @@ fn extract_interface(
     let visibility = java_visibility(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let sym_id = symbol_id(file_path, "interface", &name, parent_qname);
+    let iface_qname = match parent_qname {
+        Some(pq) => format!("{pq}.{name}"),
+        None => name.clone(),
+    };
     let mut sym = Symbol::new(
         name.clone(),
         SymbolKind::Interface,
@@ -175,6 +229,7 @@ fn extract_interface(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
+        parent_qname,
     )
     .with_parent(parent_id)
     .with_docstring(docstring);
@@ -202,7 +257,15 @@ fn extract_interface(
     }
 
     if let Some(body) = node.child_by_field_name("body") {
-        extract_class_body(body, source, file_path, &sym_id, symbols, edges);
+        extract_class_body(
+            body,
+            source,
+            file_path,
+            &sym_id,
+            &iface_qname,
+            symbols,
+            edges,
+        );
     }
 }
 
@@ -213,19 +276,44 @@ fn extract_class_body(
     source: &str,
     file_path: &str,
     parent_id: &str,
+    parent_qname: &str,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
             "method_declaration" => {
-                extract_method(child, source, file_path, parent_id, symbols, edges);
+                extract_method(
+                    child,
+                    source,
+                    file_path,
+                    parent_id,
+                    parent_qname,
+                    symbols,
+                    edges,
+                );
             }
             "constructor_declaration" => {
-                extract_constructor(child, source, file_path, parent_id, symbols, edges);
+                extract_constructor(
+                    child,
+                    source,
+                    file_path,
+                    parent_id,
+                    parent_qname,
+                    symbols,
+                    edges,
+                );
             }
             "field_declaration" | "constant_declaration" => {
-                extract_field(child, source, file_path, parent_id, symbols, edges);
+                extract_field(
+                    child,
+                    source,
+                    file_path,
+                    parent_id,
+                    parent_qname,
+                    symbols,
+                    edges,
+                );
             }
             // Named nested classes — option C: named only, skip anonymous
             "class_declaration"
@@ -233,14 +321,37 @@ fn extract_class_body(
             | "enum_declaration"
             | "annotation_type_declaration" => {
                 if child.kind() == "interface_declaration" {
-                    extract_interface(child, source, file_path, Some(parent_id), symbols, edges);
+                    extract_interface(
+                        child,
+                        source,
+                        file_path,
+                        Some(parent_id),
+                        Some(parent_qname),
+                        symbols,
+                        edges,
+                    );
                 } else {
-                    extract_class_like(child, source, file_path, Some(parent_id), symbols, edges);
+                    extract_class_like(
+                        child,
+                        source,
+                        file_path,
+                        Some(parent_id),
+                        Some(parent_qname),
+                        symbols,
+                        edges,
+                    );
                 }
             }
             "enum_body_declarations" => {
-                // enum body contains methods/fields after the semicolon
-                extract_class_body(child, source, file_path, parent_id, symbols, edges);
+                extract_class_body(
+                    child,
+                    source,
+                    file_path,
+                    parent_id,
+                    parent_qname,
+                    symbols,
+                    edges,
+                );
             }
             _ => {}
         }
@@ -254,6 +365,7 @@ fn extract_method(
     source: &str,
     file_path: &str,
     parent_id: &str,
+    parent_qname: &str,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -268,7 +380,7 @@ fn extract_method(
     let signature = extract_method_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let sym_id = symbol_id(file_path, "method", &name, Some(parent_qname));
     let mut sym = Symbol::new(
         name,
         SymbolKind::Method,
@@ -277,6 +389,7 @@ fn extract_method(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
+        Some(parent_qname),
     )
     .with_parent(Some(parent_id))
     .with_signature(signature)
@@ -308,6 +421,7 @@ fn extract_constructor(
     source: &str,
     file_path: &str,
     parent_id: &str,
+    parent_qname: &str,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -322,7 +436,7 @@ fn extract_constructor(
     let signature = extract_constructor_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let sym_id = symbol_id(file_path, "method", &name, Some(parent_qname));
     let mut sym = Symbol::new(
         name,
         SymbolKind::Method,
@@ -331,6 +445,7 @@ fn extract_constructor(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
+        Some(parent_qname),
     )
     .with_parent(Some(parent_id))
     .with_signature(signature)
@@ -355,6 +470,7 @@ fn extract_field(
     source: &str,
     file_path: &str,
     parent_id: &str,
+    parent_qname: &str,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -375,14 +491,13 @@ fn extract_field(
                 None => continue,
             };
 
-            let decl_line = child.start_position().row as u32 + 1;
             let signature = if type_text.is_empty() {
                 None
             } else {
                 Some(format!("{type_text} {name}"))
             };
 
-            let sym_id = symbol_id(file_path, &name, decl_line);
+            let sym_id = symbol_id(file_path, "variable", &name, Some(parent_qname));
             let mut sym = Symbol::new(
                 name,
                 SymbolKind::Variable,
@@ -391,6 +506,7 @@ fn extract_field(
                 end_line,
                 node.start_byte() as u32,
                 node.end_byte() as u32,
+                Some(parent_qname),
             )
             .with_parent(Some(parent_id))
             .with_signature(signature);
@@ -414,6 +530,7 @@ fn extract_import(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -431,7 +548,7 @@ fn extract_import(
         return;
     }
 
-    let sym_id = symbol_id(file_path, &import_text, line);
+    let sym_id = symbol_id(file_path, "import", &import_text, parent_qname);
     symbols.push(
         Symbol::new(
             import_text.clone(),
@@ -441,6 +558,7 @@ fn extract_import(
             line,
             node.start_byte() as u32,
             node.end_byte() as u32,
+            parent_qname,
         )
         .with_parent(parent_id)
         .with_signature(Some(

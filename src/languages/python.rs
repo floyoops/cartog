@@ -97,6 +97,7 @@ impl Extractor for PythonExtractor {
             source,
             file_path,
             None, // no parent
+            None, // no parent qualified name
             &mut symbols,
             &mut edges,
         );
@@ -105,21 +106,41 @@ impl Extractor for PythonExtractor {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_node(
     queries: &Queries,
     node: Node,
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
     match node.kind() {
         "function_definition" => {
-            extract_function(queries, node, source, file_path, parent_id, symbols, edges);
+            extract_function(
+                queries,
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         "class_definition" => {
-            extract_class(queries, node, source, file_path, parent_id, symbols, edges);
+            extract_class(
+                queries,
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         "decorated_definition" => {
             // Find the actual definition first to compute its symbol ID for decorator edges
@@ -128,8 +149,14 @@ fn extract_node(
                 if child.kind() == "function_definition" || child.kind() == "class_definition" {
                     if let Some(name_node) = child.child_by_field_name("name") {
                         let name = node_text(name_node, source);
-                        let line = child.start_position().row as u32 + 1;
-                        def_sym_id = Some(symbol_id(file_path, name, line));
+                        let kind = if child.kind() == "class_definition" {
+                            "class"
+                        } else if parent_id.is_some() {
+                            "method"
+                        } else {
+                            "function"
+                        };
+                        def_sym_id = Some(symbol_id(file_path, kind, name, parent_qname));
                     }
                 }
             }
@@ -140,17 +167,34 @@ fn extract_node(
                 } else if child.kind() == "function_definition"
                     || child.kind() == "class_definition"
                 {
-                    extract_node(queries, child, source, file_path, parent_id, symbols, edges);
+                    extract_node(
+                        queries,
+                        child,
+                        source,
+                        file_path,
+                        parent_id,
+                        parent_qname,
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
         "import_statement" | "import_from_statement" => {
-            extract_import(node, source, file_path, parent_id, symbols, edges);
+            extract_import(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         "expression_statement" => {
             for child in node.named_children(&mut node.walk()) {
                 if child.kind() == "assignment" {
-                    extract_assignment(child, source, file_path, parent_id, symbols);
+                    extract_assignment(child, source, file_path, parent_id, parent_qname, symbols);
                 }
             }
             // Still walk children for call expressions
@@ -159,18 +203,29 @@ fn extract_node(
         _ => {
             // Recurse into children
             for child in node.named_children(&mut node.walk()) {
-                extract_node(queries, child, source, file_path, parent_id, symbols, edges);
+                extract_node(
+                    queries,
+                    child,
+                    source,
+                    file_path,
+                    parent_id,
+                    parent_qname,
+                    symbols,
+                    edges,
+                );
             }
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_function(
     queries: &Queries,
     node: Node,
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -214,7 +269,7 @@ fn extract_function(
     let signature = extract_signature(node, source);
     let docstring = extract_docstring(node, source);
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
     let mut sym = Symbol::new(
         &name,
         kind,
@@ -223,6 +278,7 @@ fn extract_function(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
+        parent_qname,
     )
     .with_parent(parent_id)
     .with_signature(signature);
@@ -242,6 +298,10 @@ fn extract_function(
     if let Some(body) = node.child_by_field_name("body") {
         walk_for_calls_and_raises_q(queries, body, source, file_path, Some(&sym_id), edges);
         // Recurse for nested functions/classes
+        let child_qname = match parent_qname {
+            Some(pq) => format!("{pq}.{name}"),
+            None => name.clone(),
+        };
         for child in body.named_children(&mut body.walk()) {
             match child.kind() {
                 "function_definition" | "class_definition" | "decorated_definition" => {
@@ -251,6 +311,7 @@ fn extract_function(
                         source,
                         file_path,
                         Some(&sym_id),
+                        Some(&child_qname),
                         symbols,
                         edges,
                     );
@@ -261,12 +322,14 @@ fn extract_function(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_class(
     queries: &Queries,
     node: Node,
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -281,7 +344,7 @@ fn extract_class(
     let docstring = extract_docstring(node, source);
     let name = name_ref.to_string();
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let sym_id = symbol_id(file_path, SymbolKind::Class.as_str(), &name, parent_qname);
     let mut sym = Symbol::new(
         &name,
         SymbolKind::Class,
@@ -290,6 +353,7 @@ fn extract_class(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
+        parent_qname,
     )
     .with_parent(parent_id)
     .with_docstring(docstring);
@@ -316,6 +380,10 @@ fn extract_class(
 
     // Walk class body for methods, nested classes, assignments
     if let Some(body) = node.child_by_field_name("body") {
+        let child_qname = match parent_qname {
+            Some(pq) => format!("{pq}.{name}"),
+            None => name.clone(),
+        };
         for child in body.named_children(&mut body.walk()) {
             extract_node(
                 queries,
@@ -323,6 +391,7 @@ fn extract_class(
                 source,
                 file_path,
                 Some(&sym_id),
+                Some(&child_qname),
                 symbols,
                 edges,
             );
@@ -335,6 +404,7 @@ fn extract_import(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -346,7 +416,12 @@ fn extract_import(
         return;
     }
 
-    let sym_id = symbol_id(file_path, &module_name, line);
+    let sym_id = symbol_id(
+        file_path,
+        SymbolKind::Import.as_str(),
+        &module_name,
+        parent_qname,
+    );
     symbols.push(
         Symbol::new(
             &module_name,
@@ -356,6 +431,7 @@ fn extract_import(
             line,
             node.start_byte() as u32,
             node.end_byte() as u32,
+            parent_qname,
         )
         .with_parent(parent_id)
         .with_signature(Some(import_text)),
@@ -379,6 +455,7 @@ fn extract_assignment(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
 ) {
     // Only extract simple name = value assignments (not unpacking, subscript, etc.)
@@ -397,6 +474,7 @@ fn extract_assignment(
                 node.end_position().row as u32 + 1,
                 node.start_byte() as u32,
                 node.end_byte() as u32,
+                parent_qname,
             )
             .with_parent(parent_id);
             if visibility != Visibility::Public {
@@ -1103,5 +1181,55 @@ from typing import Optional, List
             .collect();
         assert!(targets.contains(&"Optional"));
         assert!(targets.contains(&"List"));
+    }
+
+    #[test]
+    fn stable_id_survives_line_movement() {
+        let source_v1 = r#"
+def foo():
+    pass
+
+def bar():
+    pass
+"#;
+        let source_v2 = r#"
+# added comment
+
+def foo():
+    pass
+
+# another comment
+
+def bar():
+    pass
+"#;
+        let r1 = extract(source_v1);
+        let r2 = extract(source_v2);
+
+        let foo_v1 = r1.symbols.iter().find(|s| s.name == "foo").unwrap();
+        let foo_v2 = r2.symbols.iter().find(|s| s.name == "foo").unwrap();
+        assert_eq!(
+            foo_v1.id, foo_v2.id,
+            "ID should be stable across line moves"
+        );
+        assert_ne!(foo_v1.start_line, foo_v2.start_line, "lines should differ");
+
+        let bar_v1 = r1.symbols.iter().find(|s| s.name == "bar").unwrap();
+        let bar_v2 = r2.symbols.iter().find(|s| s.name == "bar").unwrap();
+        assert_eq!(bar_v1.id, bar_v2.id);
+    }
+
+    #[test]
+    fn stable_id_method_includes_class_name() {
+        let result = extract(
+            r#"
+class MyService:
+    def handle(self):
+        pass
+"#,
+        );
+        let method = result.symbols.iter().find(|s| s.name == "handle").unwrap();
+        assert_eq!(method.id, "test.py:method:MyService.handle");
+        assert_eq!(method.kind, SymbolKind::Method);
     }
 }

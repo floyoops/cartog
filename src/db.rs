@@ -3,14 +3,14 @@ use rusqlite::ffi::sqlite3_auto_extension;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sqlite_vec::sqlite3_vec_init;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::types::{Edge, EdgeKind, FileInfo, Symbol, SymbolKind, Visibility};
 
 const SQL_INSERT_SYMBOL: &str = "INSERT OR REPLACE INTO symbols
      (id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-      parent_id, signature, visibility, is_async, docstring)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
+      parent_id, signature, visibility, is_async, docstring, content_hash, subtree_hash)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)";
 
 const SQL_INSERT_EDGE: &str =
     "INSERT INTO edges (source_id, target_name, target_id, kind, file_path, line)
@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS symbols (
     visibility TEXT,
     is_async BOOLEAN DEFAULT FALSE,
     docstring TEXT,
-    in_degree INTEGER DEFAULT 0
+    in_degree INTEGER DEFAULT 0,
+    content_hash TEXT,
+    subtree_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS edges (
@@ -298,7 +300,7 @@ pub fn register_sqlite_vec() {
 }
 
 /// Current schema version. Increment when adding migrations.
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 /// Run schema migrations for existing databases.
 ///
@@ -314,7 +316,13 @@ fn migrate(conn: &Connection) {
         )
         .unwrap_or(1); // pre-versioning databases are version 1
 
-    if current >= SCHEMA_VERSION {
+    // Check for partially-migrated v3: schema version bumped but columns missing.
+    // Must run BEFORE the early return since current may already be >= SCHEMA_VERSION.
+    let has_hash_cols = conn
+        .prepare("SELECT content_hash FROM symbols LIMIT 0")
+        .is_ok();
+
+    if current >= SCHEMA_VERSION && has_hash_cols {
         return;
     }
 
@@ -324,6 +332,22 @@ fn migrate(conn: &Connection) {
             "ALTER TABLE symbols ADD COLUMN in_degree INTEGER DEFAULT 0",
             [],
         );
+    }
+
+    // Migration 2 → 3: stable symbol IDs + Merkle hash columns.
+    if current < 3 || !has_hash_cols {
+        info!("schema v3: stable symbol IDs — clearing index for full rebuild");
+        let _ = conn.execute("ALTER TABLE symbols ADD COLUMN content_hash TEXT", []);
+        let _ = conn.execute("ALTER TABLE symbols ADD COLUMN subtree_hash TEXT", []);
+        // Clear all indexed data so next index rebuilds with stable IDs
+        for table in &["symbol_content", "edges", "symbols", "files"] {
+            let _ = conn.execute(&format!("DELETE FROM {table}"), []);
+        }
+        // Clear RAG data too — vector table first, then map
+        let _ = conn.execute("DELETE FROM symbol_vec", []);
+        let _ = conn.execute("DELETE FROM symbol_embedding_map", []);
+        // Clear last_commit so incremental indexing doesn't skip anything
+        let _ = conn.execute("DELETE FROM metadata WHERE key = 'last_commit'", []);
     }
 
     // Store the new schema version
@@ -433,6 +457,13 @@ impl Database {
             .context("Failed to query file")
     }
 
+    /// Remove edges only for a file (used by Merkle diff which updates symbols surgically).
+    pub fn clear_edges_for_file(&self, path: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM edges WHERE file_path = ?1", params![path])?;
+        Ok(())
+    }
+
     /// Remove all symbols, edges, and RAG data for a file (before re-indexing it).
     pub fn clear_file_data(&self, path: &str) -> Result<()> {
         self.clear_rag_data_for_file(path)?;
@@ -472,6 +503,8 @@ impl Database {
                 sym.visibility.as_str(),
                 sym.is_async,
                 sym.docstring,
+                sym.content_hash,
+                sym.subtree_hash,
             ])?;
         Ok(())
     }
@@ -495,9 +528,74 @@ impl Database {
                 sym.visibility.as_str(),
                 sym.is_async,
                 sym.docstring,
+                sym.content_hash,
+                sym.subtree_hash,
             ])?;
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Get stored symbol hashes for a file (for Merkle diff).
+    /// Returns `(id, content_hash, subtree_hash)` tuples.
+    #[allow(clippy::type_complexity)]
+    pub fn get_symbol_hashes_for_file(
+        &self,
+        file_path: &str,
+    ) -> Result<Vec<(String, Option<String>, Option<String>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, content_hash, subtree_hash FROM symbols WHERE file_path = ?1")?;
+        let rows = stmt
+            .query_map(params![file_path], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Update only the position fields of a symbol (for moved-but-unchanged symbols).
+    pub fn update_symbol_position(
+        &self,
+        id: &str,
+        start_line: u32,
+        end_line: u32,
+        start_byte: u32,
+        end_byte: u32,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE symbols SET start_line = ?2, end_line = ?3,
+                    start_byte = ?4, end_byte = ?5 WHERE id = ?1",
+            params![id, start_line, end_line, start_byte, end_byte],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a single symbol and cascade to edges, content, and embeddings.
+    pub fn delete_symbol(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM edges WHERE source_id = ?1", params![id])?;
+        // Also clean up edges that target this symbol
+        self.conn.execute(
+            "UPDATE edges SET target_id = NULL WHERE target_id = ?1",
+            params![id],
+        )?;
+        // Clean RAG data — delete vector embedding BEFORE removing the map entry
+        let _ = self.conn.execute(
+            "DELETE FROM symbol_vec WHERE rowid IN \
+             (SELECT id FROM symbol_embedding_map WHERE symbol_id = ?1)",
+            params![id],
+        );
+        let _ = self.conn.execute(
+            "DELETE FROM symbol_embedding_map WHERE symbol_id = ?1",
+            params![id],
+        );
+        let _ = self.conn.execute(
+            "DELETE FROM symbol_content WHERE symbol_id = ?1",
+            params![id],
+        );
+        self.conn
+            .execute("DELETE FROM symbols WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -564,8 +662,6 @@ impl Database {
     }
 
     fn resolve_edges_pass(&self) -> Result<u32> {
-        let mut resolved = 0u32;
-
         let mut unresolved_stmt = self.conn.prepare(
             "SELECT e.id, e.target_name, e.file_path, e.source_id
              FROM edges e WHERE e.target_id IS NULL",
@@ -577,15 +673,19 @@ impl Database {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
+        self.resolve_edge_batch(&unresolved)
+    }
+
+    /// 6-tier heuristic resolution for a batch of unresolved edges.
+    fn resolve_edge_batch(&self, unresolved: &[(i64, String, String, String)]) -> Result<u32> {
+        let mut resolved = 0u32;
+
         let tx = self.conn.unchecked_transaction()?;
 
         let mut same_file_stmt = self
             .conn
             .prepare("SELECT id FROM symbols WHERE name = ?1 AND file_path = ?2 LIMIT 1")?;
 
-        // Import-path resolution: if this file has a resolved import edge for the
-        // target name, follow it to find the target's file, then look for a
-        // non-import symbol with that name in that file.
         let mut import_resolve_stmt = self.conn.prepare(
             "SELECT s.id FROM symbols s
              INNER JOIN edges ie ON ie.kind = 'imports' AND ie.target_name = ?1
@@ -601,7 +701,6 @@ impl Database {
             .conn
             .prepare("SELECT id FROM symbols WHERE name = ?1 AND file_path LIKE ?2 LIMIT 1")?;
 
-        // Parent scope preference: find symbols with same name and same parent scope
         let mut parent_scope_stmt = self.conn.prepare(
             "SELECT s.id FROM symbols s
              INNER JOIN symbols source ON source.id = ?2
@@ -617,7 +716,7 @@ impl Database {
             .conn
             .prepare("UPDATE edges SET target_id = ?1 WHERE id = ?2")?;
 
-        for (edge_id, target_name, edge_file, source_id) in &unresolved {
+        for (edge_id, target_name, edge_file, source_id) in unresolved {
             let simple_name = target_name.rsplit('.').next().unwrap_or(target_name);
 
             // 1) Same file
@@ -631,8 +730,7 @@ impl Database {
                 continue;
             }
 
-            // 2) Import-path resolution: if this file imports the target name,
-            //    find the symbol in any file that could be the import source
+            // 2) Import-path resolution
             let target_id: Option<String> = import_resolve_stmt
                 .query_row(params![simple_name, edge_file], |row| row.get(0))
                 .optional()?;
@@ -661,8 +759,7 @@ impl Database {
                 }
             }
 
-            // 4) Parent scope preference: if the source symbol has a parent,
-            //    prefer a target in the same parent scope
+            // 4) Parent scope preference
             let target_id: Option<String> = parent_scope_stmt
                 .query_row(params![simple_name, source_id], |row| row.get(0))
                 .optional()?;
@@ -685,11 +782,7 @@ impl Database {
             drop(rows);
 
             let resolved_id = match matches.len() {
-                // 5) Unique project-wide match
                 1 => Some(&matches[0].0),
-                // 6) Disambiguate exactly 2 matches by preferring one kind over another:
-                //    - type def (class/interface/enum/trait) over method (constructor)
-                //    - function over method (bare call prefers top-level function)
                 2 => disambiguate_two(&matches[0], &matches[1]),
                 _ => None,
             };
@@ -724,6 +817,104 @@ impl Database {
                 SELECT cnt FROM counts WHERE counts.target_id = symbols.id
             )
             WHERE id IN (SELECT target_id FROM counts)",
+            [],
+        )?;
+
+        Ok(updated as u32)
+    }
+
+    // ── Scoped resolution (incremental indexing) ──
+
+    /// Invalidate resolved edges that point into any of the dirty files.
+    ///
+    /// When a file is re-indexed, its symbols may have been renamed/removed.
+    /// Edges from *unchanged* files that previously resolved to those symbols
+    /// must be cleared so they can be re-resolved against the new symbol set.
+    pub fn invalidate_edges_targeting(
+        &self,
+        dirty_files: &std::collections::HashSet<String>,
+    ) -> Result<u32> {
+        if dirty_files.is_empty() {
+            return Ok(0);
+        }
+        // After file re-indexing, edges from unchanged files may point to
+        // symbol IDs that no longer exist (removed or renamed symbols).
+        // Set these dangling references to NULL so they can be re-resolved.
+        let n = self.conn.execute(
+            "UPDATE edges SET target_id = NULL
+             WHERE target_id IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM symbols WHERE symbols.id = edges.target_id)",
+            [],
+        )?;
+        Ok(n as u32)
+    }
+
+    /// Resolve edges scoped to dirty files only.
+    ///
+    /// Processes: edges originating from dirty files (freshly extracted)
+    /// and edges whose target was just invalidated (target_id set to NULL).
+    /// Uses the same 6-tier heuristic as `resolve_edges`.
+    /// Resolve edges after scoped invalidation.
+    ///
+    /// After `invalidate_edges_targeting` has cleared target_ids for edges
+    /// pointing into dirty files, this re-resolves all currently unresolved edges.
+    /// Fewer edges are unresolved compared to a first-time full resolve.
+    pub fn resolve_edges_scoped(
+        &self,
+        dirty_files: &std::collections::HashSet<String>,
+    ) -> Result<u32> {
+        if dirty_files.is_empty() {
+            return Ok(0);
+        }
+        // After invalidation, the set of unresolved edges is naturally scoped:
+        // only edges from dirty files (freshly extracted) or targeting dirty files
+        // (just invalidated) have target_id = NULL.
+        // Reuse the same 2-pass resolution.
+        self.resolve_edges()
+    }
+
+    /// Recompute in-degree centrality only for symbols in/around dirty files.
+    pub fn compute_in_degrees_scoped(
+        &self,
+        dirty_files: &std::collections::HashSet<String>,
+    ) -> Result<u32> {
+        if dirty_files.is_empty() {
+            return Ok(0);
+        }
+
+        // Reset in-degree for symbols in dirty files
+        for file in dirty_files {
+            self.conn.execute(
+                "UPDATE symbols SET in_degree = 0 WHERE file_path = ?1",
+                params![file],
+            )?;
+        }
+
+        // Also reset symbols that are targets of edges from dirty files
+        // (their in-degree may have changed)
+        for file in dirty_files {
+            self.conn.execute(
+                "UPDATE symbols SET in_degree = 0
+                 WHERE id IN (
+                     SELECT DISTINCT e.target_id FROM edges e
+                     WHERE e.file_path = ?1 AND e.target_id IS NOT NULL
+                 )",
+                params![file],
+            )?;
+        }
+
+        // Recompute for all symbols with in_degree = 0 that have incoming edges
+        let updated = self.conn.execute(
+            "WITH counts AS (
+                SELECT target_id, COUNT(*) AS cnt
+                FROM edges WHERE target_id IS NOT NULL
+                GROUP BY target_id
+            )
+            UPDATE symbols SET in_degree = (
+                SELECT cnt FROM counts WHERE counts.target_id = symbols.id
+            )
+            WHERE in_degree = 0
+              AND id IN (SELECT target_id FROM counts)",
             [],
         )?;
 
@@ -809,7 +1000,8 @@ impl Database {
     pub fn outline(&self, file_path: &str) -> Result<Vec<Symbol>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring, in_degree
+                    parent_id, signature, visibility, is_async, docstring, in_degree,
+                    content_hash, subtree_hash
              FROM symbols WHERE file_path = ?1
              ORDER BY start_line",
         )?;
@@ -997,7 +1189,8 @@ impl Database {
     pub fn top_symbols(&self, limit: u32) -> Result<Vec<Symbol>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring, in_degree
+                    parent_id, signature, visibility, is_async, docstring, in_degree,
+                    content_hash, subtree_hash
              FROM symbols
              WHERE kind != 'import' AND kind != 'variable'
              ORDER BY in_degree DESC, file_path, start_line
@@ -1047,7 +1240,8 @@ impl Database {
 
             let sql = format!(
                 "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                        parent_id, signature, visibility, is_async, docstring, in_degree
+                        parent_id, signature, visibility, is_async, docstring, in_degree,
+                    content_hash, subtree_hash
                  FROM symbols
                  WHERE file_path IN ({})
                    AND (?{kind_param_idx} IS NULL OR kind = ?{kind_param_idx})
@@ -1385,7 +1579,8 @@ impl Database {
         self.conn
             .query_row(
                 "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                        parent_id, signature, visibility, is_async, docstring, in_degree
+                        parent_id, signature, visibility, is_async, docstring, in_degree,
+                    content_hash, subtree_hash
                  FROM symbols WHERE id = ?1",
                 params![id],
                 row_to_symbol,
@@ -1402,7 +1597,8 @@ impl Database {
         let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
         let sql = format!(
             "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring, in_degree
+                    parent_id, signature, visibility, is_async, docstring, in_degree,
+                    content_hash, subtree_hash
              FROM symbols WHERE id IN ({})",
             placeholders.join(",")
         );
@@ -1568,6 +1764,8 @@ fn row_to_symbol_offset(row: &rusqlite::Row<'_>, off: usize) -> rusqlite::Result
         is_async: row.get(off + 11)?,
         docstring: row.get(off + 12)?,
         in_degree: row.get(off + 13).unwrap_or(0),
+        content_hash: row.get(off + 14).unwrap_or(None),
+        subtree_hash: row.get(off + 15).unwrap_or(None),
     })
 }
 
@@ -1619,7 +1817,7 @@ mod tests {
     use super::*;
 
     fn test_symbol(name: &str, kind: SymbolKind, file: &str, line: u32) -> Symbol {
-        Symbol::new(name, kind, file, line, line + 5, 0, 100)
+        Symbol::new(name, kind, file, line, line + 5, 0, 100, None)
     }
 
     // ── normalize_symbol_name tests ──
@@ -2942,5 +3140,104 @@ mod tests {
         let version = db.get_metadata("schema_version").unwrap();
         assert!(version.is_some());
         assert_eq!(version.unwrap(), SCHEMA_VERSION.to_string());
+    }
+
+    // ── Scoped edge resolution tests ──
+
+    #[test]
+    fn test_invalidate_dangling_edges_after_symbol_removal() {
+        let db = Database::open_memory().unwrap();
+
+        // File A: defines foo
+        let sym_a = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        db.insert_symbol(&sym_a).unwrap();
+
+        // File B: calls foo (edge from B to A)
+        let sym_b = test_symbol("bar", SymbolKind::Function, "b.py", 1);
+        db.insert_symbol(&sym_b).unwrap();
+        let edge = Edge::new(&sym_b.id, "foo", EdgeKind::Calls, "b.py", 5);
+        db.insert_edge(&edge).unwrap();
+
+        // Resolve: edge should point to sym_a
+        let resolved = db.resolve_edges().unwrap();
+        assert_eq!(resolved, 1);
+
+        // Simulate: directly delete the symbol row (bypassing delete_symbol cascade)
+        // to create a dangling edge reference
+        db.conn
+            .execute("DELETE FROM symbols WHERE id = ?1", params![sym_a.id])
+            .unwrap();
+
+        // Invalidate dangling edges
+        let dirty = std::collections::HashSet::from(["a.py".to_string()]);
+        let invalidated = db.invalidate_edges_targeting(&dirty).unwrap();
+        assert_eq!(invalidated, 1);
+
+        // Edge should now be unresolved
+        let edges = db.callees("bar").unwrap();
+        assert!(
+            edges.iter().all(|e| e.target_id.is_none()),
+            "edge should be unresolved after invalidation"
+        );
+    }
+
+    #[test]
+    fn test_scoped_resolution_after_symbol_changes() {
+        let db = Database::open_memory().unwrap();
+
+        // File A: defines foo
+        let sym_a = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        db.insert_symbol(&sym_a).unwrap();
+
+        // File B: calls foo
+        let sym_b = test_symbol("bar", SymbolKind::Function, "b.py", 1);
+        db.insert_symbol(&sym_b).unwrap();
+        db.insert_edge(&Edge::new(&sym_b.id, "foo", EdgeKind::Calls, "b.py", 5))
+            .unwrap();
+
+        // Resolve globally first
+        db.resolve_edges().unwrap();
+
+        // Simulate re-indexing a.py: delete_symbol nullifies edges, then re-insert
+        db.delete_symbol(&sym_a.id).unwrap();
+        db.insert_symbol(&sym_a).unwrap();
+
+        // Scoped resolve should re-resolve the edge
+        let dirty = std::collections::HashSet::from(["a.py".to_string()]);
+        let re_resolved = db.resolve_edges_scoped(&dirty).unwrap();
+        assert_eq!(re_resolved, 1);
+    }
+
+    #[test]
+    fn test_compute_in_degrees_scoped() {
+        let db = Database::open_memory().unwrap();
+
+        let foo = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        let bar = test_symbol("bar", SymbolKind::Function, "b.py", 1);
+        let baz = test_symbol("baz", SymbolKind::Function, "c.py", 1);
+        db.insert_symbol(&foo).unwrap();
+        db.insert_symbol(&bar).unwrap();
+        db.insert_symbol(&baz).unwrap();
+
+        // bar calls foo, baz calls foo
+        db.insert_edge(&Edge::new(&bar.id, "foo", EdgeKind::Calls, "b.py", 5))
+            .unwrap();
+        db.insert_edge(&Edge::new(&baz.id, "foo", EdgeKind::Calls, "c.py", 3))
+            .unwrap();
+
+        db.resolve_edges().unwrap();
+        db.compute_in_degrees().unwrap();
+
+        // foo should have in_degree = 2
+        let results = db.search("foo", None, None, 10).unwrap();
+        assert_eq!(results[0].in_degree, 2);
+
+        // Now scope to just b.py
+        let dirty = std::collections::HashSet::from(["b.py".to_string()]);
+        db.compute_in_degrees_scoped(&dirty).unwrap();
+
+        // foo should still have in_degree = 2 (recomputed correctly)
+        let results = db.search("foo", None, None, 10).unwrap();
+        assert_eq!(results[0].in_degree, 2);
     }
 }
