@@ -128,22 +128,25 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 
 ## Setup
 
-Before first use, ensure cartog is installed and indexed:
+Before first use, ensure cartog is installed and indexed.
 
+The `scripts/` directory is located next to this SKILL.md file. **Before running any setup command**, look at the absolute path from which this SKILL.md was loaded (visible in your tool call history), take its parent directory, and use that as the scripts root in the bash commands below.
+
+For example: if this file was loaded from `/home/user/.claude/skills/cartog/SKILL.md`, run:
 ```bash
 # Install if missing
-command -v cartog || bash scripts/install.sh
+command -v cartog || bash "/home/user/.claude/skills/cartog/scripts/install.sh"
 
 # Run the setup script (handles version check + 3 indexing phases)
-bash scripts/ensure_indexed.sh
+bash "/home/user/.claude/skills/cartog/scripts/ensure_indexed.sh"
 ```
 
 The setup script checks for newer cartog versions (cached, at most once per 24h).
 If an update is available it prints a notice like:
 ```
-New cartog version available: 0.7.0 (installed: 0.6.1). Update with: bash scripts/install.sh 0.7.0
+New cartog version available: 0.7.0 (installed: 0.6.1). Update with: bash "/path/to/skill/scripts/install.sh" 0.7.0
 ```
-When you see this notice, ask the user if they want to update before continuing. If they agree, run the suggested command, then re-run `bash scripts/ensure_indexed.sh`.
+When you see this notice, ask the user if they want to update before continuing. If they agree, run the suggested command, then re-run `bash "/path/to/skill/scripts/ensure_indexed.sh"`.
 
 ### Search quality tiers
 
