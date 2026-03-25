@@ -76,12 +76,21 @@ pub fn cmd_index(db_path: &Path, path: &str, force: bool, lsp: bool, json: bool)
         } else {
             String::new()
         };
+        let sym_detail = if r.symbols_modified > 0 || r.symbols_unchanged > 0 {
+            format!(
+                " ({} new, {} modified, {} unchanged, {} removed)",
+                r.symbols_added, r.symbols_modified, r.symbols_unchanged, r.symbols_removed
+            )
+        } else {
+            String::new()
+        };
         format!(
-            "Indexed {} files ({} skipped, {} removed)\n  {} symbols, {} edges ({} resolved{})\n",
+            "Indexed {} files ({} skipped, {} removed)\n  {} symbols{}, {} edges ({} resolved{})\n",
             r.files_indexed,
             r.files_skipped,
             r.files_removed,
-            r.symbols_added,
+            r.symbols_added + r.symbols_modified + r.symbols_unchanged,
+            sym_detail,
             r.edges_added,
             r.edges_resolved + r.edges_lsp_resolved,
             lsp_part,

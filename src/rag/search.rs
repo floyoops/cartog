@@ -354,7 +354,16 @@ mod tests {
         line: u32,
         content: &str,
     ) -> Symbol {
-        let sym = Symbol::new(name, kind, file, line, line + 10, 0, content.len() as u32);
+        let sym = Symbol::new(
+            name,
+            kind,
+            file,
+            line,
+            line + 10,
+            0,
+            content.len() as u32,
+            None,
+        );
         db.insert_symbol(&sym).unwrap();
         let header = format!("// File: {file} | {kind} {name}", kind = sym.kind);
         db.upsert_symbol_content(&sym.id, name, content, &header)
@@ -1041,7 +1050,7 @@ mod tests {
         content: Option<&str>,
     ) -> SearchResult {
         SearchResult {
-            symbol: Symbol::new(name, SymbolKind::Function, "test.py", 1, 10, 0, 100),
+            symbol: Symbol::new(name, SymbolKind::Function, "test.py", 1, 10, 0, 100, None),
             content: content.map(|s| s.to_string()),
             rrf_score: rrf,
             rerank_score: rerank,

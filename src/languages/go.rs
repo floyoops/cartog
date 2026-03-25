@@ -40,6 +40,7 @@ impl Extractor for GoExtractor {
             source,
             file_path,
             None,
+            None,
             &mut symbols,
             &mut edges,
         );
@@ -53,31 +54,80 @@ fn extract_node(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
     match node.kind() {
         "function_declaration" => {
-            extract_function(node, source, file_path, parent_id, symbols, edges);
+            extract_function(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         "method_declaration" => {
             extract_method(node, source, file_path, symbols, edges);
         }
         "type_declaration" => {
-            extract_type_declaration(node, source, file_path, parent_id, symbols, edges);
+            extract_type_declaration(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         "import_declaration" => {
-            extract_import(node, source, file_path, parent_id, symbols, edges);
+            extract_import(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         "const_declaration" => {
-            extract_const(node, source, file_path, parent_id, symbols, edges);
+            extract_const(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         "var_declaration" => {
-            extract_var(node, source, file_path, parent_id, symbols, edges);
+            extract_var(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         _ => {
             for child in node.named_children(&mut node.walk()) {
-                extract_node(child, source, file_path, parent_id, symbols, edges);
+                extract_node(
+                    child,
+                    source,
+                    file_path,
+                    parent_id,
+                    parent_qname,
+                    symbols,
+                    edges,
+                );
             }
         }
     }
@@ -90,6 +140,7 @@ fn extract_function(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -104,7 +155,7 @@ fn extract_function(
     let signature = extract_fn_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let sym_id = symbol_id(file_path, "function", &name, parent_qname);
     let mut sym = Symbol::new(
         name,
         SymbolKind::Function,
@@ -113,6 +164,7 @@ fn extract_function(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
+        parent_qname,
     )
     .with_parent(parent_id)
     .with_signature(signature)
@@ -145,12 +197,9 @@ fn extract_method(
     };
 
     // Extract receiver type for parent linkage.
-    // NOTE: parent_id uses format "file_path:type_name" which doesn't match the
-    // symbol_id format "file_path:name:line". This means parent linkage for methods
-    // won't resolve to the struct symbol via direct id match. Edge resolution by
-    // name (db.resolve_edges) handles cross-symbol references instead.
     let receiver_type = extract_receiver_type(node, source);
     let parent_id = receiver_type.as_ref().map(|rt| format!("{file_path}:{rt}"));
+    let parent_qname = receiver_type.as_deref();
 
     let start_line = node.start_position().row as u32 + 1;
     let end_line = node.end_position().row as u32 + 1;
@@ -158,7 +207,7 @@ fn extract_method(
     let signature = extract_method_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let sym_id = symbol_id(file_path, "method", &name, parent_qname);
     let mut sym = Symbol::new(
         name,
         SymbolKind::Method,
@@ -167,6 +216,7 @@ fn extract_method(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
+        parent_qname,
     )
     .with_parent(parent_id.as_deref())
     .with_signature(signature)
@@ -213,13 +263,22 @@ fn extract_type_declaration(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
     // type_declaration can contain one type_spec or a type_spec_list
     for child in node.named_children(&mut node.walk()) {
         if child.kind() == "type_spec" {
-            extract_type_spec(child, source, file_path, parent_id, symbols, edges);
+            extract_type_spec(
+                child,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
     }
 }
@@ -229,6 +288,7 @@ fn extract_type_spec(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -250,7 +310,7 @@ fn extract_type_spec(
         _ => SymbolKind::TypeAlias,
     };
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
     let mut sym = Symbol::new(
         name.clone(),
         kind,
@@ -259,6 +319,7 @@ fn extract_type_spec(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
+        parent_qname,
     )
     .with_parent(parent_id)
     .with_docstring(docstring);
@@ -317,6 +378,7 @@ fn extract_import(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -326,7 +388,15 @@ fn extract_import(
     collect_import_specs(node, &mut specs);
 
     for spec in specs {
-        extract_import_spec(spec, source, file_path, parent_id, symbols, edges);
+        extract_import_spec(
+            spec,
+            source,
+            file_path,
+            parent_id,
+            parent_qname,
+            symbols,
+            edges,
+        );
     }
 }
 
@@ -345,6 +415,7 @@ fn extract_import_spec(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -360,7 +431,7 @@ fn extract_import_spec(
     // Use the last segment of the path as the imported name
     let pkg_name = path_str.rsplit('/').next().unwrap_or(&path_str);
 
-    let sym_id = symbol_id(file_path, &path_str, line);
+    let sym_id = symbol_id(file_path, "import", &path_str, parent_qname);
     symbols.push(
         Symbol::new(
             path_str.clone(),
@@ -370,6 +441,7 @@ fn extract_import_spec(
             line,
             node.start_byte() as u32,
             node.end_byte() as u32,
+            parent_qname,
         )
         .with_parent(parent_id)
         .with_signature(Some(import_text)),
@@ -414,6 +486,7 @@ fn extract_const(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -421,12 +494,28 @@ fn extract_const(
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
             "const_spec" => {
-                extract_const_spec(child, source, file_path, parent_id, symbols, edges);
+                extract_const_spec(
+                    child,
+                    source,
+                    file_path,
+                    parent_id,
+                    parent_qname,
+                    symbols,
+                    edges,
+                );
             }
             "const_spec_list" => {
                 for spec in child.named_children(&mut child.walk()) {
                     if spec.kind() == "const_spec" {
-                        extract_const_spec(spec, source, file_path, parent_id, symbols, edges);
+                        extract_const_spec(
+                            spec,
+                            source,
+                            file_path,
+                            parent_id,
+                            parent_qname,
+                            symbols,
+                            edges,
+                        );
                     }
                 }
             }
@@ -440,6 +529,7 @@ fn extract_const_spec(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -450,7 +540,7 @@ fn extract_const_spec(
             let name = node_text(child, source).to_string();
             let line = child.start_position().row as u32 + 1;
             let visibility = go_visibility(&name);
-            let id = symbol_id(file_path, &name, line);
+            let id = symbol_id(file_path, "variable", &name, parent_qname);
             if sym_id.is_none() {
                 sym_id = Some(id);
             }
@@ -463,6 +553,7 @@ fn extract_const_spec(
                 node.end_position().row as u32 + 1,
                 child.start_byte() as u32,
                 child.end_byte() as u32,
+                parent_qname,
             )
             .with_parent(parent_id);
             if visibility != Visibility::Public {
@@ -489,18 +580,35 @@ fn extract_var(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
             "var_spec" => {
-                extract_var_spec(child, source, file_path, parent_id, symbols, edges);
+                extract_var_spec(
+                    child,
+                    source,
+                    file_path,
+                    parent_id,
+                    parent_qname,
+                    symbols,
+                    edges,
+                );
             }
             "var_spec_list" => {
                 for spec in child.named_children(&mut child.walk()) {
                     if spec.kind() == "var_spec" {
-                        extract_var_spec(spec, source, file_path, parent_id, symbols, edges);
+                        extract_var_spec(
+                            spec,
+                            source,
+                            file_path,
+                            parent_id,
+                            parent_qname,
+                            symbols,
+                            edges,
+                        );
                     }
                 }
             }
@@ -514,6 +622,7 @@ fn extract_var_spec(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -523,7 +632,7 @@ fn extract_var_spec(
             let name = node_text(child, source).to_string();
             let line = child.start_position().row as u32 + 1;
             let visibility = go_visibility(&name);
-            let id = symbol_id(file_path, &name, line);
+            let id = symbol_id(file_path, "variable", &name, parent_qname);
             if sym_id.is_none() {
                 sym_id = Some(id);
             }
@@ -536,6 +645,7 @@ fn extract_var_spec(
                 node.end_position().row as u32 + 1,
                 child.start_byte() as u32,
                 child.end_byte() as u32,
+                parent_qname,
             )
             .with_parent(parent_id);
             if visibility != Visibility::Public {

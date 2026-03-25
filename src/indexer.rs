@@ -8,7 +8,7 @@ use walkdir::WalkDir;
 
 use crate::db::Database;
 use crate::languages::{detect_language, get_extractor, Extractor};
-use crate::types::FileInfo;
+use crate::types::{FileInfo, Symbol};
 
 /// Summary of an indexing operation.
 #[derive(Debug, Default, serde::Serialize)]
@@ -17,6 +17,12 @@ pub struct IndexResult {
     pub files_skipped: u32,
     pub files_removed: u32,
     pub symbols_added: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub symbols_modified: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub symbols_unchanged: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub symbols_removed: u32,
     pub edges_added: u32,
     pub edges_resolved: u32,
     #[serde(skip_serializing_if = "is_zero")]
@@ -44,6 +50,9 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
 
     // Collect files that should be indexed
     let mut current_files = std::collections::HashSet::new();
+
+    // Track files that were actually re-indexed (for scoped edge resolution)
+    let mut dirty_files: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Git-based change detection: get set of files changed since last indexed commit
     let last_commit = if force {
@@ -129,7 +138,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
             .or_insert_with(|| get_extractor(lang).expect("lang was validated by detect_language"))
             .as_mut();
 
-        let extraction = match extractor.extract(&source, &rel_path) {
+        let mut extraction = match extractor.extract(&source, &rel_path) {
             Ok(e) => e,
             Err(err) => {
                 warn!(file = %rel_path, error = %err, "extraction failed");
@@ -137,28 +146,104 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
             }
         };
 
-        // Clear old data and insert new
-        db.clear_file_data(&rel_path)?;
+        // Dedup: append `:N` suffix for symbols with colliding stable IDs
+        dedup_symbol_ids(&mut extraction.symbols, &mut extraction.edges);
+
+        // Compute Merkle hashes for all extracted symbols
+        compute_merkle_hashes(&mut extraction.symbols, &source);
+
+        // Try Merkle diff against stored hashes
+        let old_hashes = db.get_symbol_hashes_for_file(&rel_path)?;
+        let has_old_hashes =
+            !old_hashes.is_empty() && old_hashes.iter().any(|(_, ch, _)| ch.is_some());
+
+        if has_old_hashes {
+            // Merkle diff: surgical updates
+            let diff = merkle_diff(&extraction.symbols, &old_hashes);
+
+            dirty_files.insert(rel_path.clone());
+
+            // Remove deleted symbols
+            for id in &diff.removed {
+                db.delete_symbol(id)?;
+                result.symbols_removed += 1;
+            }
+
+            // Insert new symbols
+            for &idx in &diff.added {
+                db.insert_symbol(&extraction.symbols[idx])?;
+                result.symbols_added += 1;
+            }
+
+            // Update modified symbols (full replace)
+            for &idx in &diff.modified {
+                let sym = &extraction.symbols[idx];
+                db.insert_symbol(sym)?; // INSERT OR REPLACE
+                result.symbols_modified += 1;
+            }
+
+            // Update symbols whose children changed (own content same, subtree differs)
+            // Need to update position + subtree_hash so next diff sees current state
+            for &idx in &diff.children_changed {
+                let sym = &extraction.symbols[idx];
+                db.insert_symbol(sym)?; // INSERT OR REPLACE updates all fields including hashes
+            }
+
+            result.symbols_unchanged += diff.unchanged as u32;
+
+            // Always re-insert edges for changed files (edge extraction is per-file)
+            db.clear_edges_for_file(&rel_path)?;
+            db.insert_edges(&extraction.edges)?;
+            result.edges_added += extraction.edges.len() as u32;
+
+            // Update RAG content for added + modified symbols
+            let dirty_indices: Vec<usize> = diff
+                .added
+                .iter()
+                .chain(diff.modified.iter())
+                .copied()
+                .collect();
+            let contents: Vec<(String, String, String, String)> = dirty_indices
+                .iter()
+                .map(|&i| &extraction.symbols[i])
+                .filter(|sym| sym.kind != crate::types::SymbolKind::Import)
+                .filter_map(|sym| {
+                    extract_symbol_content(&source, sym).map(|(content, header)| {
+                        (sym.id.clone(), sym.name.clone(), content, header)
+                    })
+                })
+                .collect();
+            if !contents.is_empty() {
+                db.insert_symbol_contents(&contents)?;
+            }
+        } else {
+            // No stored hashes (first index or post-migration): full insert
+            dirty_files.insert(rel_path.clone());
+            db.clear_file_data(&rel_path)?;
+
+            db.insert_symbols(&extraction.symbols)?;
+            db.insert_edges(&extraction.edges)?;
+
+            result.symbols_added += extraction.symbols.len() as u32;
+            result.edges_added += extraction.edges.len() as u32;
+
+            // Store symbol content for RAG/semantic search
+            let contents: Vec<(String, String, String, String)> = extraction
+                .symbols
+                .iter()
+                .filter(|sym| sym.kind != crate::types::SymbolKind::Import)
+                .filter_map(|sym| {
+                    extract_symbol_content(&source, sym).map(|(content, header)| {
+                        (sym.id.clone(), sym.name.clone(), content, header)
+                    })
+                })
+                .collect();
+            if !contents.is_empty() {
+                db.insert_symbol_contents(&contents)?;
+            }
+        }
 
         let num_symbols = extraction.symbols.len() as u32;
-        let num_edges = extraction.edges.len() as u32;
-
-        db.insert_symbols(&extraction.symbols)?;
-        db.insert_edges(&extraction.edges)?;
-
-        // Store symbol content for RAG/semantic search
-        let contents: Vec<(String, String, String, String)> = extraction
-            .symbols
-            .iter()
-            .filter(|sym| sym.kind != crate::types::SymbolKind::Import)
-            .filter_map(|sym| {
-                extract_symbol_content(&source, sym)
-                    .map(|(content, header)| (sym.id.clone(), sym.name.clone(), content, header))
-            })
-            .collect();
-        if !contents.is_empty() {
-            db.insert_symbol_contents(&contents)?;
-        }
 
         db.upsert_file(&FileInfo {
             path: rel_path,
@@ -169,8 +254,6 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
         })?;
 
         result.files_indexed += 1;
-        result.symbols_added += num_symbols;
-        result.edges_added += num_edges;
     }
 
     // Remove files that no longer exist
@@ -182,8 +265,17 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
         }
     }
 
-    // Resolve edges
-    result.edges_resolved = db.resolve_edges()?;
+    // Resolve edges — scoped to dirty files for incremental, global for force/first-index
+    if force || dirty_files.len() == current_files.len() {
+        result.edges_resolved = db.resolve_edges()?;
+        db.compute_in_degrees()?;
+    } else if !dirty_files.is_empty() {
+        // Invalidate edges from unchanged files that pointed to symbols in dirty files
+        // (those symbol IDs may have changed even with stable IDs if a symbol was renamed/removed)
+        db.invalidate_edges_targeting(&dirty_files)?;
+        result.edges_resolved = db.resolve_edges_scoped(&dirty_files)?;
+        db.compute_in_degrees_scoped(&dirty_files)?;
+    }
 
     // LSP-based resolution for edges the heuristic couldn't resolve.
     // Auto-detected when `lsp` feature is compiled in; silently skipped otherwise.
@@ -193,9 +285,6 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
     }
     #[cfg(not(feature = "lsp"))]
     let _ = lsp; // suppress unused warning when feature is off
-
-    // Compute in-degree centrality for all symbols
-    db.compute_in_degrees()?;
 
     // Store the current git commit as last indexed
     if let Some(commit) = git_head_commit(&root) {
@@ -256,6 +345,196 @@ fn file_modified(path: &Path) -> f64 {
         .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+// ── Symbol dedup ──
+
+/// Disambiguate symbols with colliding stable IDs by appending `:N` suffixes.
+///
+/// When two symbols in the same file have the same `file:kind:qualified_name`
+/// (e.g., conditional function definitions), the second occurrence gets `:2`, third `:3`, etc.
+/// Edge source_ids and parent_ids are updated to match.
+fn dedup_symbol_ids(symbols: &mut [Symbol], edges: &mut [crate::types::Edge]) {
+    use std::collections::HashMap;
+
+    let mut seen: HashMap<String, u32> = HashMap::new();
+    let mut renames: HashMap<String, String> = HashMap::new();
+
+    for sym in symbols.iter_mut() {
+        let count = seen.entry(sym.id.clone()).or_insert(0);
+        *count += 1;
+        if *count > 1 {
+            let old_id = sym.id.clone();
+            sym.id = format!("{}:{}", old_id, count);
+            renames.insert(format!("{}@{}", old_id, count), sym.id.clone());
+            // Track by position for parent_id fixup
+            renames.insert(old_id, sym.id.clone());
+        }
+    }
+
+    if renames.is_empty() {
+        return;
+    }
+
+    // Fix up edge source_ids that reference renamed symbols
+    for edge in edges.iter_mut() {
+        if let Some(new_id) = renames.get(&edge.source_id) {
+            edge.source_id = new_id.clone();
+        }
+    }
+
+    // Fix up parent_ids that reference renamed symbols
+    for sym in symbols.iter_mut() {
+        if let Some(ref pid) = sym.parent_id {
+            if let Some(new_id) = renames.get(pid) {
+                sym.parent_id = Some(new_id.clone());
+            }
+        }
+    }
+}
+
+// ── Merkle-tree hashing ──
+
+/// Compute content_hash and subtree_hash for all symbols in an extraction.
+///
+/// - content_hash = sha256(kind + name + signature + body_source)
+/// - subtree_hash = sha256(content_hash + sorted(children_subtree_hashes))
+///
+/// Modifies symbols in-place.
+fn compute_merkle_hashes(symbols: &mut [Symbol], source: &str) {
+    use std::collections::HashMap;
+
+    // Compute content_hash for each symbol
+    for sym in symbols.iter_mut() {
+        let body = source
+            .get(sym.start_byte as usize..sym.end_byte as usize)
+            .unwrap_or("");
+        let mut hasher = Sha256::new();
+        hasher.update(sym.kind.as_str().as_bytes());
+        hasher.update(b":");
+        hasher.update(sym.name.as_bytes());
+        hasher.update(b":");
+        if let Some(ref sig) = sym.signature {
+            hasher.update(sig.as_bytes());
+        }
+        hasher.update(b":");
+        hasher.update(body.as_bytes());
+        sym.content_hash = Some(format!("{:x}", hasher.finalize()));
+    }
+
+    // Build parent→children map by index
+    let id_to_idx: HashMap<&str, usize> = symbols
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.id.as_str(), i))
+        .collect();
+
+    let mut children: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut roots: Vec<usize> = Vec::new();
+
+    for (i, sym) in symbols.iter().enumerate() {
+        if let Some(ref pid) = sym.parent_id {
+            if let Some(&parent_idx) = id_to_idx.get(pid.as_str()) {
+                children.entry(parent_idx).or_default().push(i);
+            } else {
+                roots.push(i);
+            }
+        } else {
+            roots.push(i);
+        }
+    }
+
+    // Post-order traversal to compute subtree_hash bottom-up
+    let mut subtree_hashes: Vec<String> = vec![String::new(); symbols.len()];
+    let mut stack: Vec<(usize, bool)> = roots.iter().rev().map(|&i| (i, false)).collect();
+
+    while let Some((idx, visited)) = stack.pop() {
+        if visited {
+            // All children processed — compute subtree hash
+            let mut hasher = Sha256::new();
+            hasher.update(
+                symbols[idx]
+                    .content_hash
+                    .as_deref()
+                    .unwrap_or("")
+                    .as_bytes(),
+            );
+            if let Some(kids) = children.get(&idx) {
+                let mut kid_hashes: Vec<&str> =
+                    kids.iter().map(|&k| subtree_hashes[k].as_str()).collect();
+                kid_hashes.sort();
+                for h in kid_hashes {
+                    hasher.update(h.as_bytes());
+                }
+            }
+            subtree_hashes[idx] = format!("{:x}", hasher.finalize());
+        } else {
+            stack.push((idx, true));
+            if let Some(kids) = children.get(&idx) {
+                for &kid in kids.iter().rev() {
+                    stack.push((kid, false));
+                }
+            }
+        }
+    }
+
+    // Store subtree_hash in symbols
+    for (i, sym) in symbols.iter_mut().enumerate() {
+        sym.subtree_hash = Some(std::mem::take(&mut subtree_hashes[i]));
+    }
+}
+
+/// Result of diffing new symbols against stored hashes.
+#[derive(Debug, Default)]
+struct SymbolDiff {
+    added: Vec<usize>,            // indices into new symbols
+    removed: Vec<String>,         // IDs to delete from DB
+    modified: Vec<usize>,         // indices into new symbols (content changed)
+    children_changed: Vec<usize>, // indices: own content same, child subtree differs
+    unchanged: usize,             // count of fully unchanged symbols
+}
+
+/// Compare newly extracted symbols against stored hashes for a file.
+fn merkle_diff(
+    new_symbols: &[Symbol],
+    old_hashes: &[(String, Option<String>, Option<String>)],
+) -> SymbolDiff {
+    use std::collections::{HashMap, HashSet};
+
+    let mut diff = SymbolDiff::default();
+
+    let old_map: HashMap<&str, (&Option<String>, &Option<String>)> = old_hashes
+        .iter()
+        .map(|(id, ch, sh)| (id.as_str(), (ch, sh)))
+        .collect();
+
+    let new_ids: HashSet<&str> = new_symbols.iter().map(|s| s.id.as_str()).collect();
+
+    for (i, sym) in new_symbols.iter().enumerate() {
+        if let Some(&(old_ch, old_sh)) = old_map.get(sym.id.as_str()) {
+            // Symbol exists in both old and new
+            if sym.subtree_hash.as_ref() == old_sh.as_ref()
+                && sym.content_hash.as_ref() == old_ch.as_ref()
+            {
+                diff.unchanged += 1;
+            } else if sym.content_hash.as_ref() != old_ch.as_ref() {
+                diff.modified.push(i);
+            } else {
+                // content same, subtree different — a child was added/modified/removed
+                diff.children_changed.push(i);
+            }
+        } else {
+            diff.added.push(i);
+        }
+    }
+
+    for (old_id, _, _) in old_hashes {
+        if !new_ids.contains(old_id.as_str()) {
+            diff.removed.push(old_id.clone());
+        }
+    }
+
+    diff
 }
 
 /// Get list of files changed since the last indexed commit.
@@ -603,6 +882,7 @@ mod tests {
             100,
             0,
             source.len() as u32,
+            None,
         );
 
         // This should NOT panic despite truncation landing inside '─'
@@ -612,5 +892,314 @@ mod tests {
         // Content should be truncated before the '─' (snapped to char boundary)
         assert_eq!(content.len(), MAX_CONTENT_BYTES - 1);
         assert!(content.is_char_boundary(content.len()));
+    }
+
+    // ── Merkle hashing tests ──
+
+    #[test]
+    fn test_compute_merkle_hashes_populates_fields() {
+        let source = "def foo():\n    pass\n";
+        let mut symbols = vec![crate::types::Symbol::new(
+            "foo",
+            crate::types::SymbolKind::Function,
+            "test.py",
+            1,
+            2,
+            0,
+            source.len() as u32,
+            None,
+        )];
+
+        compute_merkle_hashes(&mut symbols, source);
+
+        assert!(symbols[0].content_hash.is_some());
+        assert!(symbols[0].subtree_hash.is_some());
+    }
+
+    #[test]
+    fn test_merkle_hashes_stable_across_position_changes() {
+        let source_v1 = "def foo():\n    pass\n";
+        let source_v2 = "\n\ndef foo():\n    pass\n";
+
+        let mut sym_v1 = vec![crate::types::Symbol::new(
+            "foo",
+            crate::types::SymbolKind::Function,
+            "test.py",
+            1,
+            2,
+            0,
+            source_v1.len() as u32,
+            None,
+        )];
+        let mut sym_v2 = vec![crate::types::Symbol::new(
+            "foo",
+            crate::types::SymbolKind::Function,
+            "test.py",
+            3,
+            4,
+            2,
+            source_v2.len() as u32,
+            None,
+        )];
+
+        compute_merkle_hashes(&mut sym_v1, source_v1);
+        compute_merkle_hashes(&mut sym_v2, source_v2);
+
+        // content_hash depends on body text — different offset means different body slice
+        // but if the body text is the same, hashes should match
+        // Here the body text is the same "def foo():\n    pass\n"
+        assert_eq!(sym_v1[0].content_hash, sym_v2[0].content_hash);
+    }
+
+    #[test]
+    fn test_merkle_diff_detects_added_symbol() {
+        let old_hashes: Vec<(String, Option<String>, Option<String>)> = vec![];
+
+        let mut new_symbols = vec![crate::types::Symbol::new(
+            "foo",
+            crate::types::SymbolKind::Function,
+            "test.py",
+            1,
+            5,
+            0,
+            50,
+            None,
+        )];
+        new_symbols[0].content_hash = Some("abc".to_string());
+        new_symbols[0].subtree_hash = Some("def".to_string());
+
+        let diff = merkle_diff(&new_symbols, &old_hashes);
+        assert_eq!(diff.added.len(), 1);
+        assert_eq!(diff.removed.len(), 0);
+        assert_eq!(diff.modified.len(), 0);
+    }
+
+    #[test]
+    fn test_merkle_diff_detects_removed_symbol() {
+        let old_hashes = vec![(
+            "test.py:function:foo".to_string(),
+            Some("abc".to_string()),
+            Some("def".to_string()),
+        )];
+
+        let new_symbols: Vec<crate::types::Symbol> = vec![];
+
+        let diff = merkle_diff(&new_symbols, &old_hashes);
+        assert_eq!(diff.added.len(), 0);
+        assert_eq!(diff.removed.len(), 1);
+        assert_eq!(diff.removed[0], "test.py:function:foo");
+    }
+
+    #[test]
+    fn test_merkle_diff_detects_unchanged() {
+        let old_hashes = vec![(
+            "test.py:function:foo".to_string(),
+            Some("abc".to_string()),
+            Some("def".to_string()),
+        )];
+
+        let mut new_symbols = vec![crate::types::Symbol::new(
+            "foo",
+            crate::types::SymbolKind::Function,
+            "test.py",
+            1,
+            5,
+            0,
+            50,
+            None,
+        )];
+        new_symbols[0].content_hash = Some("abc".to_string());
+        new_symbols[0].subtree_hash = Some("def".to_string());
+
+        let diff = merkle_diff(&new_symbols, &old_hashes);
+        assert_eq!(diff.unchanged, 1);
+        assert_eq!(diff.added.len(), 0);
+        assert_eq!(diff.modified.len(), 0);
+    }
+
+    #[test]
+    fn test_merkle_diff_detects_modified() {
+        let old_hashes = vec![(
+            "test.py:function:foo".to_string(),
+            Some("old_hash".to_string()),
+            Some("old_subtree".to_string()),
+        )];
+
+        let mut new_symbols = vec![crate::types::Symbol::new(
+            "foo",
+            crate::types::SymbolKind::Function,
+            "test.py",
+            1,
+            5,
+            0,
+            50,
+            None,
+        )];
+        new_symbols[0].content_hash = Some("new_hash".to_string());
+        new_symbols[0].subtree_hash = Some("new_subtree".to_string());
+
+        let diff = merkle_diff(&new_symbols, &old_hashes);
+        assert_eq!(diff.modified.len(), 1);
+        assert_eq!(diff.unchanged, 0);
+    }
+
+    // ── Integration test: full incremental pipeline ──
+
+    #[test]
+    fn test_incremental_merkle_diff_pipeline() {
+        use crate::db::Database;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Create a non-dot subdirectory (tempfile may create .tmpXXX on macOS,
+        // which is_ignored_dirname skips)
+        let dir = tmp.path().join("project");
+        std::fs::create_dir(&dir).unwrap();
+
+        // Initial files
+        let a_py = dir.join("a.py");
+        let b_py = dir.join("b.py");
+
+        std::fs::write(
+            &a_py,
+            r#"class Greeter:
+    def hello(self):
+        return "hi"
+    def goodbye(self):
+        return "bye"
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            &b_py,
+            r#"from a import Greeter
+def main():
+    g = Greeter()
+    g.hello()
+"#,
+        )
+        .unwrap();
+
+        let db = Database::open_memory().unwrap();
+
+        // ── Index 1: initial full index ──
+        let r1 = index_directory(&db, &dir, true, false).unwrap();
+        assert_eq!(r1.files_indexed, 2);
+        assert!(r1.symbols_added > 0, "should have symbols");
+
+        let outline_a = db.outline("a.py").unwrap();
+        assert_eq!(outline_a.len(), 3, "Greeter + hello + goodbye");
+        let names_a: Vec<&str> = outline_a.iter().map(|s| s.name.as_str()).collect();
+        assert!(names_a.contains(&"Greeter"));
+        assert!(names_a.contains(&"hello"));
+        assert!(names_a.contains(&"goodbye"));
+
+        // Capture stable IDs
+        let hello_id_v1 = outline_a
+            .iter()
+            .find(|s| s.name == "hello")
+            .unwrap()
+            .id
+            .clone();
+        let greeter_id_v1 = outline_a
+            .iter()
+            .find(|s| s.name == "Greeter")
+            .unwrap()
+            .id
+            .clone();
+
+        // Verify Merkle hashes populated
+        let hashes = db.get_symbol_hashes_for_file("a.py").unwrap();
+        assert!(
+            hashes
+                .iter()
+                .all(|(_, ch, sh)| ch.is_some() && sh.is_some()),
+            "all symbols should have hashes after indexing"
+        );
+
+        // ── Index 2: add a function to a.py ──
+        std::fs::write(
+            &a_py,
+            r#"class Greeter:
+    def hello(self):
+        return "hi"
+    def goodbye(self):
+        return "bye"
+
+def standalone():
+    return "I am new"
+"#,
+        )
+        .unwrap();
+
+        let r2 = index_directory(&db, &dir, false, false).unwrap();
+        assert_eq!(r2.files_indexed, 1, "only a.py changed");
+        assert!(r2.files_skipped > 0, "b.py should be skipped");
+        assert_eq!(r2.symbols_added, 1, "standalone is new");
+        assert!(
+            r2.symbols_unchanged >= 2,
+            "hello and goodbye should be unchanged, got {}",
+            r2.symbols_unchanged
+        );
+
+        let outline_a2 = db.outline("a.py").unwrap();
+        assert_eq!(
+            outline_a2.len(),
+            4,
+            "Greeter + hello + goodbye + standalone"
+        );
+        assert!(outline_a2.iter().any(|s| s.name == "standalone"));
+
+        // Verify ID stability: hello and Greeter keep same IDs
+        let hello_id_v2 = outline_a2
+            .iter()
+            .find(|s| s.name == "hello")
+            .unwrap()
+            .id
+            .clone();
+        let greeter_id_v2 = outline_a2
+            .iter()
+            .find(|s| s.name == "Greeter")
+            .unwrap()
+            .id
+            .clone();
+        assert_eq!(hello_id_v1, hello_id_v2, "hello ID should be stable");
+        assert_eq!(greeter_id_v1, greeter_id_v2, "Greeter ID should be stable");
+
+        // ── Index 3: remove goodbye from a.py ──
+        std::fs::write(
+            &a_py,
+            r#"class Greeter:
+    def hello(self):
+        return "hi"
+
+def standalone():
+    return "I am new"
+"#,
+        )
+        .unwrap();
+
+        let r3 = index_directory(&db, &dir, false, false).unwrap();
+        assert_eq!(r3.files_indexed, 1);
+        assert!(r3.symbols_removed >= 1, "goodbye should be removed");
+
+        let outline_a3 = db.outline("a.py").unwrap();
+        assert_eq!(outline_a3.len(), 3, "Greeter + hello + standalone");
+        assert!(
+            !outline_a3.iter().any(|s| s.name == "goodbye"),
+            "goodbye should be gone"
+        );
+
+        // hello ID still stable after removal of sibling
+        let hello_id_v3 = outline_a3
+            .iter()
+            .find(|s| s.name == "hello")
+            .unwrap()
+            .id
+            .clone();
+        assert_eq!(
+            hello_id_v1, hello_id_v3,
+            "hello ID stable after sibling removal"
+        );
     }
 }

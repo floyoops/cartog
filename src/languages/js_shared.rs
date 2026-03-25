@@ -95,6 +95,7 @@ pub fn extract(
         source,
         file_path,
         None,
+        None,
         queries,
         &mut symbols,
         &mut edges,
@@ -103,11 +104,13 @@ pub fn extract(
     Ok(ExtractionResult { symbols, edges })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_node(
     node: Node,
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     queries: &JsQueries,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
@@ -115,26 +118,68 @@ fn extract_node(
     match node.kind() {
         // Functions
         "function_declaration" => {
-            extract_function(node, source, file_path, parent_id, queries, symbols, edges);
+            extract_function(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                queries,
+                symbols,
+                edges,
+            );
         }
         // Arrow functions and function expressions assigned to variables
         "lexical_declaration" | "variable_declaration" => {
             extract_variable_declaration(
-                node, source, file_path, parent_id, queries, symbols, edges,
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                queries,
+                symbols,
+                edges,
             );
         }
         // Classes (including TypeScript abstract classes)
         "class_declaration" | "abstract_class_declaration" => {
-            extract_class(node, source, file_path, parent_id, queries, symbols, edges);
+            extract_class(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                queries,
+                symbols,
+                edges,
+            );
         }
         // Imports
         "import_statement" => {
-            extract_import(node, source, file_path, parent_id, symbols, edges);
+            extract_import(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         // Exports that wrap declarations
         "export_statement" => {
             for child in node.named_children(&mut node.walk()) {
-                extract_node(child, source, file_path, parent_id, queries, symbols, edges);
+                extract_node(
+                    child,
+                    source,
+                    file_path,
+                    parent_id,
+                    parent_qname,
+                    queries,
+                    symbols,
+                    edges,
+                );
             }
         }
         // Expression statements — scan for calls
@@ -143,17 +188,34 @@ fn extract_node(
         }
         // TypeScript-specific
         "interface_declaration" => {
-            extract_interface(node, source, file_path, parent_id, symbols, edges);
+            extract_interface(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         "type_alias_declaration" => {
-            extract_type_alias(node, source, file_path, parent_id, symbols);
+            extract_type_alias(node, source, file_path, parent_id, parent_qname, symbols);
         }
         "enum_declaration" => {
-            extract_enum(node, source, file_path, parent_id, symbols);
+            extract_enum(node, source, file_path, parent_id, parent_qname, symbols);
         }
         _ => {
             for child in node.named_children(&mut node.walk()) {
-                extract_node(child, source, file_path, parent_id, queries, symbols, edges);
+                extract_node(
+                    child,
+                    source,
+                    file_path,
+                    parent_id,
+                    parent_qname,
+                    queries,
+                    symbols,
+                    edges,
+                );
             }
         }
     }
@@ -161,11 +223,13 @@ fn extract_node(
 
 // ── Functions ──
 
+#[allow(clippy::too_many_arguments)]
 fn extract_function(
     node: Node,
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     queries: &JsQueries,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
@@ -188,7 +252,7 @@ fn extract_function(
     let signature = extract_signature(node, source);
     let docstring = extract_jsdoc(node, source);
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
     symbols.push(
         Symbol::new(
             &name,
@@ -198,6 +262,7 @@ fn extract_function(
             end_line,
             node.start_byte() as u32,
             node.end_byte() as u32,
+            parent_qname,
         )
         .with_parent(parent_id)
         .with_signature(signature)
@@ -210,18 +275,33 @@ fn extract_function(
 
     // Walk body for calls/throws
     if let Some(body) = node.child_by_field_name("body") {
+        let child_qname = match parent_qname {
+            Some(pq) => format!("{pq}.{name}"),
+            None => name.clone(),
+        };
         walk_for_calls_and_throws_q(body, source, file_path, Some(&sym_id), queries, edges);
-        walk_body_for_nested(body, source, file_path, &sym_id, queries, symbols, edges);
+        walk_body_for_nested(
+            body,
+            source,
+            file_path,
+            &sym_id,
+            &child_qname,
+            queries,
+            symbols,
+            edges,
+        );
     }
 }
 
 // ── Variable declarations (const foo = () => {}, const bar = function() {}) ──
 
+#[allow(clippy::too_many_arguments)]
 fn extract_variable_declaration(
     node: Node,
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     queries: &JsQueries,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
@@ -251,7 +331,7 @@ fn extract_variable_declaration(
             let signature = extract_signature(val, source);
             let docstring = extract_jsdoc(node, source);
 
-            let sym_id = symbol_id(file_path, &name, start_line);
+            let sym_id = symbol_id(file_path, "function", &name, parent_qname);
             symbols.push(
                 Symbol::new(
                     &name,
@@ -261,6 +341,7 @@ fn extract_variable_declaration(
                     end_line,
                     node.start_byte() as u32,
                     node.end_byte() as u32,
+                    parent_qname,
                 )
                 .with_parent(parent_id)
                 .with_signature(signature)
@@ -271,8 +352,21 @@ fn extract_variable_declaration(
             extract_fn_type_refs_q(val, source, file_path, &sym_id, queries, edges);
 
             if let Some(body) = val.child_by_field_name("body") {
+                let child_qname = match parent_qname {
+                    Some(pq) => format!("{pq}.{name}"),
+                    None => name.clone(),
+                };
                 walk_for_calls_and_throws_q(body, source, file_path, Some(&sym_id), queries, edges);
-                walk_body_for_nested(body, source, file_path, &sym_id, queries, symbols, edges);
+                walk_body_for_nested(
+                    body,
+                    source,
+                    file_path,
+                    &sym_id,
+                    &child_qname,
+                    queries,
+                    symbols,
+                    edges,
+                );
             }
         } else {
             // Plain variable
@@ -286,6 +380,7 @@ fn extract_variable_declaration(
                     end_line,
                     node.start_byte() as u32,
                     node.end_byte() as u32,
+                    parent_qname,
                 )
                 .with_parent(parent_id)
                 .with_docstring(docstring),
@@ -296,11 +391,13 @@ fn extract_variable_declaration(
 
 // ── Classes ──
 
+#[allow(clippy::too_many_arguments)]
 fn extract_class(
     node: Node,
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     queries: &JsQueries,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
@@ -314,7 +411,11 @@ fn extract_class(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_jsdoc(node, source);
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let sym_id = symbol_id(file_path, "class", &name, parent_qname);
+    let class_qname = match parent_qname {
+        Some(pq) => format!("{pq}.{name}"),
+        None => name.clone(),
+    };
     symbols.push(
         Symbol::new(
             &name,
@@ -324,6 +425,7 @@ fn extract_class(
             end_line,
             node.start_byte() as u32,
             node.end_byte() as u32,
+            parent_qname,
         )
         .with_parent(parent_id)
         .with_docstring(docstring),
@@ -388,10 +490,19 @@ fn extract_class(
         for child in body.named_children(&mut body.walk()) {
             match child.kind() {
                 "method_definition" => {
-                    extract_method(child, source, file_path, &sym_id, queries, symbols, edges);
+                    extract_method(
+                        child,
+                        source,
+                        file_path,
+                        &sym_id,
+                        &class_qname,
+                        queries,
+                        symbols,
+                        edges,
+                    );
                 }
                 "public_field_definition" | "field_definition" | "property_definition" => {
-                    extract_field(child, source, file_path, &sym_id, symbols);
+                    extract_field(child, source, file_path, &sym_id, &class_qname, symbols);
                 }
                 _ => {}
             }
@@ -399,11 +510,13 @@ fn extract_class(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_method(
     node: Node,
     source: &str,
     file_path: &str,
     class_id: &str,
+    class_qname: &str,
     queries: &JsQueries,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
@@ -420,7 +533,7 @@ fn extract_method(
     let docstring = extract_jsdoc(node, source);
     let visibility = js_visibility_from_node(node, source);
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let sym_id = symbol_id(file_path, "method", &name, Some(class_qname));
     symbols.push(
         Symbol::new(
             &name,
@@ -430,6 +543,7 @@ fn extract_method(
             end_line,
             node.start_byte() as u32,
             node.end_byte() as u32,
+            Some(class_qname),
         )
         .with_parent(Some(class_id))
         .with_signature(signature)
@@ -450,6 +564,7 @@ fn extract_field(
     source: &str,
     file_path: &str,
     class_id: &str,
+    class_qname: &str,
     symbols: &mut Vec<Symbol>,
 ) {
     // field_definition uses "property" field, public_field_definition uses "name"
@@ -473,6 +588,7 @@ fn extract_field(
             node.end_position().row as u32 + 1,
             node.start_byte() as u32,
             node.end_byte() as u32,
+            Some(class_qname),
         )
         .with_parent(Some(class_id))
         .with_visibility(visibility),
@@ -486,6 +602,7 @@ fn extract_import(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -497,7 +614,7 @@ fn extract_import(
         return;
     }
 
-    let sym_id = symbol_id(file_path, &module_name, line);
+    let sym_id = symbol_id(file_path, "import", &module_name, parent_qname);
     symbols.push(
         Symbol::new(
             &module_name,
@@ -507,6 +624,7 @@ fn extract_import(
             line,
             node.start_byte() as u32,
             node.end_byte() as u32,
+            parent_qname,
         )
         .with_parent(parent_id)
         .with_signature(Some(import_text)),
@@ -576,6 +694,7 @@ fn extract_interface(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -588,7 +707,7 @@ fn extract_interface(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_jsdoc(node, source);
 
-    let sym_id = symbol_id(file_path, &name, start_line);
+    let sym_id = symbol_id(file_path, "interface", &name, parent_qname);
     symbols.push(
         Symbol::new(
             &name,
@@ -598,6 +717,7 @@ fn extract_interface(
             end_line,
             node.start_byte() as u32,
             node.end_byte() as u32,
+            parent_qname,
         )
         .with_parent(parent_id)
         .with_docstring(docstring),
@@ -629,6 +749,7 @@ fn extract_type_alias(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
 ) {
     let name = match node.child_by_field_name("name") {
@@ -648,6 +769,7 @@ fn extract_type_alias(
             node.end_position().row as u32 + 1,
             node.start_byte() as u32,
             node.end_byte() as u32,
+            parent_qname,
         )
         .with_parent(parent_id)
         .with_docstring(docstring),
@@ -659,6 +781,7 @@ fn extract_enum(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
 ) {
     let name = match node.child_by_field_name("name") {
@@ -678,6 +801,7 @@ fn extract_enum(
             node.end_position().row as u32 + 1,
             node.start_byte() as u32,
             node.end_byte() as u32,
+            parent_qname,
         )
         .with_parent(parent_id)
         .with_docstring(docstring),
@@ -768,11 +892,13 @@ fn walk_for_calls_and_throws_q(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_body_for_nested(
     body: Node,
     source: &str,
     file_path: &str,
     parent_id: &str,
+    parent_qname: &str,
     queries: &JsQueries,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
@@ -789,6 +915,7 @@ fn walk_body_for_nested(
                     source,
                     file_path,
                     Some(parent_id),
+                    Some(parent_qname),
                     queries,
                     symbols,
                     edges,
