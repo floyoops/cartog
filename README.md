@@ -92,6 +92,32 @@ sudo mv cartog /usr/local/bin/
 # Windows (x86_64) — download .zip from releases page
 ```
 
+## Configuration
+
+The database path is resolved automatically — no config needed for standard use:
+
+1. **`--db` flag / `CARTOG_DB` env var** — explicit override (highest priority)
+2. **`.cartog.toml`** at the git root — project-specific config
+3. **Auto git-root detection** — DB placed at the root of the git repository
+4. **cwd fallback** — `.cartog.db` in the current directory
+
+```bash
+# Override database location
+cartog --db /tmp/myproject.db index .
+CARTOG_DB=~/.local/share/cartog/proj.db cartog search foo
+
+# --db is global — applies to all subcommands
+cartog --db /tmp/x.db stats
+```
+
+**`.cartog.toml`** (optional, place at project root):
+```toml
+[database]
+path = "~/.local/share/cartog/myproject.db"
+```
+
+Useful when indexing from a parent directory across multiple projects, or when storing the DB outside the repo. See [`docs/usage.md`](docs/usage.md) for details.
+
 ## Search: Keyword, Semantic, or Both
 
 cartog offers two search modes that complement each other:

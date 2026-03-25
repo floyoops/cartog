@@ -5,14 +5,14 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::cli::{EdgeKindFilter, SymbolKindFilter};
-use crate::db::{Database, DB_FILE, MAX_SEARCH_LIMIT};
+use crate::db::{Database, MAX_SEARCH_LIMIT};
 use crate::indexer;
 use crate::rag;
 use crate::types::{EdgeKind, SymbolKind};
 use crate::watch::{self, WatchConfig};
 
-fn open_db() -> Result<Database> {
-    Database::open(DB_FILE).context("Failed to open cartog database")
+fn open_db(path: &Path) -> Result<Database> {
+    Database::open(path).context("Failed to open cartog database")
 }
 
 /// Estimate token count from a string using chars/4 approximation.
@@ -61,9 +61,9 @@ fn output<T: Serialize>(
 }
 
 /// Build or rebuild the code graph index.
-pub fn cmd_index(path: &str, force: bool, lsp: bool, json: bool) -> Result<()> {
+pub fn cmd_index(db_path: &Path, path: &str, force: bool, lsp: bool, json: bool) -> Result<()> {
     let root = Path::new(path);
-    let db = open_db()?;
+    let db = open_db(db_path)?;
 
     let result = indexer::index_directory(&db, root, force, lsp)?;
 
@@ -90,8 +90,13 @@ pub fn cmd_index(path: &str, force: bool, lsp: bool, json: bool) -> Result<()> {
 }
 
 /// Show symbols and structure of a file.
-pub fn cmd_outline(file: &str, json: bool, token_budget: Option<u32>) -> Result<()> {
-    let db = open_db()?;
+pub fn cmd_outline(
+    db_path: &Path,
+    file: &str,
+    json: bool,
+    token_budget: Option<u32>,
+) -> Result<()> {
+    let db = open_db(db_path)?;
     let symbols = db.outline(file)?;
     let file = file.to_string();
 
@@ -125,8 +130,13 @@ pub fn cmd_outline(file: &str, json: bool, token_budget: Option<u32>) -> Result<
 }
 
 /// Find what a symbol calls.
-pub fn cmd_callees(name: &str, json: bool, token_budget: Option<u32>) -> Result<()> {
-    let db = open_db()?;
+pub fn cmd_callees(
+    db_path: &Path,
+    name: &str,
+    json: bool,
+    token_budget: Option<u32>,
+) -> Result<()> {
+    let db = open_db(db_path)?;
     let edges = db.callees(name)?;
     let name = name.to_string();
 
@@ -148,8 +158,14 @@ pub fn cmd_callees(name: &str, json: bool, token_budget: Option<u32>) -> Result<
 }
 
 /// Transitive impact analysis — what breaks if this changes?
-pub fn cmd_impact(name: &str, depth: u32, json: bool, token_budget: Option<u32>) -> Result<()> {
-    let db = open_db()?;
+pub fn cmd_impact(
+    db_path: &Path,
+    name: &str,
+    depth: u32,
+    json: bool,
+    token_budget: Option<u32>,
+) -> Result<()> {
+    let db = open_db(db_path)?;
     let results = db.impact(name, depth)?;
     let name = name.to_string();
 
@@ -185,12 +201,13 @@ pub fn cmd_impact(name: &str, depth: u32, json: bool, token_budget: Option<u32>)
 
 /// All references to a symbol (calls, imports, inherits, references, raises).
 pub fn cmd_refs(
+    db_path: &Path,
     name: &str,
     kind: Option<EdgeKindFilter>,
     json: bool,
     token_budget: Option<u32>,
 ) -> Result<()> {
-    let db = open_db()?;
+    let db = open_db(db_path)?;
     let kind_filter = kind.map(EdgeKind::from);
     let results = db.refs(name, kind_filter)?;
     let name = name.to_string();
@@ -230,8 +247,13 @@ pub fn cmd_refs(
 }
 
 /// Show inheritance hierarchy for a class.
-pub fn cmd_hierarchy(name: &str, json: bool, token_budget: Option<u32>) -> Result<()> {
-    let db = open_db()?;
+pub fn cmd_hierarchy(
+    db_path: &Path,
+    name: &str,
+    json: bool,
+    token_budget: Option<u32>,
+) -> Result<()> {
+    let db = open_db(db_path)?;
     let pairs = db.hierarchy(name)?;
     let name = name.to_string();
 
@@ -259,8 +281,8 @@ pub fn cmd_hierarchy(name: &str, json: bool, token_budget: Option<u32>) -> Resul
 }
 
 /// File-level import dependencies.
-pub fn cmd_deps(file: &str, json: bool, token_budget: Option<u32>) -> Result<()> {
-    let db = open_db()?;
+pub fn cmd_deps(db_path: &Path, file: &str, json: bool, token_budget: Option<u32>) -> Result<()> {
+    let db = open_db(db_path)?;
     let edges = db.file_deps(file)?;
     let file = file.to_string();
 
@@ -282,6 +304,7 @@ pub fn cmd_deps(file: &str, json: bool, token_budget: Option<u32>) -> Result<()>
 
 /// Search for symbols by name (case-insensitive prefix + substring match).
 pub fn cmd_search(
+    db_path: &Path,
     query: &str,
     kind: Option<SymbolKindFilter>,
     file: Option<&str>,
@@ -289,7 +312,7 @@ pub fn cmd_search(
     json: bool,
     token_budget: Option<u32>,
 ) -> Result<()> {
-    let db = open_db()?;
+    let db = open_db(db_path)?;
     let kind_filter = kind.map(crate::types::SymbolKind::from);
     let limit = limit.min(MAX_SEARCH_LIMIT);
     let symbols = db.search(query, kind_filter, file, limit)?;
@@ -314,8 +337,8 @@ pub fn cmd_search(
 }
 
 /// Index statistics summary.
-pub fn cmd_stats(json: bool) -> Result<()> {
-    let db = open_db()?;
+pub fn cmd_stats(db_path: &Path, json: bool) -> Result<()> {
+    let db = open_db(db_path)?;
     let stats = db.stats()?;
 
     output(&stats, json, None, |stats| {
@@ -343,8 +366,8 @@ pub fn cmd_stats(json: bool) -> Result<()> {
 }
 
 /// Token-budget-aware codebase summary: file tree + top symbols ranked by centrality.
-pub fn cmd_map(tokens: u32, json: bool) -> Result<()> {
-    let db = open_db()?;
+pub fn cmd_map(db_path: &Path, tokens: u32, json: bool) -> Result<()> {
+    let db = open_db(db_path)?;
     let files = db.all_files()?;
 
     if files.is_empty() {
@@ -434,12 +457,13 @@ pub fn cmd_map(tokens: u32, json: bool) -> Result<()> {
 
 /// Show symbols affected by recent git changes.
 pub fn cmd_changes(
+    db_path: &Path,
     commits: u32,
     kind: Option<SymbolKindFilter>,
     json: bool,
     token_budget: Option<u32>,
 ) -> Result<()> {
-    let db = open_db()?;
+    let db = open_db(db_path)?;
     let root = std::env::current_dir()?;
 
     let changed_files = indexer::git_recently_changed_files(&root, commits)?;
@@ -532,10 +556,10 @@ pub fn cmd_rag_setup(json: bool) -> Result<()> {
 }
 
 /// Build embedding index for semantic search.
-pub fn cmd_rag_index(path: &str, force: bool, json: bool) -> Result<()> {
+pub fn cmd_rag_index(db_path: &Path, path: &str, force: bool, json: bool) -> Result<()> {
     // First ensure the standard code graph index is up to date
     let root = Path::new(path);
-    let db = open_db()?;
+    let db = open_db(db_path)?;
     let _index_result = indexer::index_directory(&db, root, false, false)?;
 
     let result = rag::indexer::index_embeddings(&db, force)?;
@@ -550,13 +574,14 @@ pub fn cmd_rag_index(path: &str, force: bool, json: bool) -> Result<()> {
 
 /// Semantic search over code symbols.
 pub fn cmd_rag_search(
+    db_path: &Path,
     query: &str,
     kind: Option<SymbolKindFilter>,
     limit: u32,
     json: bool,
     token_budget: Option<u32>,
 ) -> Result<()> {
-    let db = open_db()?;
+    let db = open_db(db_path)?;
     let kind_filter = kind.map(crate::types::SymbolKind::from);
 
     let search_result = rag::search::hybrid_search(&db, query, limit, kind_filter)?;
@@ -609,13 +634,20 @@ pub fn cmd_rag_search(
 }
 
 /// Watch for file changes and auto-re-index.
-pub fn cmd_watch(path: &str, debounce: u64, rag: bool, rag_delay: u64) -> Result<()> {
+pub fn cmd_watch(
+    db_path: &Path,
+    path: &str,
+    debounce: u64,
+    rag: bool,
+    rag_delay: u64,
+) -> Result<()> {
     let mut config = WatchConfig::new(PathBuf::from(path));
     config.debounce = Duration::from_secs(debounce);
     config.rag = rag;
     config.rag_delay = Duration::from_secs(rag_delay);
 
-    watch::run_watch(config, DB_FILE)
+    let db_path_str = db_path.to_string_lossy();
+    watch::run_watch(config, &db_path_str)
 }
 
 #[cfg(test)]
