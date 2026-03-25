@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.8.0] - 2026-03-25
+## [0.8.1] - 2026-03-25
 
 ### Bug Fixes
 
@@ -16,6 +16,7 @@
 - Address review findings — chunking, CTE, migration logging ([`3970e5c`](https://github.com/jrollin/cartog/commit/3970e5c69a626c17866ac6027af9c308a9ec17c3))
 - Embedding chunking review — UTF-8 safety, false positive filters, docs ([`0907fee`](https://github.com/jrollin/cartog/commit/0907fee98854aab82f0e6d8b166eb1faa42abe1a))
 - **plugin**: Restore marketplace.json with distinct name ([`c477286`](https://github.com/jrollin/cartog/commit/c477286cad93682db8bd4bf6c65702693ab0fe7c))
+- Let llm find skill direcotry ([`1505530`](https://github.com/jrollin/cartog/commit/15055309b8c1cfd56f55edd182d6927e9d3461b3))
 
 ### Documentation
 
