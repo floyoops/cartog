@@ -22,6 +22,8 @@
   --red: #f85149;
   --max-width: 1080px;
   --nav-height: 56px;
+  --glow: 0 0 0 1px rgba(88, 166, 255, 0.3), 0 0 18px rgba(88, 166, 255, 0.18);
+  --glow-strong: 0 0 0 1px rgba(88, 166, 255, 0.5), 0 0 28px rgba(88, 166, 255, 0.28);
 }
 
 html {
@@ -159,26 +161,63 @@ section + section {
   padding: 100px 0 80px;
   text-align: center;
   border-top: none;
+  position: relative;
+  overflow: hidden;
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 40px 40px;
+  opacity: 0.18;
+  pointer-events: none;
+}
+
+.hero > .container {
+  position: relative;
+  z-index: 1;
 }
 
 .hero h1 {
-  font-size: clamp(32px, 5vw, 52px);
+  font-size: clamp(36px, 6vw, 64px);
   font-weight: 800;
-  line-height: 1.15;
-  letter-spacing: -0.02em;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
   margin-bottom: 20px;
 }
 
-.hero h1 .accent {
+.hero h1 .line-plain {
+  display: block;
+  color: var(--text);
+}
+
+.hero h1 .line-accent {
+  display: block;
   color: var(--accent);
 }
 
 .hero .subtitle {
-  font-size: 18px;
+  font-size: 17px;
   color: var(--text-secondary);
-  max-width: 600px;
+  max-width: 560px;
   margin: 0 auto 32px;
   line-height: 1.6;
+}
+
+/* ── Hero eyebrow ────────────────────────────────── */
+
+.hero-eyebrow {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 24px;
 }
 
 /* ── Install widget ──────────────────────────────── */
@@ -200,6 +239,7 @@ section + section {
   padding: 10px 14px 10px 18px;
   gap: 12px;
   font-size: 14px;
+  box-shadow: var(--glow);
 }
 
 .install-label {
@@ -256,6 +296,67 @@ section + section {
   color: var(--text-secondary);
 }
 
+/* ── Hero CTAs ───────────────────────────────────── */
+
+.hero-ctas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+.btn-github {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+}
+
+.btn-github:hover {
+  background: var(--bg-secondary);
+  border-color: var(--accent);
+  color: var(--text);
+  box-shadow: var(--glow-strong);
+}
+
+.btn-github .gh-stars-badge {
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color 0.2s, border-color 0.2s, box-shadow 0.2s;
+}
+
+.btn-secondary:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  box-shadow: var(--glow);
+}
+
 /* ── Terminal demo ───────────────────────────────── */
 
 .terminal {
@@ -266,6 +367,7 @@ section + section {
   margin: 48px auto 0;
   overflow: hidden;
   text-align: left;
+  box-shadow: var(--glow);
 }
 
 .terminal-header {
@@ -329,28 +431,35 @@ section + section {
 
 /* ── Stats bar ───────────────────────────────────── */
 
-.stats {
-  padding: 60px 0;
+.stats-bar {
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 24px;
 }
 
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 24px;
+.stats-bar .container {
+  display: flex;
+  justify-content: center;
+  gap: 48px;
+  flex-wrap: wrap;
+}
+
+.stats-bar .stat-item {
   text-align: center;
 }
 
-.stat-item .stat-value {
-  font-size: clamp(28px, 4vw, 40px);
+.stats-bar .stat-value {
+  font-size: 28px;
   font-weight: 800;
-  color: var(--accent);
+  color: var(--text);
   letter-spacing: -0.02em;
 }
 
-.stat-item .stat-label {
-  font-size: 14px;
+.stats-bar .stat-label {
+  font-size: 12px;
   color: var(--text-secondary);
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 /* ── Features grid ───────────────────────────────── */
@@ -364,25 +473,31 @@ section + section {
 .feature-card {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
   border-radius: 10px;
   padding: 28px;
-  transition: border-color 0.2s;
+  box-shadow: var(--glow);
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .feature-card:hover {
-  border-color: var(--text-tertiary);
+  border-color: var(--accent);
+  border-top-color: var(--accent);
+  box-shadow: var(--glow-strong);
 }
 
 .feature-icon {
-  font-size: 24px;
-  margin-bottom: 14px;
-  display: block;
+  font-size: 18px;
+  display: inline;
 }
 
 .feature-card h3 {
   font-size: 16px;
   font-weight: 600;
   margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .feature-card p {
@@ -514,6 +629,13 @@ td .badge {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 24px;
+  box-shadow: var(--glow);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.install-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--glow-strong);
 }
 
 .install-card h3 {
@@ -546,7 +668,8 @@ td .badge {
 .lang-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 12px;
   margin-top: 24px;
 }
 
@@ -554,12 +677,21 @@ td .badge {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 8px 16px;
+  padding: 12px 20px;
   font-size: 14px;
   color: var(--text-secondary);
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 110px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.lang-tag:hover {
+  border-color: var(--accent);
+  box-shadow: var(--glow);
 }
 
 .lang-tag svg {
@@ -583,6 +715,119 @@ td .badge {
   color: var(--text-secondary);
   margin-bottom: 28px;
   font-size: 16px;
+}
+
+/* ── How It Works ────────────────────────────────── */
+
+.how-it-works {
+  text-align: center;
+}
+
+.how-steps {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+  max-width: 760px;
+  margin: 40px auto 0;
+}
+
+.how-step {
+  flex: 1;
+  padding: 0 20px;
+  text-align: center;
+}
+
+.how-step-number {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  border: 1px solid rgba(88, 166, 255, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 0 auto 12px;
+  box-shadow: 0 0 12px rgba(88, 166, 255, 0.2);
+}
+
+.how-step-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.how-step code {
+  display: block;
+  font-size: 12px;
+  color: var(--green);
+  margin-bottom: 8px;
+}
+
+.how-step p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.how-arrow {
+  padding-top: 18px;
+  color: var(--border);
+  font-size: 20px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+@media (max-width: 600px) {
+  .how-steps {
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .how-arrow {
+    transform: rotate(90deg);
+    padding-top: 0;
+  }
+
+  .how-step {
+    padding: 0;
+    width: 100%;
+  }
+
+  .hero-installs {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .install-widget {
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+
+  .install-widget code {
+    font-size: 12px;
+    word-break: break-all;
+  }
+
+  .stats-bar .container {
+    gap: 24px;
+  }
+
+  .hero-ctas {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .btn-github,
+  .btn-secondary {
+    width: 100%;
+    justify-content: center;
+  }
 }
 
 /* ── Footer ──────────────────────────────────────── */
@@ -613,6 +858,17 @@ td .badge {
 
 .footer-links a:hover {
   color: var(--text-secondary);
+}
+
+/* ── Install group label ─────────────────────────── */
+
+.install-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
 }
 
 /* ── Responsive ──────────────────────────────────── */
