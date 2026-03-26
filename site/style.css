@@ -856,6 +856,17 @@ td .badge {
   color: var(--text-secondary);
 }
 
+/* ── Install group label ─────────────────────────── */
+
+.install-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
 /* ── Responsive ──────────────────────────────────── */
 
 @media (max-width: 768px) {
