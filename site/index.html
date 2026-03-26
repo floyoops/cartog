@@ -404,5 +404,21 @@ function copyCmd(btn, text) {
 }
 </script>
 
+<script>
+  // Live GitHub star count — silent fail, static fallback shown
+  fetch('https://api.github.com/repos/jrollin/cartog')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var el = document.getElementById('gh-stars');
+      if (el && d.stargazers_count) {
+        var count = d.stargazers_count;
+        el.textContent = count >= 1000
+          ? (count / 1000).toFixed(1) + 'k'
+          : String(count);
+      }
+    })
+    .catch(function() {});
+</script>
+
 </body>
 </html>
