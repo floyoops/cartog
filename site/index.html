@@ -150,7 +150,7 @@
 <section id="features">
   <div class="container">
     <div class="section-label">Features</div>
-    <h2 class="section-heading">Everything you need, nothing you don't</h2>
+    <h2 class="section-heading">Everything your agent needs. Nothing it doesn't.</h2>
     <p class="section-subtitle">Single binary, zero config, zero dependencies. Works with any LLM that has bash or MCP access.</p>
 
     <div class="features-grid" style="margin-top: 40px;">
@@ -301,7 +301,12 @@
         <h3>Claude Code (recommended)</h3>
         <pre>/plugin marketplace add jrollin/cartog
 /plugin install cartog@cartog-plugins</pre>
-        <p>Installs the agent skill, setup scripts, and MCP server config. Also available as a skill: <code>npx skills add jrollin/cartog</code></p>
+        <p>Installs the agent skill, setup scripts, and MCP server config.</p>
+      </div>
+      <div class="install-card" style="margin-top: 16px;">
+        <h3>Agent Skill</h3>
+        <pre>npx skills add jrollin/cartog</pre>
+        <p>Works with any agent runtime that supports the skills protocol.</p>
       </div>
     </div>
 
@@ -379,7 +384,7 @@ sudo mv cartog /usr/local/bin/</pre>
 <footer class="footer">
   <div class="container">
     <div class="footer-inner">
-      <span>cartog · MIT License · v0.7.0</span>
+      <span>cartog · MIT License · v0.8.1</span>
       <ul class="footer-links">
         <li><a href="https://github.com/jrollin/cartog">GitHub</a></li>
         <li><a href="https://crates.io/crates/cartog">crates.io</a></li>
