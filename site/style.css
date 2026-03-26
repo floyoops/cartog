@@ -293,6 +293,65 @@ section + section {
   color: var(--text-secondary);
 }
 
+/* ── Hero CTAs ───────────────────────────────────── */
+
+.hero-ctas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+.btn-github {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.btn-github:hover {
+  background: var(--bg-secondary);
+  border-color: var(--text-tertiary);
+  color: var(--text);
+}
+
+.btn-github .gh-stars-badge {
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.btn-secondary:hover {
+  color: var(--text);
+  border-color: var(--text-tertiary);
+}
+
 /* ── Terminal demo ───────────────────────────────── */
 
 .terminal {
@@ -366,6 +425,37 @@ section + section {
 
 /* ── Stats bar ───────────────────────────────────── */
 
+.stats-bar {
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 24px;
+}
+
+.stats-bar .container {
+  display: flex;
+  justify-content: center;
+  gap: 48px;
+  flex-wrap: wrap;
+}
+
+.stats-bar .stat-item {
+  text-align: center;
+}
+
+.stats-bar .stat-value {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+.stats-bar .stat-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
 .stats {
   padding: 60px 0;
 }
@@ -401,9 +491,9 @@ section + section {
 .feature-card {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 28px;
-  transition: border-color 0.2s;
+  border-top: 2px solid var(--accent);
+  border-radius: 8px;
+  padding: 24px;
 }
 
 .feature-card:hover {
@@ -620,6 +710,88 @@ td .badge {
   color: var(--text-secondary);
   margin-bottom: 28px;
   font-size: 16px;
+}
+
+/* ── How It Works ────────────────────────────────── */
+
+.how-it-works {
+  text-align: center;
+}
+
+.how-steps {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+  max-width: 760px;
+  margin: 40px auto 0;
+}
+
+.how-step {
+  flex: 1;
+  padding: 0 20px;
+  text-align: center;
+}
+
+.how-step-number {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 0 auto 12px;
+}
+
+.how-step-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.how-step code {
+  display: block;
+  font-size: 12px;
+  color: var(--green);
+  margin-bottom: 8px;
+}
+
+.how-step p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.how-arrow {
+  padding-top: 18px;
+  color: var(--border);
+  font-size: 20px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+@media (max-width: 600px) {
+  .how-steps {
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .how-arrow {
+    transform: rotate(90deg);
+    padding-top: 0;
+  }
+
+  .how-step {
+    padding: 0;
+    width: 100%;
+  }
 }
 
 /* ── Footer ──────────────────────────────────────── */
