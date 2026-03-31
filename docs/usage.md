@@ -2,7 +2,7 @@
 
 ## Setup
 
-Requires Rust 1.70+ (`rustup update` if needed).
+Requires Rust 1.77+ (`rustup update` if needed).
 
 ```bash
 cargo install cartog           # from crates.io
@@ -457,7 +457,7 @@ All clients need `cartog` on your `PATH` first:
 
 ```bash
 cargo install cartog            # latest version
-cargo install cartog@0.7.0      # specific version
+cargo install cartog@0.8.1      # specific version
 ```
 
 #### Claude Code

@@ -1,0 +1,25 @@
+[package]
+name = "cartog-indexer"
+description = "Code indexing and change detection for cartog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+cartog-core = { workspace = true }
+cartog-db = { workspace = true }
+cartog-languages = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+tracing = { workspace = true }
+walkdir = { workspace = true }
+cartog-lsp = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+lsp = ["dep:cartog-lsp"]

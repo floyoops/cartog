@@ -2,7 +2,7 @@
 
 ## Project
 
-cartog — code graph indexer for LLM coding agents. Single Rust binary, tree-sitter parsing, SQLite storage.
+cartog — code graph indexer for LLM coding agents. Cargo workspace (9 crates), tree-sitter parsing, SQLite storage.
 
 See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/tech.md) for architecture decisions, [docs/structure.md](docs/structure.md) for module layout, [docs/usage.md](docs/usage.md) for CLI commands and MCP/skill setup.
 
@@ -11,7 +11,7 @@ See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/
 ```bash
 cargo build              # debug build
 cargo build --release    # release build
-cargo test               # run all tests (294 tests)
+cargo test --workspace   # run all tests (380 tests across 9 crates)
 cargo fmt --check        # check formatting
 cargo clippy --all-targets -- -D warnings  # lint
 ```
@@ -46,19 +46,18 @@ Run `make check` before committing. Run `make eval-skill` after changing skill S
 See [docs/structure.md](docs/structure.md) for full directory tree and module responsibilities.
 
 ```
-main.rs → cli.rs (clap) → command handlers (sync)
-                         ↓
-              indexer.rs (walk + extract + store + symbol content)
-              ├── languages/*.rs (tree-sitter extractors)
-              ├── db.rs (SQLite: core schema + RAG schema)
-              └── types.rs (shared structs)
-
-         → Rag    → rag/*.rs (setup, embeddings, indexer, search, reranker)
-         → Watch  → watch.rs (debounced re-index + deferred RAG)
-         → Serve  → mcp.rs (MCP server over stdio, 12 tools)
+crates/cartog/         (binary — CLI dispatch, config)
+├── cartog-core        (Symbol, Edge, SymbolKind, detect_language)
+├── cartog-db          (SQLite: core + RAG schema, edge resolution)
+├── cartog-languages   (tree-sitter extractors, 8 languages)
+├── cartog-indexer     (walk + extract + store, Merkle hashing)
+├── cartog-rag         (embeddings, hybrid search, reranker)
+├── cartog-lsp         (optional LSP-based edge resolution)
+├── cartog-watch       (debounced re-index + deferred RAG)
+└── cartog-mcp         (MCP server over stdio, 12 tools)
 ```
 
-Each language extractor implements the `Extractor` trait from `src/languages/mod.rs`:
+Each language extractor implements the `Extractor` trait from `crates/cartog-languages/src/lib.rs`:
 ```rust
 fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult>
 ```
@@ -67,10 +66,11 @@ Returns `Vec<Symbol>` + `Vec<Edge>`. After all files are extracted, `db.resolve_
 
 ## Adding a New Language
 
-1. Add `tree-sitter-{lang}` to `Cargo.toml`
-2. Create `src/languages/{lang}.rs` implementing `Extractor`
-3. Register in `src/languages/mod.rs`: extension mapping + `get_extractor()` match arm
-4. Add tests using the same pattern as `python.rs` tests
+1. Add `tree-sitter-{lang}` to `[workspace.dependencies]` in root `Cargo.toml` and to `crates/cartog-languages/Cargo.toml`
+2. Create `crates/cartog-languages/src/{lang}.rs` implementing `Extractor`
+3. Register in `crates/cartog-languages/src/lib.rs`: module declaration + `get_extractor()` match arm
+4. Add extension mapping in `crates/cartog-core/src/lib.rs` `detect_language()`
+5. Add tests using the same pattern as `python.rs` tests
 
 ## CI/CD
 
@@ -113,7 +113,7 @@ After implementation, mark checklist items complete — the spec stays as a desi
 ## Current State
 
 - **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java
-- **CLI**: 11 commands + MCP server (12 tools: 10 core + 2 RAG)
+- **CLI**: 16 commands (13 top-level + 3 RAG subcommands) + MCP server (12 tools)
 - **Indexing**: incremental (git-based + SHA-256 + Merkle-tree symbol diffing), `--force` re-index. Stable symbol IDs (`file:kind:qualified_name`) survive line movements. Scoped edge resolution for changed files only
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
 - **Watch**: `cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding

@@ -196,24 +196,69 @@ name = "cartog"
 version = "0.8.1"
 dependencies = [
  "anyhow",
+ "cartog-core",
+ "cartog-db",
+ "cartog-indexer",
+ "cartog-languages",
+ "cartog-lsp",
+ "cartog-mcp",
+ "cartog-rag",
+ "cartog-watch",
  "clap",
  "criterion",
- "ctrlc",
- "fastembed",
- "notify",
- "notify-debouncer-mini",
- "rmcp",
- "rusqlite",
  "serde",
  "serde_json",
- "sha2",
- "sqlite-vec",
- "streaming-iterator",
  "tempfile",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "cartog-core"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "serde",
+]
+
+[[package]]
+name = "cartog-db"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "cartog-core",
+ "rusqlite",
+ "serde",
+ "sqlite-vec",
+ "tracing",
+]
+
+[[package]]
+name = "cartog-indexer"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "cartog-core",
+ "cartog-db",
+ "cartog-languages",
+ "cartog-lsp",
+ "serde",
+ "sha2",
+ "tempfile",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
+name = "cartog-languages"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "cartog-core",
+ "streaming-iterator",
+ "tracing",
  "tree-sitter",
  "tree-sitter-go",
  "tree-sitter-java",
@@ -222,8 +267,64 @@ dependencies = [
  "tree-sitter-ruby",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+]
+
+[[package]]
+name = "cartog-lsp"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "cartog-core",
+ "cartog-db",
+ "serde",
+ "serde_json",
+ "tracing",
  "url",
- "walkdir",
+]
+
+[[package]]
+name = "cartog-mcp"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "cartog-core",
+ "cartog-db",
+ "cartog-indexer",
+ "cartog-lsp",
+ "cartog-rag",
+ "cartog-watch",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "cartog-rag"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "cartog-core",
+ "cartog-db",
+ "fastembed",
+ "serde",
+ "tracing",
+]
+
+[[package]]
+name = "cartog-watch"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "cartog-core",
+ "cartog-db",
+ "cartog-indexer",
+ "cartog-rag",
+ "ctrlc",
+ "notify",
+ "notify-debouncer-mini",
+ "tracing",
 ]
 
 [[package]]

@@ -1,0 +1,22 @@
+[package]
+name = "cartog-languages"
+description = "Tree-sitter language extractors for cartog code graph"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+cartog-core = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tree-sitter = { workspace = true }
+streaming-iterator = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-javascript = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-go = { workspace = true }
+tree-sitter-ruby = { workspace = true }
+tree-sitter-java = { workspace = true }

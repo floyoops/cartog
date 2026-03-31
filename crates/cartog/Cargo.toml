@@ -1,0 +1,40 @@
+[package]
+name = "cartog"
+description = "Code graph indexer for LLM coding agents. Map your codebase, navigate by graph."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["code-analysis", "tree-sitter", "graph", "llm", "code-intelligence"]
+categories = ["development-tools", "command-line-utilities"]
+
+[dependencies]
+cartog-core = { workspace = true }
+cartog-db = { workspace = true }
+cartog-indexer = { workspace = true }
+cartog-languages = { workspace = true }
+cartog-rag = { workspace = true }
+cartog-lsp = { workspace = true, optional = true }
+cartog-watch = { workspace = true }
+cartog-mcp = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[features]
+default = []
+lsp = ["dep:cartog-lsp", "cartog-indexer/lsp", "cartog-mcp/lsp"]
+
+[dev-dependencies]
+criterion = { workspace = true }
+tempfile = { workspace = true }
+
+[[bench]]
+name = "queries"
+harness = false
