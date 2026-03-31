@@ -10,7 +10,7 @@ license = "MIT"
 repository = "https://github.com/jrollin/cartog"
 
 [workspace.dependencies]
-# Internal crates
+# Internal crates (path-only, not published independently)
 cartog-core = { path = "crates/cartog-core" }
 cartog-db = { path = "crates/cartog-db" }
 cartog-languages = { path = "crates/cartog-languages" }
