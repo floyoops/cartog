@@ -1,0 +1,18 @@
+[package]
+name = "cartog-lsp"
+description = "LSP-based edge resolution for cartog code graph"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+cartog-core = { workspace = true }
+cartog-db = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }

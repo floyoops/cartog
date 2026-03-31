@@ -1,0 +1,17 @@
+[package]
+name = "cartog-db"
+description = "SQLite persistence layer for cartog code graph"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+cartog-core = { workspace = true }
+anyhow = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+sqlite-vec = { workspace = true }
+tracing = { workspace = true }

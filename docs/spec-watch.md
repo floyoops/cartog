@@ -157,8 +157,8 @@ Then an initial incremental index runs before entering watch mode
 All items completed.
 
 ### Dependencies
-- [x] Add `notify = "7"` to `Cargo.toml` (debounced file watcher)
-- [x] Add `notify-debouncer-mini = "0.5"` to `Cargo.toml` (debounce layer)
+- [x] Add `notify = "8"` to `Cargo.toml` (debounced file watcher)
+- [x] Add `notify-debouncer-mini = "0.7"` to `Cargo.toml` (debounce layer)
 - [x] Add `ctrlc = "3"` to `Cargo.toml` (graceful Ctrl+C handling)
 - [x] ~~`humantime`~~ — dropped in favor of `u64` seconds args (simpler, no extra dep)
 
@@ -167,7 +167,7 @@ All items completed.
 - [x] Add `--watch` and `--rag` flags to `Serve` variant in `cli.rs`
 - [x] Wire up both in `main.rs` match arm
 
-### Core: `src/watch.rs`
+### Core: `crates/cartog-watch/src/lib.rs`
 - [x] Create `watch.rs` module with `WatchConfig`, `WatchHandle`, `run_watch()`, `spawn_watch()`
 - [x] `notify_debouncer_mini` for debounced file events
 - [x] `is_relevant_path()` filter using `detect_language()` + `is_ignored_dirname()`

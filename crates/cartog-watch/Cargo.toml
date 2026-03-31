@@ -1,0 +1,20 @@
+[package]
+name = "cartog-watch"
+description = "File system watcher with auto-reindexing for cartog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+cartog-core = { workspace = true }
+cartog-db = { workspace = true }
+cartog-indexer = { workspace = true }
+cartog-rag = { workspace = true }
+anyhow = { workspace = true }
+ctrlc = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }
+tracing = { workspace = true }

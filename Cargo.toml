@@ -1,15 +1,33 @@
-[package]
-name = "cartog"
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
 version = "0.8.1"
 edition = "2021"
 rust-version = "1.77"
-description = "Code graph indexer for LLM coding agents. Map your codebase, navigate by graph."
 license = "MIT"
 repository = "https://github.com/jrollin/cartog"
-keywords = ["code-analysis", "tree-sitter", "graph", "llm", "code-intelligence"]
-categories = ["development-tools", "command-line-utilities"]
 
-[dependencies]
+[workspace.dependencies]
+# Internal crates (path-only, not published independently)
+cartog-core = { path = "crates/cartog-core" }
+cartog-db = { path = "crates/cartog-db" }
+cartog-languages = { path = "crates/cartog-languages" }
+cartog-indexer = { path = "crates/cartog-indexer" }
+cartog-rag = { path = "crates/cartog-rag" }
+cartog-lsp = { path = "crates/cartog-lsp" }
+cartog-watch = { path = "crates/cartog-watch" }
+cartog-mcp = { path = "crates/cartog-mcp" }
+
+# Shared external dependencies
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
+sqlite-vec = "0.1"
 tree-sitter = "0.26"
 streaming-iterator = "0.1"
 tree-sitter-python = "0.25"
@@ -19,41 +37,19 @@ tree-sitter-rust = "0.24"
 tree-sitter-go = "0.25"
 tree-sitter-ruby = "0.23"
 tree-sitter-java = "0.23"
-rusqlite = { version = "0.39", features = ["bundled"] }
-clap = { version = "4", features = ["derive", "env"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = { version = "0.8", default-features = false, features = ["parse"] }
 walkdir = "2"
 sha2 = "0.10"
 notify = "8"
 notify-debouncer-mini = "0.7"
 ctrlc = "3"
-anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+fastembed = { version = "5", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
 rmcp = { version = "1.2", features = ["server", "transport-io"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-
-# RAG pipeline: semantic code search (ONNX Runtime via fastembed)
-# default-features=false drops image-models (image embedding support we don't use)
-fastembed = { version = "5", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
-sqlite-vec = "0.1"
-
-# LSP-based edge resolution (opt-in)
-url = { version = "2", optional = true }
-
-[features]
-default = []
-lsp = ["url"]
-
-[dev-dependencies]
+url = "2"
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
-
-[[bench]]
-name = "queries"
-harness = false
 
 [profile.release]
 lto = "thin"

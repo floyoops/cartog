@@ -1,0 +1,55 @@
+# cartog-languages
+
+Tree-sitter language extractors for the cartog code graph.
+
+## Overview
+
+Parses source code using tree-sitter grammars and extracts symbols (functions, classes, methods, etc.) and edges (calls, imports, inherits, etc.). Each language has a dedicated extractor implementing the `Extractor` trait.
+
+## How it works
+
+### Extractor trait
+
+```rust
+pub trait Extractor: Send {
+    fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult>;
+}
+```
+
+Takes `&mut self` so implementations can reuse their internal `tree_sitter::Parser` across files, avoiding per-file allocation overhead.
+
+### Tree-sitter S-expression queries
+
+Extractors use **declarative S-expression queries** (not cursor walking) to match AST patterns. Queries are compiled once in the extractor's `new()` constructor and reused on every `extract()` call via the `CachedQuery` helper.
+
+Example (Python call extraction):
+
+```scheme
+(call function: [(identifier) (attribute)] @callee)
+```
+
+Named captures (`@callee`, `@exception_type`, etc.) identify the matched nodes for symbol/edge construction.
+
+### Nested scope filtering
+
+`is_inside_nested_scope()` walks up the AST from a node to a given root node, checking if any ancestor in between matches a set of scope kinds (e.g., `function_definition`, `class_definition`). This prevents extracting edges from nested function bodies as if they belong to the outer scope.
+
+### Supported languages
+
+Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java.
+
+`js_shared` contains extraction logic shared between JavaScript and TypeScript/TSX extractors.
+
+## Public API
+
+| Export | Description |
+|--------|-------------|
+| `Extractor` | Trait for language-specific extraction |
+| `ExtractionResult` | Symbols + edges extracted from a file |
+| `get_extractor()` | Factory: language name → `Box<dyn Extractor>` |
+| `detect_language()` | Re-export from `cartog-core` |
+| `python`, `go`, `java`, ... | Per-language extractor modules |
+
+## Crate dependencies
+
+`cartog-core`

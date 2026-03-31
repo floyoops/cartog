@@ -1,0 +1,17 @@
+[package]
+name = "cartog-rag"
+description = "Semantic search and RAG pipeline for cartog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+cartog-core = { workspace = true }
+cartog-db = { workspace = true }
+anyhow = { workspace = true }
+fastembed = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }

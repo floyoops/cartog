@@ -1,0 +1,13 @@
+[package]
+name = "cartog-core"
+description = "Core types and utilities for cartog code graph indexer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
