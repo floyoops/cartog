@@ -71,7 +71,7 @@ This drives two key decisions:
 
 1. **Small embedding model** — BGE-small-en-v1.5 quantized (384 dimensions). 2-3x faster than full precision with negligible quality loss for code symbol matching. Outputs are L2-normalized, enabling L2 distance in sqlite-vec (equivalent to cosine ranking). Trade-off: English-only model — non-English identifiers/comments get degraded embeddings.
 
-2. **AST-aware embedding text** — Header + signature + significant body lines (skipping blanks, comments, closing braces) up to ~200 tokens (~800 bytes):
+2. **AST-aware embedding text** — For code: header + signature + significant body lines (skipping blanks, comments, closing braces) up to ~200 tokens (~800 bytes):
    ```
    // File: auth/tokens.py | function validate_token
    def validate_token(token: str) -> bool:
@@ -79,11 +79,20 @@ This drives two key decisions:
            raise TokenError('expired')
        return lookup_session(token.session_id)
    ```
-   This captures the "what does this function do" signal (~100-200 tokens) while staying within the model's 512-token window. Full source content is still stored separately for FTS5 keyword search and cross-encoder re-ranking. Decorators/annotations are kept (they carry semantic meaning like `@login_required`).
+   For Markdown documents: heading text in the header field + section body:
+   ```
+   // File: docs/design.md
+   // Type: document
+   // Name: Authentication
+   Users authenticate via JWT tokens. The server validates
+   the token signature and checks expiration...
+   ```
+   This captures the "what does this function/section do" signal (~100-200 tokens) while staying within the model's 512-token window. Full source content is still stored separately for FTS5 keyword search and cross-encoder re-ranking. Decorators/annotations are kept (they carry semantic meaning like `@login_required`).
 
 ### What gets embedded (and what doesn't)
 
 - **Functions, classes, methods**: embedded with AST-aware text (header + significant body lines)
+- **Markdown documents**: chunked by heading, each section embedded with heading in header field. Large sections sub-chunked at paragraph boundaries (~1500 bytes). Files without headings use fixed-size paragraph chunking.
 - **Variables**: excluded — too numerous, low signal for semantic search
 - **Imports**: excluded at content extraction time — they exist as graph edges, not search targets
 

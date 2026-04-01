@@ -63,9 +63,15 @@ fn output<T: Serialize>(
 /// Build or rebuild the code graph index.
 pub fn cmd_index(db_path: &Path, path: &str, force: bool, lsp: bool, json: bool) -> Result<()> {
     let root = Path::new(path);
+    if !json {
+        eprint!("Indexing {path}...");
+    }
     let db = open_db(db_path)?;
 
     let result = indexer::index_directory(&db, root, force, lsp)?;
+    if !json {
+        eprintln!(" done");
+    }
 
     output(&result, json, None, |r| {
         let lsp_part = if r.edges_lsp_resolved > 0 {
@@ -591,7 +597,11 @@ pub fn cmd_rag_search(
     token_budget: Option<u32>,
 ) -> Result<()> {
     let db = open_db(db_path)?;
-    let kind_filter = kind.map(cartog_core::SymbolKind::from);
+    let kind_filter = match kind {
+        Some(SymbolKindFilter::All) => rag::search::KindFilter::All,
+        Some(k) => rag::search::KindFilter::Exact(cartog_core::SymbolKind::from(k)),
+        None => rag::search::KindFilter::CodeOnly,
+    };
 
     let search_result = rag::search::hybrid_search(&db, query, limit, kind_filter)?;
     let query = query.to_string();

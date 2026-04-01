@@ -12,7 +12,7 @@ Watches a directory for source file changes and triggers incremental re-indexing
 
 Uses `notify-debouncer-mini` to batch rapid filesystem events into a single re-index call. Default debounce window is 2 seconds.
 
-Events are filtered to **relevant paths only**: the file must have a supported language extension (via `detect_language`) and not be under an ignored directory (`.git`, `node_modules`, `target`, etc.).
+Events are filtered to **relevant paths only**: the file must have a supported extension (code or Markdown, via `detect_language`) and not be under an ignored directory (`.git`, `node_modules`, `target`, etc.).
 
 ### RAG timer
 

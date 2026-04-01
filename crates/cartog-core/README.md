@@ -30,14 +30,14 @@ This ID is **invariant to line movements** within a file — renaming or moving 
 
 ### Language detection
 
-`detect_language()` maps file extensions to language names (e.g., `.py` → `"python"`, `.tsx` → `"tsx"`). It's a pure function with no tree-sitter dependency, which allows lightweight crates like `cartog-watch` and `cartog-lsp` to filter files without pulling in grammar crates.
+`detect_language()` maps file extensions to language names (e.g., `.py` → `"python"`, `.tsx` → `"tsx"`, `.md` → `"markdown"`). It's a pure function with no tree-sitter dependency, which allows lightweight crates like `cartog-watch` and `cartog-lsp` to filter files without pulling in grammar crates.
 
 ## Public API
 
 | Export | Description |
 |--------|-------------|
 | `Symbol` | Code symbol with stable ID, kind, location, signature, visibility |
-| `SymbolKind` | Function, Class, Method, Variable, Import, Interface, Enum, TypeAlias, Trait, Module |
+| `SymbolKind` | Function, Class, Method, Variable, Import, Interface, Enum, TypeAlias, Trait, Module, Document |
 | `Edge` | Relationship between symbols (source → target) |
 | `EdgeKind` | Calls, Imports, Inherits, References, Raises, Implements, TypeOf |
 | `Visibility` | Public, Private, Protected |

@@ -10,6 +10,7 @@ pub mod go;
 pub mod java;
 pub mod javascript;
 mod js_shared;
+pub mod markdown;
 pub mod python;
 pub(crate) mod queries;
 pub mod ruby;
@@ -54,6 +55,7 @@ pub fn get_extractor(language: &str) -> Option<Box<dyn Extractor>> {
         "go" => Some(Box::new(go::GoExtractor::new())),
         "ruby" => Some(Box::new(ruby::RubyExtractor::new())),
         "java" => Some(Box::new(java::JavaExtractor::new())),
+        "markdown" => Some(Box::new(markdown::MarkdownExtractor::new())),
         _ => None,
     }
 }
@@ -72,6 +74,7 @@ mod tests {
         assert!(get_extractor("go").is_some());
         assert!(get_extractor("ruby").is_some());
         assert!(get_extractor("java").is_some());
+        assert!(get_extractor("markdown").is_some());
         assert!(get_extractor("unknown").is_none());
     }
 }

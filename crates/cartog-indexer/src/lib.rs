@@ -1208,4 +1208,85 @@ def standalone():
             "hello ID stable after sibling removal"
         );
     }
+
+    // ── Integration test: Markdown document indexing ──
+
+    #[test]
+    fn test_markdown_indexing_end_to_end() {
+        use cartog_db::Database;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("project");
+        std::fs::create_dir(&dir).unwrap();
+
+        let md_file = dir.join("design.md");
+        std::fs::write(
+            &md_file,
+            r#"# Architecture
+
+This document describes the system architecture.
+
+## Authentication
+
+Users authenticate via JWT tokens. The server validates
+the token signature and checks expiration before granting access.
+
+## Database
+
+We use PostgreSQL with connection pooling via pgbouncer.
+"#,
+        )
+        .unwrap();
+
+        let db = Database::open_memory().unwrap();
+        let result = index_directory(&db, &dir, false, false).unwrap();
+
+        assert_eq!(result.files_indexed, 1);
+        assert!(result.symbols_added >= 3, "should have at least 3 sections");
+
+        // Verify file entry
+        let file = db.get_file("design.md").unwrap();
+        assert!(file.is_some());
+        let file = file.unwrap();
+        assert_eq!(file.language, "markdown");
+
+        // Verify Document symbols exist
+        let outline = db.outline("design.md").unwrap();
+        assert!(
+            outline.len() >= 3,
+            "should have Architecture, Authentication, Database sections"
+        );
+
+        let names: Vec<&str> = outline.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"Architecture"),
+            "missing Architecture section"
+        );
+        assert!(
+            names.contains(&"Authentication"),
+            "missing Authentication section"
+        );
+        assert!(names.contains(&"Database"), "missing Database section");
+
+        for sym in &outline {
+            assert_eq!(sym.kind, cartog_core::SymbolKind::Document);
+        }
+
+        // Verify symbol_content is populated
+        let auth_sym = outline.iter().find(|s| s.name == "Authentication").unwrap();
+        let content = db.get_symbol_content(&auth_sym.id).unwrap();
+        assert!(
+            content.is_some(),
+            "symbol_content should exist for document section"
+        );
+        let (text, header) = content.unwrap();
+        assert!(
+            text.contains("JWT tokens"),
+            "content should include section body"
+        );
+        assert!(
+            header.contains("Authentication"),
+            "header should include section name"
+        );
+    }
 }

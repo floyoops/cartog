@@ -117,6 +117,7 @@ pub enum SymbolKind {
     TypeAlias,
     Trait,
     Module,
+    Document,
 }
 
 impl SymbolKind {
@@ -132,6 +133,7 @@ impl SymbolKind {
             Self::TypeAlias => "type_alias",
             Self::Trait => "trait",
             Self::Module => "module",
+            Self::Document => "document",
         }
     }
 }
@@ -151,6 +153,7 @@ impl std::str::FromStr for SymbolKind {
             "type_alias" => Ok(Self::TypeAlias),
             "trait" => Ok(Self::Trait),
             "module" => Ok(Self::Module),
+            "document" => Ok(Self::Document),
             _ => Err(anyhow::anyhow!("unknown symbol kind: '{s}'")),
         }
     }
@@ -317,6 +320,7 @@ pub fn detect_language(path: &Path) -> Option<&'static str> {
         "go" => Some("go"),
         "rb" => Some("ruby"),
         "java" => Some("java"),
+        "md" => Some("markdown"),
         _ => None,
     }
 }
@@ -392,7 +396,7 @@ mod tests {
         assert_eq!(detect_language(Path::new("main.rs")), Some("rust"));
         assert_eq!(detect_language(Path::new("server.go")), Some("go"));
         assert_eq!(detect_language(Path::new("app.rb")), Some("ruby"));
-        assert_eq!(detect_language(Path::new("README.md")), None);
+        assert_eq!(detect_language(Path::new("README.md")), Some("markdown"));
         assert_eq!(detect_language(Path::new("Makefile")), None);
         assert_eq!(detect_language(Path::new("Main.java")), Some("java"));
     }

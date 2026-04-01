@@ -90,10 +90,20 @@
 - Javadoc (`/** ... */`) and line comment (`//`) docstrings
 - Visibility: `public`, `private`, `protected`; package-private (no modifier) → `Public`
 
+### Markdown (.md)
+- Document sections chunked by heading (`#`, `##`, `###`, etc.)
+- Each heading section becomes a `Document` symbol
+- Large sections sub-chunked at paragraph boundaries (~1500 bytes)
+- Files without headings use fixed-size paragraph chunking
+- No edges — documents are indexed for semantic/keyword search only
+- Preamble text before the first heading is captured as a "preamble" symbol
+
 ## Extraction Notes
 
-Each language extractor walks the tree-sitter CST and produces:
+Code language extractors walk the tree-sitter CST and produce:
 - **Symbols**: functions, classes, methods, variables, imports
 - **Edges**: calls, imports, inherits, references, raises
+
+The Markdown extractor uses plain string splitting (no tree-sitter) to chunk documents by heading boundaries.
 
 Edge resolution is heuristic (exact name match, scope-aware). Priority: same file > same directory > project-wide unique match.

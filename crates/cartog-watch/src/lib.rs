@@ -411,9 +411,13 @@ mod tests {
     }
 
     #[test]
-    fn test_irrelevant_markdown_file() {
+    fn test_relevant_markdown_file() {
         let root = PathBuf::from("/project");
-        assert!(!is_relevant_path(Path::new("/project/README.md"), &root));
+        assert!(is_relevant_path(Path::new("/project/README.md"), &root));
+        assert!(is_relevant_path(
+            Path::new("/project/docs/design.md"),
+            &root
+        ));
     }
 
     #[test]

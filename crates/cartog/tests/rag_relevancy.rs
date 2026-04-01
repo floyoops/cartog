@@ -12,7 +12,7 @@ use std::path::Path;
 
 use cartog::db::Database;
 use cartog::indexer::index_directory;
-use cartog::rag::search::hybrid_search;
+use cartog::rag::search::{hybrid_search, KindFilter};
 
 /// A single relevancy test case.
 struct QueryCase {
@@ -193,7 +193,7 @@ fn rag_relevancy_benchmark() {
     let n = cases.len() as f64;
 
     for case in &cases {
-        let result = hybrid_search(&db, case.query, case.k as u32, None)
+        let result = hybrid_search(&db, case.query, case.k as u32, KindFilter::All)
             .unwrap_or_else(|e| panic!("search failed for '{}': {e}", case.query));
 
         let names: Vec<String> = result
@@ -334,7 +334,7 @@ fn java_rag_relevancy_benchmark() {
     let n = cases.len() as f64;
 
     for case in &cases {
-        let result = hybrid_search(&db, case.query, case.k as u32, None)
+        let result = hybrid_search(&db, case.query, case.k as u32, KindFilter::All)
             .unwrap_or_else(|e| panic!("search failed for '{}': {e}", case.query));
 
         let names: Vec<String> = result
