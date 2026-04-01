@@ -127,6 +127,6 @@ jobs:
             cargo publish -p "$crate" --no-verify
             if [ "$crate" != "cartog" ]; then
               echo "Waiting for crates.io index to update..."
-              sleep 30
+              sleep 60
             fi
           done
