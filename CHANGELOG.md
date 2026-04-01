@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.8.1] - 2026-03-25
+## [0.9.0] - 2026-04-01
 
 ### Bug Fixes
 
@@ -17,6 +17,10 @@
 - Embedding chunking review — UTF-8 safety, false positive filters, docs ([`0907fee`](https://github.com/jrollin/cartog/commit/0907fee98854aab82f0e6d8b166eb1faa42abe1a))
 - **plugin**: Restore marketplace.json with distinct name ([`c477286`](https://github.com/jrollin/cartog/commit/c477286cad93682db8bd4bf6c65702693ab0fe7c))
 - Let llm find skill direcotry ([`1505530`](https://github.com/jrollin/cartog/commit/15055309b8c1cfd56f55edd182d6927e9d3461b3))
+- **site**: Restore feature-card transition, fix hover border-top override, revert unauthorized padding/radius ([`cd99119`](https://github.com/jrollin/cartog/commit/cd991197402ae8a33ff6c2eaea4d22f4736c50e1))
+- **site**: Remove dead stats CSS rules, remove redundant install-options grid override ([`5f2078a`](https://github.com/jrollin/cartog/commit/5f2078a3e06ac73dcded3b3b5ed57d0c13036545))
+- **workspace**: Mark library crates as publish = false, fix cargo-deny policy ([`53ae662`](https://github.com/jrollin/cartog/commit/53ae662d636eeea97676f008492fbf972c973844))
+- **fixtures**: Add standalone workspace to Rust fixture ([`072bf1c`](https://github.com/jrollin/cartog/commit/072bf1c469fa725770215f4c596aa8d20a8ec66c))
 
 ### Documentation
 
@@ -46,6 +50,13 @@
 - **site**: Add landing page and docs for GitHub Pages ([`3b4e9ef`](https://github.com/jrollin/cartog/commit/3b4e9ef75324c847f051f0e40f591ee80838eccb))
 - **config**: Configurable database path via TOML config, --db flag, and env var ([`69bcb06`](https://github.com/jrollin/cartog/commit/69bcb067293cc8dad9262c08c23ffe110d1c79a5))
 - **index**: Incremental AST reindexing with stable IDs and Merkle-tree diffing ([`2a9c3fe`](https://github.com/jrollin/cartog/commit/2a9c3fe1bcfda8c9db778d8d48940046e0017ca1))
+- **site**: Rewrite hero — eyebrow, benefit-first h1, grouped install widget, CTA buttons ([`464f718`](https://github.com/jrollin/cartog/commit/464f71889c5474b189128790d571ce7fe6f0854f))
+- **site**: Replace stats section with compact stats bar below hero ([`ecbb769`](https://github.com/jrollin/cartog/commit/ecbb769fee88e07d87fd6520b531a98ed062a148))
+- **site**: Add How It Works 3-step section ([`a59835c`](https://github.com/jrollin/cartog/commit/a59835c89bfe68de6e14e3abd4b31c1af1deccbe))
+- **site**: Update features heading, add npx skills to install section, bump version to v0.8.1 ([`ca7ca2c`](https://github.com/jrollin/cartog/commit/ca7ca2c4f02c2582cd07252ec3e3f53bbf92cac3))
+- **site**: Add live GitHub stars fetch with silent fallback ([`6865a76`](https://github.com/jrollin/cartog/commit/6865a769741499a5bbc7e5b8923289c4f0f79914))
+- **site**: Redesign landing page with visual polish and CI optimization ([`3d4d2ae`](https://github.com/jrollin/cartog/commit/3d4d2aeb3d065e35861a5bfc2287ba0c71e4dd8b))
+- **rag**: Add Markdown document support with code-only default ([`7f3b234`](https://github.com/jrollin/cartog/commit/7f3b234fee72bf6fc0e9fb94de95045c64754033))
 
 ### Miscellaneous
 
@@ -56,6 +67,11 @@
 - **ci**: Update cargo deny config ([`39bd314`](https://github.com/jrollin/cartog/commit/39bd3145068d7108759edad8226f8d426c7a3c4b))
 - **deps**: Upgrade tree-sitter, notify, rusqlite, rmcp to latest ([`c00701b`](https://github.com/jrollin/cartog/commit/c00701b22c1264c42e12cdd1e1f640287e6378a6))
 - **plugin**: Remove marketplace.json and add metadata to plugin.json ([`3fc95e5`](https://github.com/jrollin/cartog/commit/3fc95e50bdd816d43c8dc02281e832dbf21c78ad))
+- **github**: Add community health files ([`6c247c2`](https://github.com/jrollin/cartog/commit/6c247c282db4b2f5094580425c2fcb2032576e03))
+
+### Refactor
+
+- Split single crate into Cargo workspace with 9 crates ([`8184e8e`](https://github.com/jrollin/cartog/commit/8184e8eb52f04fc7b8a70e1dd3bc4b3ea72d3b63))
 
 ## [0.3.1] - 2026-02-26
 
