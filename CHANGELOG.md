@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.9.1] - 2026-04-01
+## [0.9.2] - 2026-04-01
 
 ### Bug Fixes
 
@@ -22,6 +22,7 @@
 - **workspace**: Mark library crates as publish = false, fix cargo-deny policy ([`53ae662`](https://github.com/jrollin/cartog/commit/53ae662d636eeea97676f008492fbf972c973844))
 - **fixtures**: Add standalone workspace to Rust fixture ([`072bf1c`](https://github.com/jrollin/cartog/commit/072bf1c469fa725770215f4c596aa8d20a8ec66c))
 - **publish**: Add version to workspace deps and fix release pipeline ([`4b516dd`](https://github.com/jrollin/cartog/commit/4b516dd81ae0023139bc04e65fc3e8afc6aa71a8))
+- **publish**: Publish all workspace crates in dependency order ([`a724b96`](https://github.com/jrollin/cartog/commit/a724b9662cf48581dbad30b1324310e7a11ce834))
 
 ### Documentation
 
