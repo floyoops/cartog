@@ -37,6 +37,7 @@ Measured across 13 scenarios, 5 languages. Best gains on call chain tracing (88%
 - **MCP server**: `cartog serve` exposes 12 tools over stdio. Plug into any MCP-compatible client.
 - **100% local**: tree-sitter parsing, SQLite storage, ONNX embeddings. No API keys, no telemetry. Code never leaves your machine.
 - **Dual search**: keyword search (sub-ms, symbol names) + semantic search (natural language, ~300ms). Run both when unsure.
+- **Document indexing**: Markdown files (`.md`) are indexed alongside code. Use `--kind document` for docs or `--kind all` for both code and docs.
 
 ## Differentiation
 

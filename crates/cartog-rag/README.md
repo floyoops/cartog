@@ -4,7 +4,9 @@ Semantic search and RAG pipeline for cartog.
 
 ## Overview
 
-Provides embedding-based code search on top of the cartog graph database. Combines keyword search (FTS5/BM25) with vector similarity (sqlite-vec) and cross-encoder reranking for high-quality results.
+Provides embedding-based search on top of the cartog graph database. Combines keyword search (FTS5/BM25) with vector similarity (sqlite-vec) and cross-encoder reranking for high-quality results.
+
+Indexes both **code symbols** (functions, classes, methods) and **Markdown documents** (chunked by heading). Documentation and code are searchable side-by-side with the same hybrid pipeline.
 
 ## How it works
 

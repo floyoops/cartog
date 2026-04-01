@@ -8,6 +8,17 @@ use std::sync::Mutex;
 use cartog_core::{Symbol, SymbolKind};
 use cartog_db::Database;
 
+/// Filter for symbol kinds in search results.
+#[derive(Debug, Clone)]
+pub enum KindFilter {
+    /// Return only symbols of this specific kind.
+    Exact(SymbolKind),
+    /// Return all symbols including documents.
+    All,
+    /// Return code symbols only (exclude documents). Default for rag search.
+    CodeOnly,
+}
+
 use super::embeddings::{embedding_to_bytes, EmbeddingEngine};
 use super::reranker::CrossEncoderEngine;
 
@@ -118,7 +129,7 @@ pub fn hybrid_search(
     db: &Database,
     query: &str,
     limit: u32,
-    kind_filter: Option<SymbolKind>,
+    kind_filter: KindFilter,
 ) -> Result<HybridSearchResult> {
     let retrieval_limit = (limit * 3).max(20); // Over-retrieve for better merge
 
@@ -205,10 +216,18 @@ pub fn hybrid_search(
         if results.len() >= limit as usize {
             break;
         }
-        if let Some(ref filter) = kind_filter {
-            if &candidate.symbol.kind != filter {
-                continue;
+        match &kind_filter {
+            KindFilter::Exact(k) => {
+                if &candidate.symbol.kind != k {
+                    continue;
+                }
             }
+            KindFilter::CodeOnly => {
+                if candidate.symbol.kind == SymbolKind::Document {
+                    continue;
+                }
+            }
+            KindFilter::All => {}
         }
         results.push(candidate);
     }
@@ -494,7 +513,7 @@ mod tests {
         seed_python_corpus(&db);
 
         // "validate token" should rank validate_token #1 (both terms in name+content)
-        let result = hybrid_search(&db, "validate token", 10, None).unwrap();
+        let result = hybrid_search(&db, "validate token", 10, KindFilter::All).unwrap();
         assert!(result.fts_count > 0, "FTS5 should find results");
         assert_eq!(result.vec_count, 0, "no embeddings → no vector results");
         assert_eq!(result.results[0].symbol.name, "validate_token");
@@ -513,7 +532,7 @@ mod tests {
         }
 
         // "authenticate" should find AuthService (content match)
-        let result = hybrid_search(&db, "authenticate", 10, None).unwrap();
+        let result = hybrid_search(&db, "authenticate", 10, KindFilter::All).unwrap();
         assert_eq!(result.results[0].symbol.name, "AuthService");
 
         // send_email should NOT appear for an auth-related query
@@ -557,7 +576,7 @@ mod tests {
         );
 
         // "connect" matches DatabaseConnection's content; the others don't mention "connect"
-        let result = hybrid_search(&db, "connect", 10, None).unwrap();
+        let result = hybrid_search(&db, "connect", 10, KindFilter::All).unwrap();
         assert_eq!(result.results[0].symbol.name, "DatabaseConnection");
         assert_eq!(
             result.results.len(),
@@ -566,7 +585,7 @@ mod tests {
         );
 
         // "router" should rank createRouter #1
-        let result = hybrid_search(&db, "router", 10, None).unwrap();
+        let result = hybrid_search(&db, "router", 10, KindFilter::All).unwrap();
         assert_eq!(result.results[0].symbol.name, "createRouter");
     }
 
@@ -599,15 +618,15 @@ mod tests {
         );
 
         // "extract symbols" — both terms in extract's content; Database/resolve_edges don't have "extract"
-        let result = hybrid_search(&db, "extract symbols", 10, None).unwrap();
+        let result = hybrid_search(&db, "extract symbols", 10, KindFilter::All).unwrap();
         assert_eq!(result.results[0].symbol.name, "extract");
 
         // "resolve edges" — only resolve_edges has both terms
-        let result = hybrid_search(&db, "resolve edges", 10, None).unwrap();
+        let result = hybrid_search(&db, "resolve edges", 10, KindFilter::All).unwrap();
         assert_eq!(result.results[0].symbol.name, "resolve_edges");
 
         // "Database" should not return extract or resolve_edges as #1
-        let result = hybrid_search(&db, "Database", 10, None).unwrap();
+        let result = hybrid_search(&db, "Database", 10, KindFilter::All).unwrap();
         assert_eq!(result.results[0].symbol.name, "Database");
     }
 
@@ -632,7 +651,7 @@ mod tests {
         );
 
         // "handle request" — HandleRequest has both terms in name+content
-        let result = hybrid_search(&db, "handle request", 10, None).unwrap();
+        let result = hybrid_search(&db, "handle request", 10, KindFilter::All).unwrap();
         assert_eq!(result.results[0].symbol.name, "HandleRequest");
 
         // Repository should not appear for "handle request" (no shared terms)
@@ -665,7 +684,7 @@ mod tests {
         );
 
         // "session" — SessionManager has it in name+content, migrate doesn't
-        let result = hybrid_search(&db, "session", 10, None).unwrap();
+        let result = hybrid_search(&db, "session", 10, KindFilter::All).unwrap();
         assert_eq!(result.results[0].symbol.name, "SessionManager");
         let names: Vec<&str> = result
             .results
@@ -678,7 +697,7 @@ mod tests {
         );
 
         // "migrate" — exact name match
-        let result = hybrid_search(&db, "migrate", 10, None).unwrap();
+        let result = hybrid_search(&db, "migrate", 10, KindFilter::All).unwrap();
         assert_eq!(result.results[0].symbol.name, "migrate");
     }
 
@@ -690,7 +709,7 @@ mod tests {
         seed_python_corpus(&db);
 
         // "token" appears in validate_token and generate_token content, NOT in send_email
-        let result = hybrid_search(&db, "token", 10, None).unwrap();
+        let result = hybrid_search(&db, "token", 10, KindFilter::All).unwrap();
         let names: Vec<&str> = result
             .results
             .iter()
@@ -718,7 +737,7 @@ mod tests {
         // "validate token" as a phrase matches validate_token exactly (FTS5 splits
         // underscores into separate tokens). generate_token doesn't match the phrase
         // because "validate" is not in its content.
-        let result = hybrid_search(&db, "validate token", 10, None).unwrap();
+        let result = hybrid_search(&db, "validate token", 10, KindFilter::All).unwrap();
         assert_eq!(
             result.results[0].symbol.name, "validate_token",
             "symbol matching both terms as phrase should rank #1"
@@ -726,7 +745,7 @@ mod tests {
 
         // Now test OR ranking: "generate token" — generate_token and AuthService both
         // contain "generate" and "token". Both should appear in top results.
-        let result = hybrid_search(&db, "generate token", 10, None).unwrap();
+        let result = hybrid_search(&db, "generate token", 10, KindFilter::All).unwrap();
         let top_names: Vec<&str> = result
             .results
             .iter()
@@ -768,7 +787,7 @@ mod tests {
         );
 
         // "database" matches via normalized_name column ("database connection")
-        let result = hybrid_search(&db, "database", 10, None).unwrap();
+        let result = hybrid_search(&db, "database", 10, KindFilter::All).unwrap();
         assert_eq!(
             result.results.len(),
             1,
@@ -798,7 +817,7 @@ mod tests {
         );
 
         // "validate token" as phrase matches normalized_name "validate token" exactly
-        let result = hybrid_search(&db, "validate token", 10, None).unwrap();
+        let result = hybrid_search(&db, "validate token", 10, KindFilter::All).unwrap();
         assert!(
             !result.results.is_empty(),
             "phrase 'validate token' should match validateToken via normalized_name"
@@ -818,7 +837,7 @@ mod tests {
             "TOKEN_EXPIRY = 3600",
         );
 
-        let result = hybrid_search(&db, "token expiry", 10, None).unwrap();
+        let result = hybrid_search(&db, "token expiry", 10, KindFilter::All).unwrap();
         assert_eq!(
             result.results.len(),
             1,
@@ -841,7 +860,7 @@ mod tests {
         // FTS5 is token-based, not substring-based.
         // "valid" does NOT match "validate" or "validate_token".
         // Use `cartog search` for substring matching.
-        let result = hybrid_search(&db, "valid", 10, None).unwrap();
+        let result = hybrid_search(&db, "valid", 10, KindFilter::All).unwrap();
         assert!(
             result.results.is_empty(),
             "FTS5 does not do substring matching — 'valid' should not match 'validate_token'. \
@@ -874,7 +893,7 @@ mod tests {
         // "validate response" — no symbol has these words adjacent (phrase won't match).
         // AND fallback: process_request has both "validate" and "response" in content.
         // build_response has only "response" — should rank below process_request.
-        let result = hybrid_search(&db, "validate response", 10, None).unwrap();
+        let result = hybrid_search(&db, "validate response", 10, KindFilter::All).unwrap();
         assert!(
             !result.results.is_empty(),
             "AND fallback should find results"
@@ -893,17 +912,19 @@ mod tests {
         seed_python_corpus(&db);
 
         // Without filter: "token" matches functions and possibly classes
-        let all = hybrid_search(&db, "token", 10, None).unwrap();
+        let all = hybrid_search(&db, "token", 10, KindFilter::All).unwrap();
         assert!(all.results.len() >= 2);
 
         // With kind=Function filter: only functions returned, still respects limit
-        let funcs = hybrid_search(&db, "token", 10, Some(SymbolKind::Function)).unwrap();
+        let funcs =
+            hybrid_search(&db, "token", 10, KindFilter::Exact(SymbolKind::Function)).unwrap();
         for r in &funcs.results {
             assert_eq!(r.symbol.kind, SymbolKind::Function);
         }
 
         // With kind=Class: AuthService mentions "token" in content
-        let classes = hybrid_search(&db, "token", 10, Some(SymbolKind::Class)).unwrap();
+        let classes =
+            hybrid_search(&db, "token", 10, KindFilter::Exact(SymbolKind::Class)).unwrap();
         for r in &classes.results {
             assert_eq!(r.symbol.kind, SymbolKind::Class);
         }
@@ -935,7 +956,8 @@ mod tests {
         }
 
         // Request 3 functions — should get exactly 3 despite 10 total matches
-        let result = hybrid_search(&db, "handler", 3, Some(SymbolKind::Function)).unwrap();
+        let result =
+            hybrid_search(&db, "handler", 3, KindFilter::Exact(SymbolKind::Function)).unwrap();
         assert_eq!(
             result.results.len(),
             3,
@@ -976,7 +998,7 @@ mod tests {
             "func validate(token string) bool {\n\treturn checkSignature(token)\n}",
         );
 
-        let result = hybrid_search(&db, "validate", 10, None).unwrap();
+        let result = hybrid_search(&db, "validate", 10, KindFilter::All).unwrap();
         assert_eq!(
             result.results.len(),
             3,
@@ -1001,7 +1023,7 @@ mod tests {
             "def foo(): pass",
         );
 
-        let result = hybrid_search(&db, "zzz_nonexistent_term", 10, None).unwrap();
+        let result = hybrid_search(&db, "zzz_nonexistent_term", 10, KindFilter::All).unwrap();
         assert!(result.results.is_empty());
         assert_eq!(result.fts_count, 0);
         assert_eq!(result.vec_count, 0);
@@ -1013,7 +1035,7 @@ mod tests {
         let content = "def greet(name: str) -> str:\n    return f'Hello, {name}!'";
         insert_symbol_with_content(&db, "greet", SymbolKind::Function, "hello.py", 1, content);
 
-        let result = hybrid_search(&db, "greet", 10, None).unwrap();
+        let result = hybrid_search(&db, "greet", 10, KindFilter::All).unwrap();
         assert_eq!(result.results.len(), 1);
         assert_eq!(result.results[0].content.as_deref(), Some(content));
     }
@@ -1032,7 +1054,7 @@ mod tests {
             );
         }
 
-        let result = hybrid_search(&db, "handler", 3, None).unwrap();
+        let result = hybrid_search(&db, "handler", 3, KindFilter::All).unwrap();
         assert_eq!(
             result.results.len(),
             3,
@@ -1133,7 +1155,7 @@ mod tests {
             "def process_data(items):\n    return [transform(i) for i in items]",
         );
 
-        let result = hybrid_search(&db, "process data", 10, None).unwrap();
+        let result = hybrid_search(&db, "process data", 10, KindFilter::All).unwrap();
         assert!(!result.results.is_empty());
 
         // Re-ranking depends on whether the cross-encoder model is downloadable.

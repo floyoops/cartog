@@ -132,7 +132,7 @@ cartog callees ssoCallback
 ### Setup (one-time)
 ```bash
 cartog rag setup          # download embedding + re-ranker models
-cartog rag index .        # embed all symbols
+cartog rag index .        # embed all symbols + documents
 ```
 
 ### "Find code related to a concept"
@@ -141,6 +141,15 @@ cartog rag search "parse abstract syntax tree"
 cartog rag search "handle HTTP authentication" --kind function
 cartog rag search "database migration" --limit 5
 ```
+
+### "Search project documentation"
+```bash
+cartog rag search "deployment architecture" --kind document
+cartog rag search "API rate limiting" --kind document
+cartog rag search "error handling strategy" --kind document
+```
+
+Markdown files (`.md`) are indexed alongside code — each heading section becomes a searchable document. By default, `rag search` returns code only. Use `--kind document` for docs only, or `--kind all` for both code and docs together.
 
 ### After code changes, re-index embeddings
 ```bash

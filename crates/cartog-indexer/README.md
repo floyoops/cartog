@@ -4,7 +4,7 @@ Code indexing and change detection for cartog.
 
 ## Overview
 
-Walks a directory tree, detects which files changed, extracts symbols and edges via `cartog-languages`, and writes the results to `cartog-db`. Uses a multi-tier change detection strategy and Merkle tree hashing for surgical symbol-level updates.
+Walks a directory tree, detects which files changed, extracts symbols and edges via `cartog-languages`, and writes the results to `cartog-db`. Indexes both code files and Markdown documents (`.md`). Uses a multi-tier change detection strategy and Merkle tree hashing for surgical symbol-level updates.
 
 ## How it works
 

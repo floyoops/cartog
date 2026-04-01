@@ -88,7 +88,7 @@ function  validate_user     services/user.py:12
 
 Results ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
 
-Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`.
+Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`, `document`.
 
 ### `cartog outline <file>`
 
@@ -252,13 +252,12 @@ src/commands.rs:
   function cmd_index(path: &str, force: bool, json: bool) -> Result<()>  L62-75
   ...
 
-3 changed files not in index:
-  README.md
+2 changed files not in index:
   Cargo.lock
   .gitignore
 ```
 
-Symbols are grouped by file. Files changed but not indexed (e.g., markdown, config) are listed separately.
+Symbols are grouped by file. Files changed but not indexed (e.g., lock files, config) are listed separately. Markdown files (`.md`) are now indexed as document sections.
 
 ### `cartog watch [path] [--debounce N] [--rag] [--rag-delay N]`
 
@@ -302,29 +301,30 @@ cartog rag setup
 
 ### `cartog rag index [path] [--force]`
 
-Build the embedding index for semantic search. Requires `cartog index` and `cartog rag setup` first.
+Build the embedding index for semantic search. Requires `cartog index` and `cartog rag setup` first. Indexes both code symbols and Markdown documents (`.md` files).
 
 ```bash
-cartog rag index              # embed all symbols in CWD
+cartog rag index              # embed all symbols + documents in CWD
 cartog rag index src/         # embed a subdirectory
-cartog rag index --force      # re-embed all symbols
+cartog rag index --force      # re-embed everything
 ```
 
 After a cartog upgrade that changes the embedding strategy, `cartog rag index` automatically detects the format change and re-embeds all symbols — no `--force` needed.
 
 ### `cartog rag search <query> [--kind <kind>] [--limit N]`
 
-Semantic search over code symbols — use natural language to find code by what it does, not just by name.
+Semantic search over code and documentation — use natural language to find code by what it does, or search project docs alongside code.
 
 ```bash
 cartog rag search "validate authentication tokens"
 cartog rag search "error handling" --kind function
 cartog rag search "database connection" --limit 5
+cartog rag search "deployment architecture" --kind document
 ```
 
-Combines keyword (BM25/FTS5) and vector similarity search, merged via RRF, then re-ranked by a cross-encoder model.
+Combines keyword (BM25/FTS5) and vector similarity search, merged via RRF, then re-ranked by a cross-encoder model. By default, returns code only; use `--kind document` for docs or `--kind all` for both.
 
-Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`.
+Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`, `document`, `all`.
 
 ## Recommended Workflow
 

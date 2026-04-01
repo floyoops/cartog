@@ -36,7 +36,9 @@ Named captures (`@callee`, `@exception_type`, etc.) identify the matched nodes f
 
 ### Supported languages
 
-Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java.
+**Code**: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java.
+
+**Documents**: Markdown (`.md`) — chunked by heading for semantic search. Each heading section becomes a `Document` symbol. Large sections are sub-chunked at paragraph boundaries (~1500 bytes). Files without headings use fixed-size paragraph chunking.
 
 `js_shared` contains extraction logic shared between JavaScript and TypeScript/TSX extractors.
 
@@ -49,6 +51,7 @@ Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java.
 | `get_extractor()` | Factory: language name → `Box<dyn Extractor>` |
 | `detect_language()` | Re-export from `cartog-core` |
 | `python`, `go`, `java`, ... | Per-language extractor modules |
+| `markdown` | Markdown document extractor (heading-based chunking) |
 
 ## Crate dependencies
 

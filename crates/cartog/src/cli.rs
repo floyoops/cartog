@@ -39,6 +39,9 @@ pub enum SymbolKindFilter {
     TypeAlias,
     Trait,
     Module,
+    Document,
+    /// Include all symbol kinds (code + documents).
+    All,
 }
 
 impl From<SymbolKindFilter> for SymbolKind {
@@ -54,6 +57,8 @@ impl From<SymbolKindFilter> for SymbolKind {
             SymbolKindFilter::TypeAlias => SymbolKind::TypeAlias,
             SymbolKindFilter::Trait => SymbolKind::Trait,
             SymbolKindFilter::Module => SymbolKind::Module,
+            SymbolKindFilter::Document => SymbolKind::Document,
+            SymbolKindFilter::All => unreachable!("All is not a single SymbolKind"),
         }
     }
 }

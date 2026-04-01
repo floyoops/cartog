@@ -13,7 +13,7 @@ description: >-
   or needs to navigate code, locate definitions, search code by concept or behavior,
   trace dependencies, assess blast radius of changes, explore how a feature is implemented,
   support refactoring (rename, extract, move, delete), or explore an unfamiliar codebase.
-  Supports Python, TypeScript/JavaScript, Rust, Go, Ruby, Java.
+  Supports Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, and Markdown documents.
 ---
 
 # cartog — Code Graph Navigation Skill
@@ -22,6 +22,7 @@ description: >-
 
 Use cartog **before** reaching for grep, cat, or file reads when you need to:
 - Find code by name, concept, or behavior → `cartog rag search "query"`
+- Search project documentation → `cartog rag search "query" --kind document`
 - Understand the structure of a file → `cartog outline <file>`
 - Find who references a symbol → `cartog refs <name>` (or `--kind calls` for just callers)
 - See what a function calls → `cartog callees <name>`
@@ -78,7 +79,7 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 
 2. **Search routing** — pick the right strategy based on the query:
 
-   **A. Semantic search** (`cartog rag search "<query>"`) — **default for all searches**. Handles keyword matching (FTS5), vector similarity, and cross-encoder reranking in a single call. Works for both natural language and keyword-style queries. Always use ONE call with the full query — never split a query into multiple rag search calls.
+   **A. Semantic search** (`cartog rag search "<query>"`) — **default for all searches**. Returns code only by default; use `--kind document` for docs or `--kind all` for both. Handles keyword matching (FTS5), vector similarity, and cross-encoder reranking in a single call. Works for both natural language and keyword-style queries. Always use ONE call with the full query — never split a query into multiple rag search calls.
    ```
    cartog rag search "authentication token validation"
    cartog rag search "contract management and timesheet signing"
@@ -205,15 +206,17 @@ cartog search parse --limit 10               # cap results
 ```
 Returns symbols ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
 
-Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`.
+Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`, `document`.
 
 ### RAG Search (hybrid keyword + semantic)
 ```bash
 cartog rag search "authentication token validation"
 cartog rag search "error handling" --kind function
 cartog rag search "database schema setup" --limit 20
+cartog rag search "deployment architecture" --kind document
 ```
 
+By default, returns code only. Use `--kind document` for docs or `--kind all` for both.
 Uses hybrid retrieval: FTS5 keyword matching + vector KNN, merged via Reciprocal Rank Fusion.
 When the cross-encoder model is available, results are re-ranked for better precision.
 
@@ -349,6 +352,8 @@ Use `--no-lsp` to skip LSP when you want speed over precision.
 | I need to... | Use |
 |---|---|
 | Find code by name, concept, or behavior | `cartog rag search "query"` |
+| Search project documentation | `cartog rag search "query" --kind document` |
+| Search both code and docs | `cartog rag search "query" --kind all` |
 | Get a symbol name for structural commands | `cartog search <name>` |
 | Know what's in a file | `cartog outline <file>` |
 | Find usages of a function | `cartog refs <name>` (`--kind calls` for just callers) |
@@ -367,7 +372,8 @@ Use `--no-lsp` to skip LSP when you want speed over precision.
 ## Limitations
 
 - Heuristic resolution is name-based (~25% of edges resolved). With LSP enabled, ~42-81% resolved depending on language. Remaining unresolved edges are mostly calls to external libraries.
-- Currently supports: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java.
+- Code languages: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java.
+- Documents: Markdown (`.md`) — indexed by heading sections for semantic search.
 - Does not index string literals, comments (except docstrings), or config values.
 - Method resolution is name-based without LSP — `foo.bar()` resolves `bar`, not `Foo.bar` specifically. LSP resolves to the exact type when a language server is available.
 

@@ -5,3 +5,4 @@
 __pycache__/
 benchmarks/results/*.jsonl
 benchmarks/fixtures/webapp_rs/target/
+.playwright-mcp/

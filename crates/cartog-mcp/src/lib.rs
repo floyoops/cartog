@@ -87,7 +87,7 @@ pub struct DepsParams {
 pub struct SearchParams {
     /// Case-insensitive query string (prefix + substring match against symbol names)
     pub query: String,
-    /// Filter by symbol kind: function, class, method, variable, import
+    /// Filter by symbol kind: function, class, method, variable, import, document
     pub kind: Option<String>,
     /// Filter to a specific file path relative to project root
     pub file: Option<String>,
@@ -109,7 +109,7 @@ pub struct RagIndexParams {
 pub struct ChangesParams {
     /// Number of recent commits to consider (default 5)
     pub commits: Option<u32>,
-    /// Filter by symbol kind: function, class, method, variable, import
+    /// Filter by symbol kind: function, class, method, variable, import, document
     pub kind: Option<String>,
 }
 
@@ -117,7 +117,7 @@ pub struct ChangesParams {
 pub struct RagSearchParams {
     /// Natural language query for semantic code search
     pub query: String,
-    /// Filter by symbol kind: function, class, method, variable
+    /// Filter by symbol kind: function, class, method, variable, import, interface, enum, type-alias, trait, module, document, all. Defaults to code only (excludes documents).
     pub kind: Option<String>,
     /// Maximum results to return (default 10)
     pub limit: Option<u32>,
@@ -503,7 +503,7 @@ impl CartogServer {
     #[tool(
         description = "Search symbols by name (case-insensitive prefix + substring match). \
                        Use to discover symbol names before calling refs/callees/impact. \
-                       Optionally filter by kind (function|class|method|variable|import) or file path. \
+                       Optionally filter by kind (function|class|method|variable|import|document) or file path. \
                        Returns up to 100 results ranked: exact match → prefix → substring."
     )]
     async fn cartog_search(
@@ -527,7 +527,7 @@ impl CartogServer {
                 .map(|s| {
                     s.parse::<cartog_core::SymbolKind>().map_err(|_| {
                         mcp_err(
-                            "invalid symbol kind. Valid: function, class, method, variable, import",
+                            "invalid symbol kind. Valid: function, class, method, variable, import, interface, enum, type-alias, trait, module, document",
                         )
                     })
                 })
@@ -596,7 +596,7 @@ impl CartogServer {
                 .map(|s| {
                     s.parse::<cartog_core::SymbolKind>().map_err(|_| {
                         mcp_err(
-                            "invalid symbol kind. Valid: function, class, method, variable, import",
+                            "invalid symbol kind. Valid: function, class, method, variable, import, interface, enum, type-alias, trait, module, document",
                         )
                     })
                 })
@@ -630,7 +630,7 @@ impl CartogServer {
 
     /// Build embedding index for semantic code search.
     #[tool(
-        description = "Build embedding index for semantic code search. Requires the embedding model to be downloaded first (run 'cartog rag setup' from CLI). Embeds all code symbols for vector similarity search."
+        description = "Build embedding index for semantic search. Requires the embedding model to be downloaded first (run 'cartog rag setup' from CLI). Embeds all code symbols and Markdown documents for vector similarity search."
     )]
     async fn cartog_rag_index(
         &self,
@@ -664,7 +664,7 @@ impl CartogServer {
 
     /// Semantic search over code symbols using hybrid FTS5 + vector search.
     #[tool(
-        description = "Semantic search over code symbols. Combines keyword (FTS5/BM25) and vector similarity search with Reciprocal Rank Fusion. Returns ranked code symbols with content. Use for natural language queries about code functionality."
+        description = "Semantic search over code and documentation. Combines keyword (FTS5/BM25) and vector similarity search with Reciprocal Rank Fusion. Returns code only by default; use kind='document' for docs or kind='all' for both. Use for natural language queries."
     )]
     async fn cartog_rag_search(
         &self,
@@ -683,16 +683,17 @@ impl CartogServer {
             debug!(query = %query, kind = ?kind_str, limit, "rag search");
             let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
 
-            let kind_filter = match kind_str {
-                Some(kind_s) => {
-                    let kind = kind_s.parse::<cartog_core::SymbolKind>().map_err(|_| {
+            let kind_filter = match kind_str.as_deref() {
+                Some("all") => rag::search::KindFilter::All,
+                Some(s) => {
+                    let kind = s.parse::<cartog_core::SymbolKind>().map_err(|_| {
                         mcp_err(
-                            "invalid symbol kind. Valid: function, class, method, variable, import",
+                            "invalid symbol kind. Valid: function, class, method, variable, import, interface, enum, type-alias, trait, module, document, all",
                         )
                     })?;
-                    Some(kind)
+                    rag::search::KindFilter::Exact(kind)
                 }
-                None => None,
+                None => rag::search::KindFilter::CodeOnly,
             };
 
             let result = rag::search::hybrid_search(&db, &query, limit, kind_filter)
@@ -728,9 +729,10 @@ impl ServerHandler for CartogServer {
                   8. Only fall back to reading files when you need actual implementation logic.\n\n\
                   Semantic search (if embedding model is installed):\n\
                   - Run cartog_rag_index to build the embedding index (after cartog_index).\n\
-                  - Use cartog_rag_search for natural language queries about code functionality.\n\
+                  - Use cartog_rag_search for natural language queries. Returns code only by default.\n\
+                  - Use kind='document' for Markdown docs, kind='all' for both code and docs.\n\
                   - Combines keyword (BM25) and vector similarity search for best results.\n\n\
-                 Supports: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java.",
+                 Supports: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, Markdown (.md).",
             )
     }
 }

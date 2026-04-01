@@ -100,9 +100,9 @@ cartog impact validate_token <span class="comment"># what breaks if I change thi
 
       <h3>Add semantic search (optional, still fully local)</h3>
       <pre>cartog rag setup             <span class="comment"># download models (~1.2GB, one-time)</span>
-cartog rag index .           <span class="comment"># embed all symbols</span>
+cartog rag index .           <span class="comment"># embed all symbols + documents</span>
 cartog rag search "authentication token validation"</pre>
-      <p>Models are downloaded once to <code>~/.cache/cartog/models/</code> and run locally via ONNX Runtime. No API keys needed.</p>
+      <p>Indexes both <strong>code</strong> (functions, classes, methods) and <strong>Markdown documents</strong> (READMEs, design docs, API docs). Models are downloaded once to <code>~/.cache/cartog/models/</code> and run locally via ONNX Runtime. No API keys needed.</p>
 
       <h2 id="search-modes">Search Modes</h2>
       <p>cartog offers two search modes that complement each other:</p>
@@ -161,7 +161,7 @@ cartog index . --no-lsp     <span class="comment"># heuristic-only (~1-4s)</span
 cartog search validate --kind function   <span class="comment"># functions only</span>
 cartog search config --file src/db.rs    <span class="comment"># scoped to one file</span>
 cartog search parse --limit 5            <span class="comment"># cap results</span></pre>
-      <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>.</p>
+      <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>.</p>
 
       <h2 id="cmd-outline"><code>cartog outline &lt;file&gt;</code></h2>
       <p>Show all symbols in a file with types, signatures, and line ranges. Use this instead of reading a file when you need structure.</p>
@@ -228,17 +228,19 @@ cartog serve --watch --rag    <span class="comment"># + watcher + auto RAG</span
       <p>Downloads ~1.2GB of ONNX models (embedding ~80MB + reranker ~1.1GB). Cached in <code>~/.cache/cartog/models/</code>.</p>
 
       <h2 id="rag-index"><code>cartog rag index</code></h2>
-      <p>Build the embedding index. Requires <code>cartog index</code> and <code>cartog rag setup</code> first.</p>
-      <pre>cartog rag index              <span class="comment"># embed all symbols</span>
+      <p>Build the embedding index for semantic search. Indexes both code symbols and Markdown documents (<code>.md</code> files). Requires <code>cartog index</code> and <code>cartog rag setup</code> first.</p>
+      <pre>cartog rag index              <span class="comment"># embed all symbols + documents</span>
 cartog rag index src/         <span class="comment"># embed subdirectory</span>
 cartog rag index --force      <span class="comment"># re-embed all</span></pre>
 
       <h2 id="rag-search"><code>cartog rag search &lt;query&gt;</code></h2>
-      <p>Semantic search — use natural language to find code by behavior.</p>
+      <p>Semantic search — use natural language to find code by behavior or concept. Returns code only by default; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
       <pre>cartog rag search "validate authentication tokens"
 cartog rag search "error handling" --kind function
-cartog rag search "database connection" --limit 5</pre>
-      <p>Combines keyword (BM25/FTS5) and vector similarity, merged via RRF, then re-ranked by a cross-encoder.</p>
+cartog rag search "database connection" --limit 5
+cartog rag search "deployment architecture" --kind document</pre>
+      <p>Combines keyword (BM25/FTS5) and vector similarity, merged via RRF, then re-ranked by a cross-encoder. By default, returns code only; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
+      <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>, <code>all</code>.</p>
 
       <!-- ── Integration ───────────────────────── -->
 
@@ -379,6 +381,7 @@ cartog --tokens 200 outline src/db.rs</pre>
           <tr><td>Go</td><td>.go</td><td>functions, structs, interfaces, imports</td><td>calls, imports, type refs</td></tr>
           <tr><td>Ruby</td><td>.rb</td><td>functions, classes, modules, imports</td><td>calls, imports, inherits, raises</td></tr>
           <tr><td>Java</td><td>.java</td><td>classes, interfaces, enums, methods, imports</td><td>calls, imports, inherits, raises, type refs, new</td></tr>
+          <tr><td>Markdown</td><td>.md</td><td>document sections (chunked by heading)</td><td>—</td></tr>
         </tbody>
       </table>
 

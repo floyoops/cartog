@@ -51,9 +51,11 @@ cartog impact validate_token # what breaks if I change this?
 
 ```bash
 cartog rag setup             # download embedding + re-ranker models (~1.2GB, one-time)
-cartog rag index .           # embed all symbols into sqlite-vec
+cartog rag index .           # embed all symbols + documents into sqlite-vec
 cartog rag search "authentication token validation"   # natural language queries
 ```
+
+Indexes both **code** (functions, classes, methods) and **Markdown documents** (READMEs, design docs, API docs). Returns code by default; use `--kind document` for docs or `--kind all` for both.
 
 Models are downloaded once to `~/.cache/cartog/models/` and run locally via ONNX Runtime. No API keys, no network calls at query time.
 
@@ -233,14 +235,14 @@ references  process  routes/auth.py:22
 
 ```mermaid
 graph LR
-    A["Source files<br/>(py, ts, rs, go, rb, java)"] -->|tree-sitter| B["Symbols + Edges"]
+    A["Source files<br/>(py, ts, rs, go, rb, java, md)"] -->|parse| B["Symbols + Edges"]
     B -->|write| C[".cartog.db<br/>(SQLite)"]
     C -->|query| D["search / refs / impact<br/>outline / callees / hierarchy"]
     C -->|embed locally| E["ONNX embeddings<br/>(sqlite-vec)"]
     E -->|query| F["rag search<br/>(FTS5 + vector KNN + reranker)"]
 ```
 
-1. **Index** — walks your project, parses each file with tree-sitter, extracts symbols (functions, classes, methods, imports, variables) and edges (calls, imports, inherits, raises, type references)
+1. **Index** — walks your project, parses code with tree-sitter and chunks Markdown by heading, extracts symbols (functions, classes, methods, imports, variables, document sections) and edges (calls, imports, inherits, raises, type references)
 2. **Store** — writes everything to a local `.cartog.db` SQLite file
 3. **Resolve (heuristic)** — links edges by name with scope-aware matching (same file > import path > same directory > unique project match)
 4. **Resolve (LSP, optional)** — for edges the heuristic couldn't resolve, sends `textDocument/definition` to language servers for compiler-grade precision. Results persist in the DB.
@@ -323,6 +325,7 @@ Your code never leaves your machine. Not during indexing, not during search, not
 | Go | .go | functions, structs, interfaces, imports | calls, imports, type refs |
 | Ruby | .rb | functions, classes, modules, imports | calls, imports, inherits, raises, rescue types |
 | Java | .java | classes, interfaces, enums, methods, imports, variables | calls, imports, inherits, raises, type refs, new |
+| Markdown | .md | document sections (chunked by heading) | — |
 
 ## Performance
 

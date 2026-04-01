@@ -103,17 +103,17 @@
 
 - id: refactoring_lsp_escalation
   description: When heuristic refs seem incomplete, escalate to LSP before refactoring
-  user_query: "I want to rename validate in AuthService but refs only shows 2 callers, I know there are more"
-  context: "cartog refs validate --kind calls already returned only 2 results"
+  user_query: "refs only shows 2 callers for validate in AuthService, I know there are more. How do I get better results?"
+  context: "cartog refs validate --kind calls already returned only 2 results. The user wants to re-index with LSP for better edge resolution."
   expected:
     tool_calls:
       - "cartog index ."
       - "cartog refs validate --kind calls"
     reasoning: >
       The user reports that heuristic refs are incomplete. The agent should
-      re-index with LSP (auto-detected) to improve edge resolution, then
-      re-run refs to see the fuller picture. Do NOT skip straight to refactoring
-      with incomplete information.
+      re-index with LSP (auto-detected via cartog index . without --no-lsp)
+      to improve edge resolution, then re-run refs. The key requirement is
+      that cartog index . (without --no-lsp) appears in the command list.
   anti_patterns:
     - Proceeding with refactoring without re-indexing
     - Using cartog index . --no-lsp (defeats the purpose of LSP escalation)
@@ -122,16 +122,18 @@
 
 - id: refactoring_fast_reindex_after_changes
   description: After applying code changes, re-index fast with --no-lsp
-  user_query: "I've finished renaming the method, verify nothing is broken"
-  context: "User just applied rename changes across multiple files"
+  user_query: "I've finished renaming process_payment to handle_payment across multiple files. Verify nothing is broken."
+  context: "User just applied rename changes across multiple files. Old name: process_payment, new name: handle_payment."
   expected:
     tool_calls:
       - "cartog index . --no-lsp"
       - "cartog refs old_method_name"
     reasoning: >
-      After code changes, re-index quickly with --no-lsp (heuristic only, ~1s)
+      After code changes, re-index with --no-lsp (heuristic only, ~1s)
       to update the graph, then verify no stale references remain. LSP is not
-      needed here — speed matters for the verify loop.
+      needed here — speed matters for the verify loop. The key requirement is
+      that cartog index . --no-lsp appears in the command list (it does not
+      have to be the very first command — cartog changes first is acceptable).
   anti_patterns:
     - Re-indexing with LSP (unnecessary latency for verification)
     - Skipping re-index entirely
@@ -155,10 +157,10 @@
 
 - id: search_show_me_related
   description: '"Show me all code related to X" should use rag search'
-  user_query: "show me all code related to svc user api"
+  user_query: "show me all code related to the user authentication service"
   expected:
     tool_calls:
-      - 'cartog rag search "svc user api"'
+      - 'cartog rag search "user authentication service"'
     reasoning: >
       "Show me all code related to..." is a natural language query describing
       a domain concept. The FIRST command must be cartog rag search.
@@ -168,6 +170,43 @@
     - Glob/Read as the FIRST command
     - cartog search as the FIRST command
   tags: [routing]
+
+# ============================================================
+# Documentation search
+# ============================================================
+
+- id: search_documentation
+  description: Documentation search should use rag search with --kind document
+  user_query: "What does the architecture doc say about authentication?"
+  expected:
+    tool_calls:
+      - 'cartog rag search "architecture authentication" --kind document'
+    reasoning: >
+      The user wants to find information in project documentation. Since rag search
+      defaults to code only, the agent must use --kind document to search docs.
+      Markdown files are indexed by heading sections and searchable alongside code.
+  anti_patterns:
+    - 'cartog rag search without --kind document (returns code only by default)'
+    - grep or find to locate .md files manually
+    - cat README.md to read the whole file
+    - cartog search as the FIRST command (search is for symbol names, not content)
+  tags: [routing, documentation]
+
+- id: search_docs_and_code_together
+  description: Mixed code+docs query should use rag search with --kind all
+  user_query: "How is error handling implemented? Check both the code and docs."
+  expected:
+    tool_calls:
+      - 'cartog rag search "error handling" --kind all'
+    reasoning: >
+      The user wants both code and documentation results. Since rag search defaults
+      to code only, the agent must use --kind all to include both code symbols and
+      Markdown document sections.
+  anti_patterns:
+    - 'cartog rag search without --kind all (returns code only by default)'
+    - Running two separate searches (one for code, one for docs)
+    - grep for error handling across .md and .py files
+  tags: [routing, documentation]
 
 # ============================================================
 # Graceful degradation
@@ -278,7 +317,7 @@
 # ============================================================
 
 - id: changes_recent
-  description: "What changed recently?" should use cartog changes
+  description: '"What changed recently?" should use cartog changes'
   user_query: "What code changed recently?"
   expected:
     tool_calls:
@@ -313,6 +352,7 @@
 - id: outline_over_cat
   description: Use outline instead of cat for file structure
   user_query: "What functions are in src/auth/tokens.py?"
+  context: "The project has a src/auth/tokens.py file. The cartog index is up to date."
   expected:
     tool_calls:
       - "cartog outline src/auth/tokens.py"
