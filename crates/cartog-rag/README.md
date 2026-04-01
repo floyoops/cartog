@@ -10,12 +10,30 @@ Indexes both **code symbols** (functions, classes, methods) and **Markdown docum
 
 ## How it works
 
-### Models
+### Embedding providers
 
-- **Embedding**: BGE-small-en-v1.5 quantized — 384-dimensional vectors, ONNX runtime via fastembed (~80MB)
-- **Reranker**: BGE-reranker-base — cross-encoder that scores (query, document) pairs jointly (~1.1GB, optional)
+Configurable via `.cartog.toml` `[embedding]` section. Supports pluggable providers:
 
-Both are auto-downloaded from HuggingFace on first use. Cached in `~/.cache/cartog/models/` (respects `FASTEMBED_CACHE_DIR` and `XDG_CACHE_HOME`).
+| Provider | Feature flag | Models | Notes |
+|----------|-------------|--------|-------|
+| **local** (default) | `provider-local` | Any fastembed built-in (BGE, all-MiniLM, nomic, etc.) | ONNX Runtime via fastembed, auto-downloaded from HuggingFace |
+| **ollama** | `provider-ollama` | Any Ollama model (nomic-embed-text, mxbai-embed-large, etc.) | HTTP client, auto-detects dimension |
+
+**Reranker**: BGE-reranker-base — cross-encoder that scores (query, document) pairs jointly (~1.1GB, optional, local only).
+
+Models cached in `~/.cache/cartog/models/` (respects `FASTEMBED_CACHE_DIR` and `XDG_CACHE_HOME`).
+
+```toml
+# .cartog.toml — example with Ollama
+[embedding]
+provider = "ollama"
+model = "nomic-embed-text"
+# dimension = 768  # auto-detected if omitted
+
+[embedding.local]
+# query_prefix = "search_query: "
+# document_prefix = "search_document: "
+```
 
 ### Hybrid search pipeline
 

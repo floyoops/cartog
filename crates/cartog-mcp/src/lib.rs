@@ -232,6 +232,8 @@ pub struct CartogServer {
     /// Canonicalized CWD captured at server start to avoid repeated syscalls.
     /// Wrapped in `Arc` so clones (required by `#[derive(Clone)]`) are cheap.
     cwd: Arc<Path>,
+    /// RAG provider configuration (embedding + reranker).
+    rag_config: Arc<rag::EmbeddingProviderConfig>,
     /// Persistent LSP manager for warm server reuse across index calls.
     #[cfg(feature = "lsp")]
     lsp_manager: Arc<Mutex<cartog_lsp::manager::LspManager>>,
@@ -239,15 +241,19 @@ pub struct CartogServer {
 
 #[tool_router]
 impl CartogServer {
-    pub fn new(db_path: &std::path::Path) -> anyhow::Result<Self> {
-        let db =
-            Database::open(db_path).map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
+    pub fn new(
+        db_path: &std::path::Path,
+        rag_config: rag::EmbeddingProviderConfig,
+    ) -> anyhow::Result<Self> {
+        let db = Database::open(db_path, rag_config.resolved_dimension())
+            .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
         let cwd = std::env::current_dir()
             .and_then(|p| p.canonicalize())
             .map_err(|e| anyhow::anyhow!("cannot determine CWD: {e}"))?;
         Ok(Self {
             tool_router: Self::tool_router(),
             db: Arc::new(Mutex::new(db)),
+            rag_config: Arc::new(rag_config),
             #[cfg(feature = "lsp")]
             lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
             cwd: Arc::from(cwd),
@@ -640,6 +646,7 @@ impl CartogServer {
         let force = params.force;
         let db = Arc::clone(&self.db);
         let cwd = Arc::clone(&self.cwd);
+        let rag_config = Arc::clone(&self.rag_config);
 
         tokio::task::spawn_blocking(move || {
             let validated = validate_path_within_cwd_canonical(&path, &cwd).map_err(mcp_err)?;
@@ -651,7 +658,9 @@ impl CartogServer {
             let _ = indexer::index_directory(&db, &validated, false, false)
                 .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
 
-            let result = rag::indexer::index_embeddings(&db, force)
+            let mut provider = rag::create_embedding_provider(&rag_config)
+                .map_err(|e| mcp_err(format!("failed to load embedding model: {e}")))?;
+            let result = rag::indexer::index_embeddings(&db, provider.as_mut(), force)
                 .map_err(|e| mcp_err(format!("embedding indexing failed: {e}")))?;
 
             let json = serde_json::to_string_pretty(&result)
@@ -674,6 +683,7 @@ impl CartogServer {
         let kind_str = params.kind;
         let limit = params.limit.unwrap_or(10).min(MAX_SEARCH_LIMIT);
         let db = Arc::clone(&self.db);
+        let rag_config = Arc::clone(&self.rag_config);
 
         tokio::task::spawn_blocking(move || {
             if query.is_empty() {
@@ -696,8 +706,18 @@ impl CartogServer {
                 None => rag::search::KindFilter::CodeOnly,
             };
 
-            let result = rag::search::hybrid_search(&db, &query, limit, kind_filter)
-                .map_err(|e| mcp_err(format!("semantic search failed: {e}")))?;
+            let mut provider = rag::create_embedding_provider(&rag_config)
+                .map_err(|e| mcp_err(format!("failed to load embedding model: {e}")))?;
+            let mut reranker =
+                rag::create_reranker_provider(&rag_config.reranker_provider);
+            let result = match reranker.as_mut() {
+                Some(r) => rag::search::hybrid_search(
+                    &db, &query, limit, kind_filter, provider.as_mut(), Some(r.as_mut()),
+                ),
+                None => rag::search::hybrid_search(
+                    &db, &query, limit, kind_filter, provider.as_mut(), None,
+                ),
+            }.map_err(|e| mcp_err(format!("semantic search failed: {e}")))?;
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
@@ -741,7 +761,12 @@ impl ServerHandler for CartogServer {
 ///
 /// When `watch` is true, a background file watcher keeps the index fresh.
 /// When `rag` is true (requires `watch`), embeddings are also auto-updated.
-pub async fn run_server(db_path: &std::path::Path, watch: bool, rag: bool) -> anyhow::Result<()> {
+pub async fn run_server(
+    db_path: &std::path::Path,
+    watch: bool,
+    rag: bool,
+    rag_config: rag::EmbeddingProviderConfig,
+) -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
 
     // Optionally spawn a background file watcher
@@ -750,6 +775,7 @@ pub async fn run_server(db_path: &std::path::Path, watch: bool, rag: bool) -> an
         let cwd = std::env::current_dir()?;
         let mut config = WatchConfig::new(cwd);
         config.rag = rag;
+        config.rag_config = rag_config.clone();
         match watch::spawn_watch(config, &db_path_str) {
             Ok(handle) => {
                 info!(rag, "background file watcher started");
@@ -764,7 +790,7 @@ pub async fn run_server(db_path: &std::path::Path, watch: bool, rag: bool) -> an
         None
     };
 
-    let server = CartogServer::new(db_path)?;
+    let server = CartogServer::new(db_path, rag_config)?;
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
 

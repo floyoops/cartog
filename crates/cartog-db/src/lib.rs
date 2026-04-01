@@ -118,9 +118,13 @@ CREATE TABLE IF NOT EXISTS symbol_embedding_map (
 CREATE INDEX IF NOT EXISTS idx_embedding_map_symbol ON symbol_embedding_map(symbol_id);
 "#;
 
-/// SQL to create the sqlite-vec virtual table (must run after sqlite-vec extension is loaded).
-const RAG_VEC_SCHEMA: &str =
-    "CREATE VIRTUAL TABLE IF NOT EXISTS symbol_vec USING vec0(embedding float[384])";
+/// Default embedding dimension (BGE-small-en-v1.5).
+pub const DEFAULT_EMBEDDING_DIM: usize = 384;
+
+/// SQL to create the sqlite-vec virtual table with the given embedding dimension.
+fn rag_vec_schema(dim: usize) -> String {
+    format!("CREATE VIRTUAL TABLE IF NOT EXISTS symbol_vec USING vec0(embedding float[{dim}])")
+}
 
 /// Default database filename, stored in the project root.
 pub const DB_FILE: &str = ".cartog.db";
@@ -268,9 +272,50 @@ fn migrate(conn: &Connection) {
     }
 }
 
+/// Check stored embedding dimension against requested dimension.
+/// If they differ, drop the vector table and clear the embedding map.
+fn handle_embedding_dimension(conn: &Connection, requested_dim: usize) -> Result<()> {
+    let stored_dim: Option<usize> = conn
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'embedding_dimension'",
+            [],
+            |row| row.get::<_, i64>(0).map(|v| v as usize),
+        )
+        .ok();
+
+    if let Some(old_dim) = stored_dim {
+        if old_dim != requested_dim {
+            tracing::warn!(
+                old = old_dim,
+                new = requested_dim,
+                "Embedding dimension changed — clearing vector index. Run `cartog rag index` to re-embed."
+            );
+            conn.execute("DROP TABLE IF EXISTS symbol_vec", [])
+                .context("Failed to drop old vector table during dimension migration")?;
+            conn.execute("DELETE FROM symbol_embedding_map", [])
+                .context("Failed to clear embedding map during dimension migration")?;
+        }
+    }
+
+    conn.execute_batch(&rag_vec_schema(requested_dim))
+        .context("Failed to create sqlite-vec table")?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_dimension', ?1)",
+        params![requested_dim.to_string()],
+    )
+    .context("Failed to store embedding dimension")?;
+
+    Ok(())
+}
+
 impl Database {
     /// Open or create the database at the given path.
-    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
+    ///
+    /// `embedding_dim` sets the vector dimension for the sqlite-vec table.
+    /// If the stored dimension differs from the requested one, the vector index
+    /// is cleared and recreated (a re-index via `cartog rag index` is needed).
+    pub fn open(path: impl AsRef<std::path::Path>, embedding_dim: usize) -> Result<Self> {
         register_sqlite_vec();
         let conn = Connection::open(path.as_ref()).context("Failed to open database")?;
         conn.execute_batch(
@@ -286,8 +331,7 @@ impl Database {
             .context("Failed to create schema")?;
         conn.execute_batch(RAG_SCHEMA)
             .context("Failed to create RAG schema")?;
-        conn.execute_batch(RAG_VEC_SCHEMA)
-            .context("Failed to create sqlite-vec table")?;
+        handle_embedding_dimension(&conn, embedding_dim)?;
         migrate(&conn);
         Ok(Self { conn })
     }
@@ -300,7 +344,7 @@ impl Database {
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(RAG_SCHEMA)?;
-        conn.execute_batch(RAG_VEC_SCHEMA)?;
+        conn.execute_batch(&rag_vec_schema(DEFAULT_EMBEDDING_DIM))?;
         migrate(&conn);
         Ok(Self { conn })
     }
@@ -3154,5 +3198,79 @@ mod tests {
         // foo should still have in_degree = 2 (recomputed correctly)
         let results = db.search("foo", None, None, 10).unwrap();
         assert_eq!(results[0].in_degree, 2);
+    }
+
+    // ── Embedding dimension migration tests ──
+
+    #[test]
+    fn test_open_stores_embedding_dimension() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        let db = Database::open(&db_path, 384).unwrap();
+        let stored: String = db
+            .get_metadata("embedding_dimension")
+            .unwrap()
+            .expect("dimension should be stored");
+        assert_eq!(stored, "384");
+    }
+
+    #[test]
+    fn test_open_with_different_dimension_clears_embeddings() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // First open with 384-dim
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            let sym = Symbol::new("foo", SymbolKind::Function, "a.py", 1, 10, 0, 100, None);
+            db.insert_symbol(&sym).unwrap();
+            db.upsert_symbol_content(&sym.id, "foo", "def foo():", "header")
+                .unwrap();
+            let eid = db.get_or_create_embedding_id(&sym.id).unwrap();
+            let bytes = vec![0u8; 384 * 4];
+            db.insert_embeddings(&[(eid, bytes)]).unwrap();
+            assert_eq!(db.embedding_count().unwrap(), 1);
+        }
+
+        // Reopen with 768-dim — should auto-wipe embeddings
+        {
+            let db = Database::open(&db_path, 768).unwrap();
+            assert_eq!(db.embedding_count().unwrap(), 0);
+            let stored: String = db
+                .get_metadata("embedding_dimension")
+                .unwrap()
+                .expect("dimension should be updated");
+            assert_eq!(stored, "768");
+        }
+    }
+
+    #[test]
+    fn test_open_same_dimension_preserves_embeddings() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // First open
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            let sym = Symbol::new("bar", SymbolKind::Function, "b.py", 1, 10, 0, 100, None);
+            db.insert_symbol(&sym).unwrap();
+            db.upsert_symbol_content(&sym.id, "bar", "def bar():", "header")
+                .unwrap();
+            let eid = db.get_or_create_embedding_id(&sym.id).unwrap();
+            let bytes = vec![0u8; 384 * 4];
+            db.insert_embeddings(&[(eid, bytes)]).unwrap();
+        }
+
+        // Reopen with same dimension — embeddings preserved
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            assert_eq!(db.embedding_count().unwrap(), 1);
+        }
+    }
+
+    #[test]
+    fn test_default_embedding_dim_constant() {
+        assert_eq!(DEFAULT_EMBEDDING_DIM, 384);
     }
 }

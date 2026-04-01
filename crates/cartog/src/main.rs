@@ -14,6 +14,7 @@ fn main() -> Result<()> {
     // Resolve database path: --db / CARTOG_DB > .cartog.toml > git root > cwd
     let cartog_config = config::load_config();
     let db_path = config::resolve_db_path(cli.db.clone(), &cartog_config);
+    let provider_config = config::to_provider_config(&cartog_config);
 
     let is_serve = matches!(cli.command, Command::Serve { .. });
     let is_watch = matches!(cli.command, Command::Watch { .. });
@@ -84,19 +85,25 @@ fn main() -> Result<()> {
             debounce,
             rag,
             rag_delay,
-        } => commands::cmd_watch(&db_path, &path, debounce, rag, rag_delay),
+        } => commands::cmd_watch(&db_path, &path, debounce, rag, rag_delay, provider_config),
         Command::Serve { watch, rag } => {
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(mcp::run_server(&db_path, watch, rag))
+            runtime.block_on(mcp::run_server(&db_path, watch, rag, provider_config))
         }
         Command::Rag(rag_cmd) => match rag_cmd {
             RagCommand::Setup => commands::cmd_rag_setup(cli.json),
             RagCommand::Index { path, force } => {
-                commands::cmd_rag_index(&db_path, &path, force, cli.json)
+                commands::cmd_rag_index(&db_path, &path, force, cli.json, &provider_config)
             }
-            RagCommand::Search { query, kind, limit } => {
-                commands::cmd_rag_search(&db_path, &query, kind, limit, cli.json, token_budget)
-            }
+            RagCommand::Search { query, kind, limit } => commands::cmd_rag_search(
+                &db_path,
+                &query,
+                kind,
+                limit,
+                cli.json,
+                token_budget,
+                &provider_config,
+            ),
         },
     }
 }

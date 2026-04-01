@@ -21,7 +21,8 @@
 | `rmcp` (server + transport-io) | MCP server over stdio | Server-only — cartog is never an MCP client. stdio transport matches how agents launch subprocesses |
 | `tokio` (rt-multi-thread) | Async runtime for MCP server only | Multi-thread for `spawn_blocking` throughput. Runtime created on-demand — sync commands skip it entirely |
 | `tracing` + `tracing-subscriber` | Structured logging to stderr | Logs to stderr so stdout stays clean for output and MCP protocol |
-| `fastembed` | ONNX Runtime inference for embeddings + re-ranking | `default-features = false` drops image models (CLIP etc.) we don't use. `rustls-tls` avoids OpenSSL system dependency |
+| `fastembed` | ONNX Runtime inference for embeddings + re-ranking (local provider) | Optional via `provider-local` feature (default on). `default-features = false` drops image models (CLIP etc.). `rustls-tls` avoids OpenSSL system dependency |
+| `reqwest` | HTTP client for remote embedding providers (Ollama) | Optional via `provider-ollama` feature. Uses `blocking` + `rustls-tls` |
 | `sqlite-vec` | Vector similarity search (KNN) in SQLite | `vec0` virtual table, requires integer rowids (bridged via `symbol_embedding_map`) |
 | `criterion` (dev) | Micro-benchmarks | Query latency benchmarks (µs-level) |
 

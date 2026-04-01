@@ -29,6 +29,8 @@ pub struct WatchConfig {
     pub rag: bool,
     /// Delay after last index before embedding (only when `rag` is true).
     pub rag_delay: Duration,
+    /// RAG provider configuration (embedding + reranker).
+    pub rag_config: rag::EmbeddingProviderConfig,
 }
 
 impl WatchConfig {
@@ -38,6 +40,7 @@ impl WatchConfig {
             debounce: Duration::from_secs(2),
             rag: false,
             rag_delay: Duration::from_secs(30),
+            rag_config: rag::EmbeddingProviderConfig::default(),
         }
     }
 }
@@ -135,7 +138,8 @@ fn watch_loop(
     db_path: &str,
     shutdown: &AtomicBool,
 ) -> Result<()> {
-    let db = Database::open(db_path).context("failed to open database for watcher")?;
+    let db = Database::open(db_path, config.rag_config.resolved_dimension())
+        .context("failed to open database for watcher")?;
 
     info!(
         path = %root.display(),
@@ -242,7 +246,10 @@ fn watch_loop(
                     if let Some(last) = last_index_time {
                         if last.elapsed() >= config.rag_delay {
                             info!("RAG delay elapsed, embedding pending symbols");
-                            match rag::indexer::index_embeddings(&db, false) {
+                            let provider = rag::create_embedding_provider(&config.rag_config);
+                            match provider.and_then(|mut p| {
+                                rag::indexer::index_embeddings(&db, p.as_mut(), false)
+                            }) {
                                 Ok(r) => {
                                     info!(
                                         embedded = r.symbols_embedded,
@@ -270,7 +277,8 @@ fn watch_loop(
     // Flush pending RAG embeddings on shutdown
     if config.rag && rag_pending {
         info!("flushing pending RAG embeddings before shutdown");
-        match rag::indexer::index_embeddings(&db, false) {
+        let provider = rag::create_embedding_provider(&config.rag_config);
+        match provider.and_then(|mut p| rag::indexer::index_embeddings(&db, p.as_mut(), false)) {
             Ok(r) => info!(embedded = r.symbols_embedded, "final RAG flush complete"),
             Err(e) => warn!(error = %e, "final RAG flush failed"),
         }
