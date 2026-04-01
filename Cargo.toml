@@ -10,15 +10,15 @@ license = "MIT"
 repository = "https://github.com/jrollin/cartog"
 
 [workspace.dependencies]
-# Internal crates (path-only, not published independently)
-cartog-core = { path = "crates/cartog-core" }
-cartog-db = { path = "crates/cartog-db" }
-cartog-languages = { path = "crates/cartog-languages" }
-cartog-indexer = { path = "crates/cartog-indexer" }
-cartog-rag = { path = "crates/cartog-rag" }
-cartog-lsp = { path = "crates/cartog-lsp" }
-cartog-watch = { path = "crates/cartog-watch" }
-cartog-mcp = { path = "crates/cartog-mcp" }
+# Internal crates (path + version required for publishing)
+cartog-core = { path = "crates/cartog-core", version = "0.9.0" }
+cartog-db = { path = "crates/cartog-db", version = "0.9.0" }
+cartog-languages = { path = "crates/cartog-languages", version = "0.9.0" }
+cartog-indexer = { path = "crates/cartog-indexer", version = "0.9.0" }
+cartog-rag = { path = "crates/cartog-rag", version = "0.9.0" }
+cartog-lsp = { path = "crates/cartog-lsp", version = "0.9.0" }
+cartog-watch = { path = "crates/cartog-watch", version = "0.9.0" }
+cartog-mcp = { path = "crates/cartog-mcp", version = "0.9.0" }
 
 # Shared external dependencies
 anyhow = "1"

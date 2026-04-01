@@ -70,8 +70,10 @@ fi
 
 info "bumping $CURRENT → $NEW"
 
-# update Cargo.toml
-sed "s/^version = \".*\"/version = \"${NEW}\"/" "$CARGO_TOML" > "$CARGO_TOML.tmp" && mv "$CARGO_TOML.tmp" "$CARGO_TOML"
+# update workspace version + internal crate dependency versions in Cargo.toml
+sed -e "/^\[workspace\.package\]/,/^\[/ s/version = \"${CURRENT}\"/version = \"${NEW}\"/" \
+    -e "/^cartog-/ s/version = \"${CURRENT}\"/version = \"${NEW}\"/" \
+    "$CARGO_TOML" > "$CARGO_TOML.tmp" && mv "$CARGO_TOML.tmp" "$CARGO_TOML"
 
 # update plugin.json
 if [[ -f "$PLUGIN_JSON" ]]; then

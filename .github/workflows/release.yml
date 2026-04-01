@@ -30,13 +30,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Sync Cargo.toml version with tag
-        shell: bash
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sed "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
-          echo "Building version ${VERSION}"
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -113,11 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Sync Cargo.toml version with tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sed "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo publish
+      - run: cargo publish -p cartog --no-verify
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
