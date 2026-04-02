@@ -62,8 +62,8 @@ pub struct OllamaConfig {
     pub model: Option<String>,
 }
 
-pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
-pub const DEFAULT_OLLAMA_MODEL: &str = "nomic-embed-text";
+pub const DEFAULT_OLLAMA_BASE_URL: &str = cartog_rag::providers::DEFAULT_OLLAMA_BASE_URL;
+pub const DEFAULT_OLLAMA_MODEL: &str = cartog_rag::providers::DEFAULT_OLLAMA_MODEL;
 
 impl OllamaConfig {
     pub fn base_url(&self) -> &str {
@@ -125,10 +125,10 @@ pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProvide
 /// Returns the parsed config and the path it was loaded from (if any).
 pub fn load_config() -> (CartogConfig, Option<PathBuf>) {
     match local_config_path() {
-        Some(p) => {
-            let cfg = read_config(&p).unwrap_or_default();
-            (cfg, Some(p))
-        }
+        Some(p) => match read_config(&p) {
+            Some(cfg) => (cfg, Some(p)),
+            None => (CartogConfig::default(), None),
+        },
         None => (CartogConfig::default(), None),
     }
 }
@@ -245,6 +245,14 @@ mod tests {
     fn test_read_config_missing_file_returns_none() {
         let result = read_config(Path::new("/nonexistent/path/config.toml"));
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_read_config_invalid_toml_returns_none() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        fs::write(&cfg_path, "this is {{ not valid toml").unwrap();
+        assert!(read_config(&cfg_path).is_none());
     }
 
     #[test]

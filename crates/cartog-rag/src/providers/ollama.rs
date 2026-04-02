@@ -4,9 +4,6 @@ use tracing::info;
 
 use crate::provider::EmbeddingProvider;
 
-const DEFAULT_BASE_URL: &str = "http://localhost:11434";
-const DEFAULT_MODEL: &str = "nomic-embed-text";
-
 /// Ollama embedding provider using the `/api/embed` endpoint.
 pub struct OllamaEmbeddingProvider {
     client: reqwest::blocking::Client,
@@ -32,8 +29,10 @@ impl OllamaEmbeddingProvider {
         model: Option<&str>,
         dimension: Option<usize>,
     ) -> Result<Self> {
-        let base_url = base_url.unwrap_or(DEFAULT_BASE_URL).trim_end_matches('/');
-        let model = model.unwrap_or(DEFAULT_MODEL);
+        let base_url = base_url
+            .unwrap_or(super::DEFAULT_OLLAMA_BASE_URL)
+            .trim_end_matches('/');
+        let model = model.unwrap_or(super::DEFAULT_OLLAMA_MODEL);
 
         info!(base_url, model, "Connecting to Ollama embedding server");
 
