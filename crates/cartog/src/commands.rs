@@ -62,12 +62,19 @@ fn output<T: Serialize>(
 }
 
 /// Build or rebuild the code graph index.
-pub fn cmd_index(db_path: &Path, path: &str, force: bool, lsp: bool, json: bool) -> Result<()> {
+pub fn cmd_index(
+    db_path: &Path,
+    path: &str,
+    force: bool,
+    lsp: bool,
+    json: bool,
+    embedding_dim: usize,
+) -> Result<()> {
     let root = Path::new(path);
     if !json {
         eprint!("Indexing {path}...");
     }
-    let db = open_db(db_path, cartog_db::DEFAULT_EMBEDDING_DIM)?;
+    let db = open_db(db_path, embedding_dim)?;
 
     let result = indexer::index_directory(&db, root, force, lsp)?;
     if !json {
@@ -111,8 +118,9 @@ pub fn cmd_outline(
     file: &str,
     json: bool,
     token_budget: Option<u32>,
+    embedding_dim: usize,
 ) -> Result<()> {
-    let db = open_db(db_path, cartog_db::DEFAULT_EMBEDDING_DIM)?;
+    let db = open_db(db_path, embedding_dim)?;
     let symbols = db.outline(file)?;
     let file = file.to_string();
 
@@ -151,8 +159,9 @@ pub fn cmd_callees(
     name: &str,
     json: bool,
     token_budget: Option<u32>,
+    embedding_dim: usize,
 ) -> Result<()> {
-    let db = open_db(db_path, cartog_db::DEFAULT_EMBEDDING_DIM)?;
+    let db = open_db(db_path, embedding_dim)?;
     let edges = db.callees(name)?;
     let name = name.to_string();
 
@@ -180,8 +189,9 @@ pub fn cmd_impact(
     depth: u32,
     json: bool,
     token_budget: Option<u32>,
+    embedding_dim: usize,
 ) -> Result<()> {
-    let db = open_db(db_path, cartog_db::DEFAULT_EMBEDDING_DIM)?;
+    let db = open_db(db_path, embedding_dim)?;
     let results = db.impact(name, depth)?;
     let name = name.to_string();
 
@@ -222,8 +232,9 @@ pub fn cmd_refs(
     kind: Option<EdgeKindFilter>,
     json: bool,
     token_budget: Option<u32>,
+    embedding_dim: usize,
 ) -> Result<()> {
-    let db = open_db(db_path, cartog_db::DEFAULT_EMBEDDING_DIM)?;
+    let db = open_db(db_path, embedding_dim)?;
     let kind_filter = kind.map(EdgeKind::from);
     let results = db.refs(name, kind_filter)?;
     let name = name.to_string();
@@ -268,8 +279,9 @@ pub fn cmd_hierarchy(
     name: &str,
     json: bool,
     token_budget: Option<u32>,
+    embedding_dim: usize,
 ) -> Result<()> {
-    let db = open_db(db_path, cartog_db::DEFAULT_EMBEDDING_DIM)?;
+    let db = open_db(db_path, embedding_dim)?;
     let pairs = db.hierarchy(name)?;
     let name = name.to_string();
 
@@ -297,8 +309,14 @@ pub fn cmd_hierarchy(
 }
 
 /// File-level import dependencies.
-pub fn cmd_deps(db_path: &Path, file: &str, json: bool, token_budget: Option<u32>) -> Result<()> {
-    let db = open_db(db_path, cartog_db::DEFAULT_EMBEDDING_DIM)?;
+pub fn cmd_deps(
+    db_path: &Path,
+    file: &str,
+    json: bool,
+    token_budget: Option<u32>,
+    embedding_dim: usize,
+) -> Result<()> {
+    let db = open_db(db_path, embedding_dim)?;
     let edges = db.file_deps(file)?;
     let file = file.to_string();
 
@@ -319,6 +337,7 @@ pub fn cmd_deps(db_path: &Path, file: &str, json: bool, token_budget: Option<u32
 }
 
 /// Search for symbols by name (case-insensitive prefix + substring match).
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_search(
     db_path: &Path,
     query: &str,
@@ -327,8 +346,9 @@ pub fn cmd_search(
     limit: u32,
     json: bool,
     token_budget: Option<u32>,
+    embedding_dim: usize,
 ) -> Result<()> {
-    let db = open_db(db_path, cartog_db::DEFAULT_EMBEDDING_DIM)?;
+    let db = open_db(db_path, embedding_dim)?;
     let kind_filter = kind.map(cartog_core::SymbolKind::from);
     let limit = limit.min(MAX_SEARCH_LIMIT);
     let symbols = db.search(query, kind_filter, file, limit)?;
@@ -353,8 +373,8 @@ pub fn cmd_search(
 }
 
 /// Index statistics summary.
-pub fn cmd_stats(db_path: &Path, json: bool) -> Result<()> {
-    let db = open_db(db_path, cartog_db::DEFAULT_EMBEDDING_DIM)?;
+pub fn cmd_stats(db_path: &Path, json: bool, embedding_dim: usize) -> Result<()> {
+    let db = open_db(db_path, embedding_dim)?;
     let stats = db.stats()?;
 
     output(&stats, json, None, |stats| {
@@ -382,8 +402,8 @@ pub fn cmd_stats(db_path: &Path, json: bool) -> Result<()> {
 }
 
 /// Token-budget-aware codebase summary: file tree + top symbols ranked by centrality.
-pub fn cmd_map(db_path: &Path, tokens: u32, json: bool) -> Result<()> {
-    let db = open_db(db_path, cartog_db::DEFAULT_EMBEDDING_DIM)?;
+pub fn cmd_map(db_path: &Path, tokens: u32, json: bool, embedding_dim: usize) -> Result<()> {
+    let db = open_db(db_path, embedding_dim)?;
     let files = db.all_files()?;
 
     if files.is_empty() {
@@ -478,8 +498,9 @@ pub fn cmd_changes(
     kind: Option<SymbolKindFilter>,
     json: bool,
     token_budget: Option<u32>,
+    embedding_dim: usize,
 ) -> Result<()> {
-    let db = open_db(db_path, cartog_db::DEFAULT_EMBEDDING_DIM)?;
+    let db = open_db(db_path, embedding_dim)?;
     let root = std::env::current_dir()?;
 
     let changed_files = indexer::git_recently_changed_files(&root, commits)?;
@@ -923,14 +944,18 @@ mod tests {
     // ── Config display tests ──
 
     fn default_config_display() -> ConfigDisplay {
+        use crate::config::{
+            DEFAULT_EMBEDDING_PROVIDER, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL,
+            DEFAULT_RERANKER_PROVIDER,
+        };
         ConfigDisplay {
             config_file: None,
             db_path: "/tmp/test.db".into(),
             embedding: EmbeddingDisplay {
                 provider: ValueDisplay {
-                    value: "local".into(),
+                    value: DEFAULT_EMBEDDING_PROVIDER.into(),
                     is_default: true,
-                    default: "local".into(),
+                    default: DEFAULT_EMBEDDING_PROVIDER.into(),
                 },
                 model: None,
                 dimension: None,
@@ -940,22 +965,22 @@ mod tests {
                 },
                 ollama: OllamaDisplay {
                     base_url: ValueDisplay {
-                        value: "http://localhost:11434".into(),
+                        value: DEFAULT_OLLAMA_BASE_URL.into(),
                         is_default: true,
-                        default: "http://localhost:11434".into(),
+                        default: DEFAULT_OLLAMA_BASE_URL.into(),
                     },
                     model: ValueDisplay {
-                        value: "nomic-embed-text".into(),
+                        value: DEFAULT_OLLAMA_MODEL.into(),
                         is_default: true,
-                        default: "nomic-embed-text".into(),
+                        default: DEFAULT_OLLAMA_MODEL.into(),
                     },
                 },
             },
             reranker: RerankerDisplay {
                 provider: ValueDisplay {
-                    value: "local".into(),
+                    value: DEFAULT_RERANKER_PROVIDER.into(),
                     is_default: true,
-                    default: "local".into(),
+                    default: DEFAULT_RERANKER_PROVIDER.into(),
                 },
             },
         }

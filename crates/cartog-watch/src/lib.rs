@@ -173,6 +173,26 @@ fn watch_loop(
 
     info!("watching for changes (Ctrl+C to stop)");
 
+    // Create the embedding provider once (lazy, on first RAG use)
+    let mut rag_provider: Option<Box<dyn rag::provider::EmbeddingProvider>> = None;
+    let ensure_provider =
+        |provider: &mut Option<Box<dyn rag::provider::EmbeddingProvider>>| -> bool {
+            if provider.is_none() {
+                match rag::create_embedding_provider(&config.rag_config) {
+                    Ok(p) => {
+                        *provider = Some(p);
+                        true
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to create embedding provider");
+                        false
+                    }
+                }
+            } else {
+                true
+            }
+        };
+
     // RAG timer state: when we last indexed (to defer embedding)
     let mut rag_pending = false;
     let mut last_index_time: Option<Instant> = None;
@@ -246,19 +266,24 @@ fn watch_loop(
                     if let Some(last) = last_index_time {
                         if last.elapsed() >= config.rag_delay {
                             info!("RAG delay elapsed, embedding pending symbols");
-                            let provider = rag::create_embedding_provider(&config.rag_config);
-                            match provider.and_then(|mut p| {
-                                rag::indexer::index_embeddings(&db, p.as_mut(), false)
-                            }) {
-                                Ok(r) => {
-                                    info!(
-                                        embedded = r.symbols_embedded,
-                                        skipped = r.symbols_skipped,
-                                        "RAG embedding complete"
-                                    );
-                                }
-                                Err(e) => {
-                                    warn!(error = %e, "RAG embedding failed");
+                            if !ensure_provider(&mut rag_provider) {
+                                rag_pending = false;
+                                last_index_time = None;
+                                continue;
+                            }
+                            if let Some(ref mut provider) = rag_provider {
+                                match rag::indexer::index_embeddings(&db, provider.as_mut(), false)
+                                {
+                                    Ok(r) => {
+                                        info!(
+                                            embedded = r.symbols_embedded,
+                                            skipped = r.symbols_skipped,
+                                            "RAG embedding complete"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(error = %e, "RAG embedding failed");
+                                    }
                                 }
                             }
                             rag_pending = false;
@@ -277,10 +302,12 @@ fn watch_loop(
     // Flush pending RAG embeddings on shutdown
     if config.rag && rag_pending {
         info!("flushing pending RAG embeddings before shutdown");
-        let provider = rag::create_embedding_provider(&config.rag_config);
-        match provider.and_then(|mut p| rag::indexer::index_embeddings(&db, p.as_mut(), false)) {
-            Ok(r) => info!(embedded = r.symbols_embedded, "final RAG flush complete"),
-            Err(e) => warn!(error = %e, "final RAG flush failed"),
+        ensure_provider(&mut rag_provider);
+        if let Some(ref mut provider) = rag_provider {
+            match rag::indexer::index_embeddings(&db, provider.as_mut(), false) {
+                Ok(r) => info!(embedded = r.symbols_embedded, "final RAG flush complete"),
+                Err(e) => warn!(error = %e, "final RAG flush failed"),
+            }
         }
     }
 

@@ -224,6 +224,10 @@ fn json_response(db: &Database, json: String) -> Result<CallToolResult, McpError
 
 // ── MCP Server ──
 
+/// MCP server exposing cartog tools over stdio.
+///
+/// **Lock ordering** (always acquire in this order to avoid deadlocks):
+///   `db` → `embedding_provider` → `reranker_provider`
 #[derive(Clone)]
 pub struct CartogServer {
     tool_router: ToolRouter<Self>,
@@ -232,8 +236,11 @@ pub struct CartogServer {
     /// Canonicalized CWD captured at server start to avoid repeated syscalls.
     /// Wrapped in `Arc` so clones (required by `#[derive(Clone)]`) are cheap.
     cwd: Arc<Path>,
-    /// RAG provider configuration (embedding + reranker).
-    rag_config: Arc<rag::EmbeddingProviderConfig>,
+    /// Cached embedding provider, created once at server start to avoid
+    /// reloading the ONNX model (or probing Ollama) on every request.
+    embedding_provider: Arc<Mutex<Box<dyn rag::provider::EmbeddingProvider>>>,
+    /// Cached reranker provider (if configured).
+    reranker_provider: Arc<Mutex<Option<Box<dyn rag::provider::RerankerProvider>>>>,
     /// Persistent LSP manager for warm server reuse across index calls.
     #[cfg(feature = "lsp")]
     lsp_manager: Arc<Mutex<cartog_lsp::manager::LspManager>>,
@@ -250,10 +257,14 @@ impl CartogServer {
         let cwd = std::env::current_dir()
             .and_then(|p| p.canonicalize())
             .map_err(|e| anyhow::anyhow!("cannot determine CWD: {e}"))?;
+        let provider = rag::create_embedding_provider(&rag_config)
+            .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
+        let reranker = rag::create_reranker_provider(&rag_config.reranker_provider);
         Ok(Self {
             tool_router: Self::tool_router(),
             db: Arc::new(Mutex::new(db)),
-            rag_config: Arc::new(rag_config),
+            embedding_provider: Arc::new(Mutex::new(provider)),
+            reranker_provider: Arc::new(Mutex::new(reranker)),
             #[cfg(feature = "lsp")]
             lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
             cwd: Arc::from(cwd),
@@ -282,7 +293,9 @@ impl CartogServer {
             // Phase 1: heuristic indexing (hold DB lock briefly)
             #[allow(unused_mut)]
             let mut result = {
-                let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+                let db = db.lock().map_err(|_| {
+                    mcp_err("internal error: database lock poisoned (server restart required)")
+                })?;
                 indexer::index_directory(&db, &validated, force, false)
                     .map_err(|e| mcp_err(format!("indexing failed: {e}")))?
                 // db lock released here
@@ -294,10 +307,12 @@ impl CartogServer {
             // Future optimization: collect LSP results without DB lock, batch-write after.
             #[cfg(feature = "lsp")]
             {
-                let mut mgr = lsp_manager
-                    .lock()
-                    .map_err(|_| mcp_err("LSP manager lock poisoned"))?;
-                let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+                let mut mgr = lsp_manager.lock().map_err(|_| {
+                    mcp_err("internal error: LSP manager lock poisoned (server restart required)")
+                })?;
+                let db = db.lock().map_err(|_| {
+                    mcp_err("internal error: database lock poisoned (server restart required)")
+                })?;
                 match cartog_lsp::lsp_resolve_edges(&db, &validated, Some(&mut mgr)) {
                     Ok(n) => {
                         result.edges_lsp_resolved = n;
@@ -333,7 +348,9 @@ impl CartogServer {
 
         tokio::task::spawn_blocking(move || {
             debug!(file = %file, "outline");
-            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+            let db = db.lock().map_err(|_| {
+                mcp_err("internal error: database lock poisoned (server restart required)")
+            })?;
             let symbols = db
                 .outline(&file)
                 .map_err(|e| mcp_err(format!("outline query failed: {e}")))?;
@@ -372,7 +389,9 @@ impl CartogServer {
                 .transpose()?;
 
             debug!(name = %name, kind = ?kind_filter, "refs");
-            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+            let db = db.lock().map_err(|_| {
+                mcp_err("internal error: database lock poisoned (server restart required)")
+            })?;
             let results = db
                 .refs(&name, kind_filter)
                 .map_err(|e| mcp_err(format!("refs query failed: {e}")))?;
@@ -403,7 +422,9 @@ impl CartogServer {
 
         tokio::task::spawn_blocking(move || {
             debug!(name = %name, "callees");
-            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+            let db = db.lock().map_err(|_| {
+                mcp_err("internal error: database lock poisoned (server restart required)")
+            })?;
             let edges = db
                 .callees(&name)
                 .map_err(|e| mcp_err(format!("callees query failed: {e}")))?;
@@ -430,7 +451,9 @@ impl CartogServer {
 
         tokio::task::spawn_blocking(move || {
             debug!(name = %name, depth, "impact");
-            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+            let db = db.lock().map_err(|_| {
+                mcp_err("internal error: database lock poisoned (server restart required)")
+            })?;
             let results = db
                 .impact(&name, depth)
                 .map_err(|e| mcp_err(format!("impact query failed: {e}")))?;
@@ -461,7 +484,9 @@ impl CartogServer {
 
         tokio::task::spawn_blocking(move || {
             debug!(name = %name, "hierarchy");
-            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+            let db = db.lock().map_err(|_| {
+                mcp_err("internal error: database lock poisoned (server restart required)")
+            })?;
             let pairs = db
                 .hierarchy(&name)
                 .map_err(|e| mcp_err(format!("hierarchy query failed: {e}")))?;
@@ -492,7 +517,9 @@ impl CartogServer {
 
         tokio::task::spawn_blocking(move || {
             debug!(file = %file, "deps");
-            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+            let db = db.lock().map_err(|_| {
+                mcp_err("internal error: database lock poisoned (server restart required)")
+            })?;
             let edges = db
                 .file_deps(&file)
                 .map_err(|e| mcp_err(format!("deps query failed: {e}")))?;
@@ -549,7 +576,7 @@ impl CartogServer {
                 .transpose()?;
             let file_filter = validated_file.as_deref();
             debug!(query = %query, kind = ?kind_filter, limit, "search");
-            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+            let db = db.lock().map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
             let symbols = db
                 .search(&query, kind_filter, file_filter, limit)
                 .map_err(|e| mcp_err(format!("search failed: {e}")))?;
@@ -571,7 +598,9 @@ impl CartogServer {
 
         tokio::task::spawn_blocking(move || {
             debug!("stats");
-            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+            let db = db.lock().map_err(|_| {
+                mcp_err("internal error: database lock poisoned (server restart required)")
+            })?;
             let stats = db
                 .stats()
                 .map_err(|e| mcp_err(format!("stats query failed: {e}")))?;
@@ -616,7 +645,7 @@ impl CartogServer {
             let changed_files = indexer::git_recently_changed_files(&root, commits)
                 .map_err(|e| mcp_err(format!("git changes failed: {e}")))?;
 
-            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+            let db = db.lock().map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
             let symbols = db
                 .symbols_for_files(&changed_files, kind_filter)
                 .map_err(|e| mcp_err(format!("symbols query failed: {e}")))?;
@@ -646,20 +675,25 @@ impl CartogServer {
         let force = params.force;
         let db = Arc::clone(&self.db);
         let cwd = Arc::clone(&self.cwd);
-        let rag_config = Arc::clone(&self.rag_config);
+        let provider = Arc::clone(&self.embedding_provider);
 
         tokio::task::spawn_blocking(move || {
             let validated = validate_path_within_cwd_canonical(&path, &cwd).map_err(mcp_err)?;
             debug!(path = %validated.display(), force, "rag index");
 
-            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+            let db = db.lock().map_err(|_| {
+                mcp_err("internal error: database lock poisoned (server restart required)")
+            })?;
 
             // Ensure the code graph index is up to date first
             let _ = indexer::index_directory(&db, &validated, false, false)
                 .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
 
-            let mut provider = rag::create_embedding_provider(&rag_config)
-                .map_err(|e| mcp_err(format!("failed to load embedding model: {e}")))?;
+            let mut provider = provider.lock().map_err(|_| {
+                mcp_err(
+                    "internal error: embedding provider lock poisoned (server restart required)",
+                )
+            })?;
             let result = rag::indexer::index_embeddings(&db, provider.as_mut(), force)
                 .map_err(|e| mcp_err(format!("embedding indexing failed: {e}")))?;
 
@@ -683,7 +717,8 @@ impl CartogServer {
         let kind_str = params.kind;
         let limit = params.limit.unwrap_or(10).min(MAX_SEARCH_LIMIT);
         let db = Arc::clone(&self.db);
-        let rag_config = Arc::clone(&self.rag_config);
+        let provider = Arc::clone(&self.embedding_provider);
+        let reranker = Arc::clone(&self.reranker_provider);
 
         tokio::task::spawn_blocking(move || {
             if query.is_empty() {
@@ -691,7 +726,7 @@ impl CartogServer {
             }
 
             debug!(query = %query, kind = ?kind_str, limit, "rag search");
-            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+            let db = db.lock().map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
 
             let kind_filter = match kind_str.as_deref() {
                 Some("all") => rag::search::KindFilter::All,
@@ -706,10 +741,12 @@ impl CartogServer {
                 None => rag::search::KindFilter::CodeOnly,
             };
 
-            let mut provider = rag::create_embedding_provider(&rag_config)
-                .map_err(|e| mcp_err(format!("failed to load embedding model: {e}")))?;
-            let mut reranker =
-                rag::create_reranker_provider(&rag_config.reranker_provider);
+            let mut provider = provider
+                .lock()
+                .map_err(|_| mcp_err("internal error: embedding provider lock poisoned (server restart required)"))?;
+            let mut reranker = reranker
+                .lock()
+                .map_err(|_| mcp_err("internal error: reranker lock poisoned (server restart required)"))?;
             let result = match reranker.as_mut() {
                 Some(r) => rag::search::hybrid_search(
                     &db, &query, limit, kind_filter, provider.as_mut(), Some(r.as_mut()),
