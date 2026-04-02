@@ -340,8 +340,8 @@ impl Database {
             .context("Failed to create schema")?;
         conn.execute_batch(RAG_SCHEMA)
             .context("Failed to create RAG schema")?;
-        handle_embedding_dimension(&conn, embedding_dim)?;
         migrate(&conn);
+        handle_embedding_dimension(&conn, embedding_dim)?;
         Ok(Self { conn })
     }
 
@@ -1320,29 +1320,31 @@ impl Database {
         if symbol_ids.is_empty() {
             return Ok(result);
         }
-        let placeholders: Vec<&str> = symbol_ids.iter().map(|_| "?").collect();
-        let sql = format!(
-            "SELECT symbol_id, content, header FROM symbol_content WHERE symbol_id IN ({})",
-            placeholders.join(",")
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> = symbol_ids
-            .iter()
-            .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
-            .collect();
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        for (id, content, header) in rows {
-            result.insert(id, (content, header));
+        for chunk in symbol_ids.chunks(Self::FILE_CHUNK_SIZE) {
+            let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+            let sql = format!(
+                "SELECT symbol_id, content, header FROM symbol_content WHERE symbol_id IN ({})",
+                placeholders.join(",")
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let params: Vec<Box<dyn rusqlite::types::ToSql>> = chunk
+                .iter()
+                .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
+                .collect();
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt
+                .query_map(param_refs.as_slice(), |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for (id, content, header) in rows {
+                result.insert(id, (content, header));
+            }
         }
         Ok(result)
     }
@@ -1412,23 +1414,26 @@ impl Database {
         if embedding_ids.is_empty() {
             return Ok(Vec::new());
         }
-        // Use a temporary approach for variable-length IN clause
-        let placeholders: Vec<String> = embedding_ids.iter().map(|_| "?".to_string()).collect();
-        let sql = format!(
-            "SELECT id, symbol_id FROM symbol_embedding_map WHERE id IN ({})",
-            placeholders.join(",")
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> = embedding_ids
-            .iter()
-            .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
-            .collect();
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        let mut all_results = Vec::with_capacity(embedding_ids.len());
+        for chunk in embedding_ids.chunks(Self::FILE_CHUNK_SIZE) {
+            let placeholders: Vec<String> = chunk.iter().map(|_| "?".to_string()).collect();
+            let sql = format!(
+                "SELECT id, symbol_id FROM symbol_embedding_map WHERE id IN ({})",
+                placeholders.join(",")
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let params: Vec<Box<dyn rusqlite::types::ToSql>> = chunk
+                .iter()
+                .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
+                .collect();
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt
+                .query_map(param_refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            all_results.extend(rows);
+        }
+        Ok(all_results)
     }
 
     // ── RAG: Vector Storage (sqlite-vec) ──
