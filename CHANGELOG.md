@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.9.4] - 2026-04-01
+## [0.10.0] - 2026-04-02
 
 ### Bug Fixes
 
@@ -25,6 +25,16 @@
 - **publish**: Publish all workspace crates in dependency order ([`a724b96`](https://github.com/jrollin/cartog/commit/a724b9662cf48581dbad30b1324310e7a11ce834))
 - **publish**: Enable crates.io publishing for all workspace crates ([`f453017`](https://github.com/jrollin/cartog/commit/f453017c6823cc3cc0637f58480ae1560ae8edee))
 - **publish**: Increase delay between crate publishes to 60s ([`a260010`](https://github.com/jrollin/cartog/commit/a260010dd069bad7b90eaf618707ef057138802a))
+- **ci**: Upgrade GitHub Actions to Node.js 24 compatible versions ([`776bb2d`](https://github.com/jrollin/cartog/commit/776bb2d505ffd8acc592822caeadeda0d4bb23a2))
+- **rag**: Prevent silent vector index wipe and cache providers ([`51aad71`](https://github.com/jrollin/cartog/commit/51aad71a7a8d470911cdd517c2a88560dbd65732))
+- **db**: Preserve stored embedding dimension when caller passes default ([`9667a15`](https://github.com/jrollin/cartog/commit/9667a15326787b97f762b3d1fbbf1ba69fafaf98))
+- **site**: Correct stale #compare nav anchor to #why ([`2c9576f`](https://github.com/jrollin/cartog/commit/2c9576f8ed05f31e762fbaff202fb9eacd941aaf))
+- **db**: Correct column mapping in search() and refs() queries ([`8f6f7ae`](https://github.com/jrollin/cartog/commit/8f6f7ae2402950457b484f97ce7822df9356f2c6))
+- **cli**: Handle --kind all in search and changes commands ([`83d3fab`](https://github.com/jrollin/cartog/commit/83d3fab4bad12347de4d131157910bcc30180368))
+- **db**: Wrap multi-statement deletes in transactions ([`45aca44`](https://github.com/jrollin/cartog/commit/45aca44f725028bf33a5bb71a5c231f62b331a1a))
+- **db**: Add chunking guards and reorder migration ([`8fef1b1`](https://github.com/jrollin/cartog/commit/8fef1b170f09e7e81a605696e33baad10082e157))
+- **indexer**: Prevent symlink loops and fix dedup collision bug ([`e5acbc4`](https://github.com/jrollin/cartog/commit/e5acbc41e81e7d2d52c47a1e686846e20bb46c07))
+- **lsp**: Detect EOF in read_headers to avoid infinite loop ([`ac0ea59`](https://github.com/jrollin/cartog/commit/ac0ea59ea3e017c8d28842c44793e6269fe1856e))
 
 ### Documentation
 
@@ -35,6 +45,9 @@
 - Update README, skill, and project docs for LSP feature ([`10eb869`](https://github.com/jrollin/cartog/commit/10eb86912a239fcd31590565da8920d3a0d2ed7f))
 - **skill**: Add CLI/MCP mode detection and usage guidance ([`2361676`](https://github.com/jrollin/cartog/commit/236167632a0dc40bd2242735496993205f2d638f))
 - Update documentation for incremental reindexing feature ([`2776bb1`](https://github.com/jrollin/cartog/commit/2776bb1558ac66c02695f0a1a13e6cd2dffec316))
+- Update documentation for multi-provider embeddings ([`2c09bb8`](https://github.com/jrollin/cartog/commit/2c09bb822739f6afef900105e29d79d8e50eed09))
+- **site**: Reorganize landing page and add provider config docs ([`f655c98`](https://github.com/jrollin/cartog/commit/f655c983548eb06e147bc999bc7fbe7b18d6668b))
+- **readme**: Broaden positioning and add doc site link ([`173c3ba`](https://github.com/jrollin/cartog/commit/173c3badd95fe6f99d7c3918d44e70954e366901))
 
 ### Features
 
@@ -61,6 +74,8 @@
 - **site**: Add live GitHub stars fetch with silent fallback ([`6865a76`](https://github.com/jrollin/cartog/commit/6865a769741499a5bbc7e5b8923289c4f0f79914))
 - **site**: Redesign landing page with visual polish and CI optimization ([`3d4d2ae`](https://github.com/jrollin/cartog/commit/3d4d2aeb3d065e35861a5bfc2287ba0c71e4dd8b))
 - **rag**: Add Markdown document support with code-only default ([`7f3b234`](https://github.com/jrollin/cartog/commit/7f3b234fee72bf6fc0e9fb94de95045c64754033))
+- **rag**: Pluggable embedding providers with TOML configuration ([`d6835b7`](https://github.com/jrollin/cartog/commit/d6835b771f776bac5cc028c1de2c0bbac1cbf68d))
+- Add `config` command to display current configuration ([`e419cd5`](https://github.com/jrollin/cartog/commit/e419cd505aa0601c814fcc6bc498b15346973a48))
 
 ### Miscellaneous
 
@@ -76,6 +91,9 @@
 ### Refactor
 
 - Split single crate into Cargo workspace with 9 crates ([`8184e8e`](https://github.com/jrollin/cartog/commit/8184e8eb52f04fc7b8a70e1dd3bc4b3ea72d3b63))
+- Extract default constants and avoid double config-path walk ([`aaac621`](https://github.com/jrollin/cartog/commit/aaac6211e4ae213cf87c7639bd5548324dd24ae4))
+- Deduplicate Ollama constants and harden config parsing ([`425a5f5`](https://github.com/jrollin/cartog/commit/425a5f581819ee8f8af8c67b699e13dd59e878d2))
+- Harden types and document constraints ([`1703fd8`](https://github.com/jrollin/cartog/commit/1703fd8af21867cd47afe58876fe61dd458eda3e))
 
 ## [0.3.1] - 2026-02-26
 
