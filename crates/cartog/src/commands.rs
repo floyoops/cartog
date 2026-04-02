@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::cli::{EdgeKindFilter, SymbolKindFilter};
+use crate::config::CartogConfig;
 use cartog_core::{EdgeKind, SymbolKind};
 use cartog_db::{Database, MAX_SEARCH_LIMIT};
 use cartog_indexer as indexer;
@@ -671,6 +672,200 @@ pub fn cmd_rag_search(
     })
 }
 
+/// Display the current configuration with default-value indicators.
+pub fn cmd_config(
+    config: &CartogConfig,
+    config_path: Option<&Path>,
+    db_path: &Path,
+    json: bool,
+) -> Result<()> {
+    use crate::config::{
+        DEFAULT_EMBEDDING_PROVIDER, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL,
+        DEFAULT_RERANKER_PROVIDER,
+    };
+
+    let embed = config.embedding.as_ref();
+    let ollama = embed.and_then(|e| e.ollama.as_ref());
+    let local = embed.and_then(|e| e.local.as_ref());
+    let reranker = config.reranker.as_ref();
+
+    let display = ConfigDisplay {
+        config_file: config_path.map(|p| p.to_string_lossy().into_owned()),
+        db_path: db_path.to_string_lossy().into_owned(),
+        embedding: EmbeddingDisplay {
+            provider: ValueDisplay {
+                value: embed.map_or(DEFAULT_EMBEDDING_PROVIDER.into(), |e| {
+                    e.provider().to_string()
+                }),
+                is_default: embed.map_or(true, |e| e.provider.is_none()),
+                default: DEFAULT_EMBEDDING_PROVIDER.into(),
+            },
+            model: embed.and_then(|e| e.model.clone()),
+            dimension: embed.and_then(|e| e.dimension),
+            local: LocalEmbeddingDisplay {
+                query_prefix: local.and_then(|l| l.query_prefix.clone()),
+                document_prefix: local.and_then(|l| l.document_prefix.clone()),
+            },
+            ollama: OllamaDisplay {
+                base_url: ValueDisplay {
+                    value: ollama
+                        .map_or(DEFAULT_OLLAMA_BASE_URL.into(), |o| o.base_url().to_string()),
+                    is_default: ollama.map_or(true, |o| o.base_url.is_none()),
+                    default: DEFAULT_OLLAMA_BASE_URL.into(),
+                },
+                model: ValueDisplay {
+                    value: ollama.map_or(DEFAULT_OLLAMA_MODEL.into(), |o| o.model().to_string()),
+                    is_default: ollama.map_or(true, |o| o.model.is_none()),
+                    default: DEFAULT_OLLAMA_MODEL.into(),
+                },
+            },
+        },
+        reranker: RerankerDisplay {
+            provider: ValueDisplay {
+                value: reranker.map_or(DEFAULT_RERANKER_PROVIDER.into(), |r| {
+                    r.provider().to_string()
+                }),
+                is_default: reranker.map_or(true, |r| r.provider.is_none()),
+                default: DEFAULT_RERANKER_PROVIDER.into(),
+            },
+        },
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&display)?);
+    } else {
+        print!("{}", format_config_human(&display));
+    }
+    Ok(())
+}
+
+fn format_value(v: &ValueDisplay) -> String {
+    if v.is_default {
+        format!("{} (default)", v.value)
+    } else {
+        format!("{} (default: {})", v.value, v.default)
+    }
+}
+
+fn format_optional(v: &Option<String>) -> &str {
+    match v {
+        Some(s) => s.as_str(),
+        None => "-",
+    }
+}
+
+fn format_config_human(d: &ConfigDisplay) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+
+    writeln!(
+        out,
+        "Config file: {}",
+        d.config_file.as_deref().unwrap_or("none")
+    )
+    .unwrap();
+    writeln!(out, "Database:    {}", d.db_path).unwrap();
+
+    writeln!(out, "\n[embedding]").unwrap();
+    writeln!(
+        out,
+        "  provider:          {}",
+        format_value(&d.embedding.provider)
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  model:             {}",
+        format_optional(&d.embedding.model)
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  dimension:         {}",
+        d.embedding.dimension.map_or("-".into(), |v| v.to_string())
+    )
+    .unwrap();
+
+    writeln!(out, "\n[embedding.local]").unwrap();
+    writeln!(
+        out,
+        "  query_prefix:      {}",
+        format_optional(&d.embedding.local.query_prefix)
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  document_prefix:   {}",
+        format_optional(&d.embedding.local.document_prefix)
+    )
+    .unwrap();
+
+    writeln!(out, "\n[embedding.ollama]").unwrap();
+    writeln!(
+        out,
+        "  base_url:          {}",
+        format_value(&d.embedding.ollama.base_url)
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  model:             {}",
+        format_value(&d.embedding.ollama.model)
+    )
+    .unwrap();
+
+    writeln!(out, "\n[reranker]").unwrap();
+    writeln!(
+        out,
+        "  provider:          {}",
+        format_value(&d.reranker.provider)
+    )
+    .unwrap();
+
+    out
+}
+
+#[derive(Serialize)]
+struct ConfigDisplay {
+    config_file: Option<String>,
+    db_path: String,
+    embedding: EmbeddingDisplay,
+    reranker: RerankerDisplay,
+}
+
+#[derive(Serialize)]
+struct EmbeddingDisplay {
+    provider: ValueDisplay,
+    model: Option<String>,
+    dimension: Option<usize>,
+    local: LocalEmbeddingDisplay,
+    ollama: OllamaDisplay,
+}
+
+#[derive(Serialize)]
+struct LocalEmbeddingDisplay {
+    query_prefix: Option<String>,
+    document_prefix: Option<String>,
+}
+
+#[derive(Serialize)]
+struct OllamaDisplay {
+    base_url: ValueDisplay,
+    model: ValueDisplay,
+}
+
+#[derive(Serialize)]
+struct RerankerDisplay {
+    provider: ValueDisplay,
+}
+
+#[derive(Serialize)]
+struct ValueDisplay {
+    value: String,
+    is_default: bool,
+    default: String,
+}
+
 /// Watch for file changes and auto-re-index.
 pub fn cmd_watch(
     db_path: &Path,
@@ -723,6 +918,122 @@ mod tests {
         let text = "abcd"; // 4 bytes = 1 token
         let result = truncate_to_budget(text, 1);
         assert_eq!(result, "abcd");
+    }
+
+    // ── Config display tests ──
+
+    fn default_config_display() -> ConfigDisplay {
+        ConfigDisplay {
+            config_file: None,
+            db_path: "/tmp/test.db".into(),
+            embedding: EmbeddingDisplay {
+                provider: ValueDisplay {
+                    value: "local".into(),
+                    is_default: true,
+                    default: "local".into(),
+                },
+                model: None,
+                dimension: None,
+                local: LocalEmbeddingDisplay {
+                    query_prefix: None,
+                    document_prefix: None,
+                },
+                ollama: OllamaDisplay {
+                    base_url: ValueDisplay {
+                        value: "http://localhost:11434".into(),
+                        is_default: true,
+                        default: "http://localhost:11434".into(),
+                    },
+                    model: ValueDisplay {
+                        value: "nomic-embed-text".into(),
+                        is_default: true,
+                        default: "nomic-embed-text".into(),
+                    },
+                },
+            },
+            reranker: RerankerDisplay {
+                provider: ValueDisplay {
+                    value: "local".into(),
+                    is_default: true,
+                    default: "local".into(),
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn test_format_config_human_all_defaults() {
+        let d = default_config_display();
+        let out = format_config_human(&d);
+        assert!(out.contains("Config file: none"));
+        assert!(out.contains("Database:    /tmp/test.db"));
+        assert!(out.contains("local (default)"));
+        assert!(out.contains("model:             -"));
+        assert!(out.contains("dimension:         -"));
+        assert!(out.contains("query_prefix:      -"));
+        assert!(out.contains("document_prefix:   -"));
+    }
+
+    #[test]
+    fn test_format_config_human_custom_values() {
+        let mut d = default_config_display();
+        d.config_file = Some("/project/.cartog.toml".into());
+        d.embedding.provider = ValueDisplay {
+            value: "ollama".into(),
+            is_default: false,
+            default: "local".into(),
+        };
+        d.embedding.model = Some("nomic-embed-text".into());
+        d.embedding.dimension = Some(768);
+
+        let out = format_config_human(&d);
+        assert!(out.contains("Config file: /project/.cartog.toml"));
+        assert!(out.contains("ollama (default: local)"));
+        assert!(out.contains("model:             nomic-embed-text"));
+        assert!(out.contains("dimension:         768"));
+    }
+
+    #[test]
+    fn test_format_value_default() {
+        let v = ValueDisplay {
+            value: "local".into(),
+            is_default: true,
+            default: "local".into(),
+        };
+        assert_eq!(format_value(&v), "local (default)");
+    }
+
+    #[test]
+    fn test_format_value_overridden() {
+        let v = ValueDisplay {
+            value: "ollama".into(),
+            is_default: false,
+            default: "local".into(),
+        };
+        assert_eq!(format_value(&v), "ollama (default: local)");
+    }
+
+    #[test]
+    fn test_format_optional_some() {
+        let v = Some("value".to_string());
+        assert_eq!(format_optional(&v), "value");
+    }
+
+    #[test]
+    fn test_format_optional_none() {
+        let v: Option<String> = None;
+        assert_eq!(format_optional(&v), "-");
+    }
+
+    #[test]
+    fn test_config_display_json_serialization() {
+        let d = default_config_display();
+        let json = serde_json::to_value(&d).unwrap();
+        assert_eq!(json["db_path"], "/tmp/test.db");
+        assert_eq!(json["embedding"]["provider"]["value"], "local");
+        assert_eq!(json["embedding"]["provider"]["is_default"], true);
+        assert!(json["config_file"].is_null());
+        assert!(json["embedding"]["model"].is_null());
     }
 
     #[test]
