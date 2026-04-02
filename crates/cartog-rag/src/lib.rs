@@ -56,7 +56,9 @@ impl Default for EmbeddingProviderConfig {
 
 impl EmbeddingProviderConfig {
     /// Resolve the embedding dimension for this config.
-    /// Uses explicit dimension if set, otherwise falls back to provider default.
+    /// Uses explicit dimension if set, otherwise falls back to the local provider default (384).
+    /// For Ollama, the actual dimension is auto-detected at provider construction time;
+    /// this method should not be relied upon for non-local providers without an explicit dimension.
     pub fn resolved_dimension(&self) -> usize {
         self.dimension.unwrap_or(EMBEDDING_DIM)
     }

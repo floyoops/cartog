@@ -105,6 +105,16 @@ impl OllamaEmbeddingProvider {
             );
         }
 
+        for (i, emb) in resp.embeddings.iter().enumerate() {
+            if emb.len() != self.dim {
+                anyhow::bail!(
+                    "Ollama embedding[{i}] has dimension {} but expected {dim}",
+                    emb.len(),
+                    dim = self.dim
+                );
+            }
+        }
+
         Ok(resp.embeddings)
     }
 }

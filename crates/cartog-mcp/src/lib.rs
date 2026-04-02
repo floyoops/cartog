@@ -227,7 +227,7 @@ fn json_response(db: &Database, json: String) -> Result<CallToolResult, McpError
 /// MCP server exposing cartog tools over stdio.
 ///
 /// **Lock ordering** (always acquire in this order to avoid deadlocks):
-///   `db` → `embedding_provider` → `reranker_provider`
+///   `lsp_manager` → `db` → `embedding_provider` → `reranker_provider`
 #[derive(Clone)]
 pub struct CartogServer {
     tool_router: ToolRouter<Self>,
