@@ -349,7 +349,10 @@ pub fn cmd_search(
     embedding_dim: usize,
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
-    let kind_filter = kind.map(cartog_core::SymbolKind::from);
+    let kind_filter = match kind {
+        Some(SymbolKindFilter::All) | None => None,
+        Some(k) => Some(cartog_core::SymbolKind::from(k)),
+    };
     let limit = limit.min(MAX_SEARCH_LIMIT);
     let symbols = db.search(query, kind_filter, file, limit)?;
     let query = query.to_string();
@@ -514,7 +517,10 @@ pub fn cmd_changes(
         return Ok(());
     }
 
-    let kind_filter = kind.map(cartog_core::SymbolKind::from);
+    let kind_filter = match kind {
+        Some(SymbolKindFilter::All) | None => None,
+        Some(k) => Some(cartog_core::SymbolKind::from(k)),
+    };
     let symbols = db.symbols_for_files(&changed_files, kind_filter)?;
 
     let result = cartog_core::ChangesResult {
