@@ -85,23 +85,8 @@ impl EmbeddingEngine {
     }
 }
 
-/// Serialize a `Vec<f32>` to little-endian bytes for sqlite-vec storage.
-pub fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(embedding.len() * 4);
-    for &val in embedding {
-        bytes.extend_from_slice(&val.to_le_bytes());
-    }
-    bytes
-}
-
-/// Deserialize little-endian bytes back to `Vec<f32>`.
-#[allow(dead_code)]
-pub fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
-}
+// Re-export from provider module (canonical location).
+pub use super::provider::{bytes_to_embedding, embedding_to_bytes};
 
 #[cfg(test)]
 mod tests {

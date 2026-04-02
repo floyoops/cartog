@@ -118,9 +118,13 @@ CREATE TABLE IF NOT EXISTS symbol_embedding_map (
 CREATE INDEX IF NOT EXISTS idx_embedding_map_symbol ON symbol_embedding_map(symbol_id);
 "#;
 
-/// SQL to create the sqlite-vec virtual table (must run after sqlite-vec extension is loaded).
-const RAG_VEC_SCHEMA: &str =
-    "CREATE VIRTUAL TABLE IF NOT EXISTS symbol_vec USING vec0(embedding float[384])";
+/// Default embedding dimension (BGE-small-en-v1.5).
+pub const DEFAULT_EMBEDDING_DIM: usize = 384;
+
+/// SQL to create the sqlite-vec virtual table with the given embedding dimension.
+fn rag_vec_schema(dim: usize) -> String {
+    format!("CREATE VIRTUAL TABLE IF NOT EXISTS symbol_vec USING vec0(embedding float[{dim}])")
+}
 
 /// Default database filename, stored in the project root.
 pub const DB_FILE: &str = ".cartog.db";
@@ -268,9 +272,59 @@ fn migrate(conn: &Connection) {
     }
 }
 
+/// Check stored embedding dimension against requested dimension.
+/// If they differ, drop the vector table and clear the embedding map.
+fn handle_embedding_dimension(conn: &Connection, requested_dim: usize) -> Result<()> {
+    let stored_dim: Option<usize> = conn
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'embedding_dimension'",
+            [],
+            |row| row.get::<_, i64>(0).map(|v| v as usize),
+        )
+        .ok();
+
+    // When the caller passes the default dimension and a different dimension is
+    // already stored, preserve the stored one. This avoids non-RAG commands
+    // (which don't know the real provider dimension) from silently wiping a
+    // vector index created by an Ollama provider with auto-detected dimension.
+    let effective_dim = match stored_dim {
+        Some(old) if requested_dim == DEFAULT_EMBEDDING_DIM && old != DEFAULT_EMBEDDING_DIM => old,
+        _ => requested_dim,
+    };
+
+    if let Some(old_dim) = stored_dim {
+        if old_dim != effective_dim {
+            tracing::warn!(
+                old = old_dim,
+                new = effective_dim,
+                "Embedding dimension changed — clearing vector index. Run `cartog rag index` to re-embed."
+            );
+            conn.execute("DROP TABLE IF EXISTS symbol_vec", [])
+                .context("Failed to drop old vector table during dimension migration")?;
+            conn.execute("DELETE FROM symbol_embedding_map", [])
+                .context("Failed to clear embedding map during dimension migration")?;
+        }
+    }
+
+    conn.execute_batch(&rag_vec_schema(effective_dim))
+        .context("Failed to create sqlite-vec table")?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_dimension', ?1)",
+        params![effective_dim.to_string()],
+    )
+    .context("Failed to store embedding dimension")?;
+
+    Ok(())
+}
+
 impl Database {
     /// Open or create the database at the given path.
-    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
+    ///
+    /// `embedding_dim` sets the vector dimension for the sqlite-vec table.
+    /// If the stored dimension differs from the requested one, the vector index
+    /// is cleared and recreated (a re-index via `cartog rag index` is needed).
+    pub fn open(path: impl AsRef<std::path::Path>, embedding_dim: usize) -> Result<Self> {
         register_sqlite_vec();
         let conn = Connection::open(path.as_ref()).context("Failed to open database")?;
         conn.execute_batch(
@@ -286,9 +340,8 @@ impl Database {
             .context("Failed to create schema")?;
         conn.execute_batch(RAG_SCHEMA)
             .context("Failed to create RAG schema")?;
-        conn.execute_batch(RAG_VEC_SCHEMA)
-            .context("Failed to create sqlite-vec table")?;
         migrate(&conn);
+        handle_embedding_dimension(&conn, embedding_dim)?;
         Ok(Self { conn })
     }
 
@@ -300,7 +353,7 @@ impl Database {
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(RAG_SCHEMA)?;
-        conn.execute_batch(RAG_VEC_SCHEMA)?;
+        conn.execute_batch(&rag_vec_schema(DEFAULT_EMBEDDING_DIM))?;
         migrate(&conn);
         Ok(Self { conn })
     }
@@ -375,11 +428,13 @@ impl Database {
 
     /// Remove all symbols, edges, and RAG data for a file (before re-indexing it).
     pub fn clear_file_data(&self, path: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
         self.clear_rag_data_for_file(path)?;
         self.conn
             .execute("DELETE FROM edges WHERE file_path = ?1", params![path])?;
         self.conn
             .execute("DELETE FROM symbols WHERE file_path = ?1", params![path])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -482,14 +537,13 @@ impl Database {
 
     /// Delete a single symbol and cascade to edges, content, and embeddings.
     pub fn delete_symbol(&self, id: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
         self.conn
             .execute("DELETE FROM edges WHERE source_id = ?1", params![id])?;
-        // Also clean up edges that target this symbol
         self.conn.execute(
             "UPDATE edges SET target_id = NULL WHERE target_id = ?1",
             params![id],
         )?;
-        // Clean RAG data — delete vector embedding BEFORE removing the map entry
         let _ = self.conn.execute(
             "DELETE FROM symbol_vec WHERE rowid IN \
              (SELECT id FROM symbol_embedding_map WHERE symbol_id = ?1)",
@@ -505,6 +559,7 @@ impl Database {
         );
         self.conn
             .execute("DELETE FROM symbols WHERE id = ?1", params![id])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -865,7 +920,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, kind, file_path, start_line, end_line,
                     start_byte, end_byte, parent_id, signature, visibility,
-                    is_async, docstring, in_degree,
+                    is_async, docstring, in_degree, content_hash, subtree_hash,
                     (CASE
                        WHEN LOWER(name) = LOWER(?1)                    THEN 0
                        WHEN LOWER(name) LIKE LOWER(?2) || '%' ESCAPE '\\' THEN 1
@@ -894,7 +949,6 @@ impl Database {
                       file_path, start_line
              LIMIT ?5",
         )?;
-        // in_degree is column 13, rank is column 14 — row_to_symbol reads 0–13
         // ?1 = raw query (exact equality), ?2 = escaped query (LIKE patterns), ?3 = kind, ?4 = file, ?5 = limit
         let rows = stmt
             .query_map(
@@ -966,7 +1020,7 @@ impl Database {
                 "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                        s.is_async, s.docstring, s.in_degree
+                        s.is_async, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
                  FROM edges e
                  LEFT JOIN symbols s ON e.source_id = s.id
                  LEFT JOIN symbols sym2 ON e.target_id = sym2.id
@@ -982,7 +1036,7 @@ impl Database {
                 "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                        s.is_async, s.docstring, s.in_degree
+                        s.is_async, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
                  FROM edges e
                  LEFT JOIN symbols s ON e.source_id = s.id
                  LEFT JOIN symbols sym2 ON e.target_id = sym2.id
@@ -1266,29 +1320,31 @@ impl Database {
         if symbol_ids.is_empty() {
             return Ok(result);
         }
-        let placeholders: Vec<&str> = symbol_ids.iter().map(|_| "?").collect();
-        let sql = format!(
-            "SELECT symbol_id, content, header FROM symbol_content WHERE symbol_id IN ({})",
-            placeholders.join(",")
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> = symbol_ids
-            .iter()
-            .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
-            .collect();
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        for (id, content, header) in rows {
-            result.insert(id, (content, header));
+        for chunk in symbol_ids.chunks(Self::FILE_CHUNK_SIZE) {
+            let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+            let sql = format!(
+                "SELECT symbol_id, content, header FROM symbol_content WHERE symbol_id IN ({})",
+                placeholders.join(",")
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let params: Vec<Box<dyn rusqlite::types::ToSql>> = chunk
+                .iter()
+                .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
+                .collect();
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt
+                .query_map(param_refs.as_slice(), |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for (id, content, header) in rows {
+                result.insert(id, (content, header));
+            }
         }
         Ok(result)
     }
@@ -1358,23 +1414,26 @@ impl Database {
         if embedding_ids.is_empty() {
             return Ok(Vec::new());
         }
-        // Use a temporary approach for variable-length IN clause
-        let placeholders: Vec<String> = embedding_ids.iter().map(|_| "?".to_string()).collect();
-        let sql = format!(
-            "SELECT id, symbol_id FROM symbol_embedding_map WHERE id IN ({})",
-            placeholders.join(",")
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> = embedding_ids
-            .iter()
-            .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
-            .collect();
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        let mut all_results = Vec::with_capacity(embedding_ids.len());
+        for chunk in embedding_ids.chunks(Self::FILE_CHUNK_SIZE) {
+            let placeholders: Vec<String> = chunk.iter().map(|_| "?".to_string()).collect();
+            let sql = format!(
+                "SELECT id, symbol_id FROM symbol_embedding_map WHERE id IN ({})",
+                placeholders.join(",")
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let params: Vec<Box<dyn rusqlite::types::ToSql>> = chunk
+                .iter()
+                .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
+                .collect();
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt
+                .query_map(param_refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            all_results.extend(rows);
+        }
+        Ok(all_results)
     }
 
     // ── RAG: Vector Storage (sqlite-vec) ──
@@ -3154,5 +3213,136 @@ mod tests {
         // foo should still have in_degree = 2 (recomputed correctly)
         let results = db.search("foo", None, None, 10).unwrap();
         assert_eq!(results[0].in_degree, 2);
+    }
+
+    // ── Embedding dimension migration tests ──
+
+    #[test]
+    fn test_open_stores_embedding_dimension() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        let db = Database::open(&db_path, 384).unwrap();
+        let stored: String = db
+            .get_metadata("embedding_dimension")
+            .unwrap()
+            .expect("dimension should be stored");
+        assert_eq!(stored, "384");
+    }
+
+    #[test]
+    fn test_open_with_different_dimension_clears_embeddings() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // First open with 384-dim
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            let sym = Symbol::new("foo", SymbolKind::Function, "a.py", 1, 10, 0, 100, None);
+            db.insert_symbol(&sym).unwrap();
+            db.upsert_symbol_content(&sym.id, "foo", "def foo():", "header")
+                .unwrap();
+            let eid = db.get_or_create_embedding_id(&sym.id).unwrap();
+            let bytes = vec![0u8; 384 * 4];
+            db.insert_embeddings(&[(eid, bytes)]).unwrap();
+            assert_eq!(db.embedding_count().unwrap(), 1);
+        }
+
+        // Reopen with 768-dim — should auto-wipe embeddings
+        {
+            let db = Database::open(&db_path, 768).unwrap();
+            assert_eq!(db.embedding_count().unwrap(), 0);
+            let stored: String = db
+                .get_metadata("embedding_dimension")
+                .unwrap()
+                .expect("dimension should be updated");
+            assert_eq!(stored, "768");
+        }
+    }
+
+    #[test]
+    fn test_open_same_dimension_preserves_embeddings() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // First open
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            let sym = Symbol::new("bar", SymbolKind::Function, "b.py", 1, 10, 0, 100, None);
+            db.insert_symbol(&sym).unwrap();
+            db.upsert_symbol_content(&sym.id, "bar", "def bar():", "header")
+                .unwrap();
+            let eid = db.get_or_create_embedding_id(&sym.id).unwrap();
+            let bytes = vec![0u8; 384 * 4];
+            db.insert_embeddings(&[(eid, bytes)]).unwrap();
+        }
+
+        // Reopen with same dimension — embeddings preserved
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            assert_eq!(db.embedding_count().unwrap(), 1);
+        }
+    }
+
+    #[test]
+    fn test_default_dim_preserves_stored_non_default() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // First open with non-default dimension (e.g. Ollama auto-detected 768)
+        {
+            let db = Database::open(&db_path, 768).unwrap();
+            let sym = Symbol::new("baz", SymbolKind::Function, "c.py", 1, 10, 0, 100, None);
+            db.insert_symbol(&sym).unwrap();
+            db.upsert_symbol_content(&sym.id, "baz", "def baz():", "header")
+                .unwrap();
+            let eid = db.get_or_create_embedding_id(&sym.id).unwrap();
+            let bytes = vec![0u8; 768 * 4];
+            db.insert_embeddings(&[(eid, bytes)]).unwrap();
+        }
+
+        // Reopen with DEFAULT_EMBEDDING_DIM (384) — must preserve 768-dim embeddings
+        {
+            let db = Database::open(&db_path, DEFAULT_EMBEDDING_DIM).unwrap();
+            assert_eq!(db.embedding_count().unwrap(), 1);
+            let stored: i64 = db
+                .conn
+                .query_row(
+                    "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'embedding_dimension'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(stored, 768);
+        }
+    }
+
+    #[test]
+    fn test_explicit_non_default_dim_wipes_different_stored() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // First open with 768
+        {
+            let db = Database::open(&db_path, 768).unwrap();
+            let sym = Symbol::new("qux", SymbolKind::Function, "d.py", 1, 10, 0, 100, None);
+            db.insert_symbol(&sym).unwrap();
+            db.upsert_symbol_content(&sym.id, "qux", "def qux():", "header")
+                .unwrap();
+            let eid = db.get_or_create_embedding_id(&sym.id).unwrap();
+            let bytes = vec![0u8; 768 * 4];
+            db.insert_embeddings(&[(eid, bytes)]).unwrap();
+        }
+
+        // Reopen with explicit 1536 — this IS a real dimension change, must wipe
+        {
+            let db = Database::open(&db_path, 1536).unwrap();
+            assert_eq!(db.embedding_count().unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn test_default_embedding_dim_constant() {
+        assert_eq!(DEFAULT_EMBEDDING_DIM, 384);
     }
 }

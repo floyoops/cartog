@@ -14,3 +14,6 @@ rusqlite = { workspace = true }
 serde = { workspace = true }
 sqlite-vec = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

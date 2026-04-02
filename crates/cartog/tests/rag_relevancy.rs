@@ -12,7 +12,24 @@ use std::path::Path;
 
 use cartog::db::Database;
 use cartog::indexer::index_directory;
+use cartog::rag::provider::EmbeddingProvider;
 use cartog::rag::search::{hybrid_search, KindFilter};
+
+struct StubEmbeddingProvider;
+impl EmbeddingProvider for StubEmbeddingProvider {
+    fn name(&self) -> &str {
+        "stub"
+    }
+    fn dimension(&self) -> usize {
+        384
+    }
+    fn embed_document(&mut self, _text: &str) -> anyhow::Result<Vec<f32>> {
+        Ok(vec![0.0; 384])
+    }
+    fn embed_documents(&mut self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| vec![0.0; 384]).collect())
+    }
+}
 
 /// A single relevancy test case.
 struct QueryCase {
@@ -193,8 +210,15 @@ fn rag_relevancy_benchmark() {
     let n = cases.len() as f64;
 
     for case in &cases {
-        let result = hybrid_search(&db, case.query, case.k as u32, KindFilter::All)
-            .unwrap_or_else(|e| panic!("search failed for '{}': {e}", case.query));
+        let result = hybrid_search(
+            &db,
+            case.query,
+            case.k as u32,
+            KindFilter::All,
+            &mut StubEmbeddingProvider,
+            None,
+        )
+        .unwrap_or_else(|e| panic!("search failed for '{}': {e}", case.query));
 
         let names: Vec<String> = result
             .results
@@ -334,8 +358,15 @@ fn java_rag_relevancy_benchmark() {
     let n = cases.len() as f64;
 
     for case in &cases {
-        let result = hybrid_search(&db, case.query, case.k as u32, KindFilter::All)
-            .unwrap_or_else(|e| panic!("search failed for '{}': {e}", case.query));
+        let result = hybrid_search(
+            &db,
+            case.query,
+            case.k as u32,
+            KindFilter::All,
+            &mut StubEmbeddingProvider,
+            None,
+        )
+        .unwrap_or_else(|e| panic!("search failed for '{}': {e}", case.query));
 
         let names: Vec<String> = result
             .results

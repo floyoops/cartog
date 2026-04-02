@@ -224,7 +224,10 @@ fn read_headers(reader: &mut BufReader<ChildStdout>) -> Result<usize> {
 
     loop {
         line.clear();
-        reader.read_line(&mut line)?;
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            bail!("LSP server closed stdout (EOF)");
+        }
 
         if line == "\r\n" || line == "\n" {
             break;

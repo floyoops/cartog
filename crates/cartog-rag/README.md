@@ -10,17 +10,36 @@ Indexes both **code symbols** (functions, classes, methods) and **Markdown docum
 
 ## How it works
 
-### Models
+### Embedding providers
 
-- **Embedding**: BGE-small-en-v1.5 quantized — 384-dimensional vectors, ONNX runtime via fastembed (~80MB)
-- **Reranker**: BGE-reranker-base — cross-encoder that scores (query, document) pairs jointly (~1.1GB, optional)
+Configurable via `.cartog.toml` `[embedding]` section. Supports pluggable providers:
 
-Both are auto-downloaded from HuggingFace on first use. Cached in `~/.cache/cartog/models/` (respects `FASTEMBED_CACHE_DIR` and `XDG_CACHE_HOME`).
+| Provider | Feature flag | Models | Notes |
+|----------|-------------|--------|-------|
+| **local** (default) | `provider-local` | Any fastembed built-in (BGE, all-MiniLM, nomic, etc.) | ONNX Runtime via fastembed, auto-downloaded from HuggingFace |
+| **ollama** | `provider-ollama` | Any Ollama model (nomic-embed-text, mxbai-embed-large, etc.) | HTTP client, auto-detects dimension |
+
+**Reranker**: BGE-reranker-base — cross-encoder that scores (query, document) pairs jointly (~1.1GB, optional, local only).
+
+Local models cached in `~/.cache/cartog/models/` (respects `FASTEMBED_CACHE_DIR` and `XDG_CACHE_HOME`). Ollama models are managed by the Ollama server.
+
+```toml
+# .cartog.toml — example with Ollama
+[embedding]
+provider = "ollama"
+model = "nomic-embed-text"
+# dimension = 768  # auto-detected if omitted
+
+# Local provider only: asymmetric model prefixes
+# [embedding.local]
+# query_prefix = "search_query: "
+# document_prefix = "search_document: "
+```
 
 ### Hybrid search pipeline
 
 1. **FTS5 keyword search** — BM25 ranking over symbol names and source content
-2. **Vector KNN search** — cosine similarity on 384-dim embeddings via sqlite-vec
+2. **Vector KNN search** — cosine similarity on configurable-dimension embeddings via sqlite-vec
 3. **RRF merge** — Reciprocal Rank Fusion (k=60) combines both ranked lists
 4. **Hydration** — load symbol metadata and source content from the database
 5. **Cross-encoder reranking** — reranker scores top-50 candidates (if model available)
@@ -28,24 +47,23 @@ Both are auto-downloaded from HuggingFace on first use. Cached in `~/.cache/cart
 
 Over-retrieves `(limit * 3).max(20)` candidates from each source to improve fusion quality before applying the final limit.
 
-### Engine caching
+### Provider lifecycle
 
-- Embedding engine: `static Mutex`, loaded once per process, reused across calls
-- Reranker engine: tri-state `Mutex` — `None` (not attempted), `Some(None)` (load failed, don't retry), `Some(Some(engine))` (ready)
+Providers are created per-command invocation via `create_embedding_provider(config)`. The caller passes an `EmbeddingProviderConfig` (from `.cartog.toml`) and receives a boxed `EmbeddingProvider` trait object. Reranker providers follow the same pattern with `create_reranker_provider(config)`.
 
 ## Public API
 
 | Export | Description |
 |--------|-------------|
+| `create_embedding_provider()` | Create a provider from config |
+| `create_reranker_provider()` | Create a reranker from config ("local" or "none") |
+| `EmbeddingProviderConfig` | Configuration for provider selection |
+| `provider::EmbeddingProvider` | Trait for embedding backends |
+| `provider::RerankerProvider` | Trait for reranker backends |
 | `search::hybrid_search()` | Run the full hybrid search pipeline |
 | `indexer::index_embeddings()` | Embed symbols and write vectors to DB |
-| `setup::download_model()` | Download the embedding model |
-| `setup::download_cross_encoder()` | Download the reranker model |
-| `embeddings::EmbeddingEngine` | Low-level embedding interface |
-| `reranker::CrossEncoderEngine` | Low-level reranker interface |
-| `EMBEDDING_DIM` | 384 (vector dimension constant) |
-| `is_embedding_model_cached()` | Check if embedding model is downloaded |
-| `is_reranker_model_cached()` | Check if reranker model is downloaded |
+| `setup::download_model()` | Download the embedding model (local provider) |
+| `EMBEDDING_DIM` | Default vector dimension (384) |
 
 ## Crate dependencies
 

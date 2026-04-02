@@ -30,6 +30,7 @@ tracing-subscriber = { workspace = true }
 [features]
 default = []
 lsp = ["dep:cartog-lsp", "cartog-indexer/lsp", "cartog-mcp/lsp"]
+ollama-embedding = ["cartog-rag/provider-ollama"]
 
 [dev-dependencies]
 criterion = { workspace = true }

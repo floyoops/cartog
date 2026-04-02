@@ -3,8 +3,6 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde::Serialize;
 
-use std::sync::Mutex;
-
 use cartog_core::{Symbol, SymbolKind};
 use cartog_db::Database;
 
@@ -19,58 +17,7 @@ pub enum KindFilter {
     CodeOnly,
 }
 
-use super::embeddings::{embedding_to_bytes, EmbeddingEngine};
-use super::reranker::CrossEncoderEngine;
-
-/// Cached embedding engine — loaded once, reused across search calls.
-static EMBEDDING_ENGINE: Mutex<Option<EmbeddingEngine>> = Mutex::new(None);
-
-/// Cached cross-encoder engine — loaded once, reused across search calls.
-/// Uses tri-state: None = not attempted, Some(None) = load failed, Some(Some(_)) = ready.
-static RERANKER_ENGINE: Mutex<Option<Option<CrossEncoderEngine>>> = Mutex::new(None);
-
-/// Get or initialize the cached embedding engine.
-///
-/// NOTE: The Mutex is held for the entire duration of model inference.
-/// This is fine for single-threaded CLI and MCP usage (one query at a time).
-/// If the MCP server becomes multi-threaded with concurrent queries,
-/// this should be replaced with a pool or per-thread engine.
-fn with_embedding_engine<F, R>(f: F) -> Result<R>
-where
-    F: FnOnce(&mut EmbeddingEngine) -> Result<R>,
-{
-    let mut guard = EMBEDDING_ENGINE
-        .lock()
-        .map_err(|_| anyhow::anyhow!("embedding engine lock poisoned"))?;
-    if guard.is_none() {
-        *guard = Some(EmbeddingEngine::new()?);
-    }
-    f(guard.as_mut().unwrap())
-}
-
-/// Get or initialize the cached cross-encoder engine.
-///
-/// Returns None if model is not available (not downloaded) or lock is poisoned.
-/// Uses tri-state caching: once a load attempt fails, it is not retried,
-/// avoiding repeated filesystem/network probes on every search call.
-fn with_reranker_engine<F, R>(f: F) -> Option<R>
-where
-    F: FnOnce(&mut CrossEncoderEngine) -> R,
-{
-    let mut guard = RERANKER_ENGINE.lock().ok()?;
-    if guard.is_none() {
-        // First attempt: try to load, cache the result either way
-        match CrossEncoderEngine::load() {
-            Ok(engine) => *guard = Some(Some(engine)),
-            Err(e) => {
-                tracing::debug!(error = %e, "Cross-encoder not available, skipping re-ranking");
-                *guard = Some(None); // Cache the failure — don't retry
-                return None;
-            }
-        }
-    }
-    guard.as_mut().unwrap().as_mut().map(f)
-}
+use super::provider::{embedding_to_bytes, EmbeddingProvider, RerankerProvider};
 
 /// A search result combining symbol metadata with relevance info.
 #[derive(Debug, Clone, Serialize)]
@@ -125,11 +72,13 @@ fn rrf_merge(ranked_lists: &[(&str, Vec<String>)], k: f64) -> Vec<(String, f64, 
 ///
 /// When `kind_filter` is set, results are filtered before applying `limit`,
 /// so the caller always gets up to `limit` results of the requested kind.
-pub fn hybrid_search(
+pub fn hybrid_search<E: EmbeddingProvider + ?Sized>(
     db: &Database,
     query: &str,
     limit: u32,
     kind_filter: KindFilter,
+    embedding_provider: &mut E,
+    reranker: Option<&mut dyn RerankerProvider>,
 ) -> Result<HybridSearchResult> {
     let retrieval_limit = (limit * 3).max(20); // Over-retrieve for better merge
 
@@ -139,7 +88,7 @@ pub fn hybrid_search(
 
     // 2. Vector search (if embeddings exist in the DB)
     let vec_results = if db.embedding_count()? > 0 {
-        vector_search(db, query, retrieval_limit)?
+        vector_search(db, query, retrieval_limit, embedding_provider)?
     } else {
         Vec::new()
     };
@@ -184,7 +133,7 @@ pub fn hybrid_search(
         }
     }
 
-    // 5. Cross-encoder re-ranking (if model is available).
+    // 5. Cross-encoder re-ranking (if provider is available).
     //    Cap at 50 candidates to bound latency.
     const RERANK_MAX: usize = 50;
     let rerank_slice = if candidates.len() > RERANK_MAX {
@@ -192,9 +141,9 @@ pub fn hybrid_search(
     } else {
         &mut candidates[..]
     };
-    with_reranker_engine(|engine| {
-        rerank_candidates(engine, query, rerank_slice);
-    });
+    if let Some(reranker) = reranker {
+        rerank_candidates(reranker, query, rerank_slice);
+    }
 
     // 5b. Stable tiebreaker: within same score, prefer higher in-degree (more referenced).
     candidates.sort_by(|a, b| {
@@ -246,7 +195,7 @@ pub fn hybrid_search(
 /// then re-sorts by cross-encoder score descending.
 /// Candidates without content retain their original order at the end.
 fn rerank_candidates(
-    engine: &mut CrossEncoderEngine,
+    reranker: &mut dyn RerankerProvider,
     query: &str,
     candidates: &mut [SearchResult],
 ) {
@@ -267,7 +216,7 @@ fn rerank_candidates(
         .map(|&i| candidates[i].content.as_deref().unwrap())
         .collect();
 
-    match engine.score_batch(query, &docs) {
+    match reranker.score_batch(query, &docs) {
         Ok(scores) => {
             for (&idx, score) in scoreable_indices.iter().zip(scores.iter()) {
                 candidates[idx].rerank_score = Some(*score as f64);
@@ -277,15 +226,7 @@ fn rerank_candidates(
             tracing::warn!(error = %e, "Cross-encoder batch scoring failed, keeping RRF order");
         }
     }
-
-    // Stable sort: candidates with rerank_score come first (sorted by score desc),
-    // then candidates without score (in original RRF order).
-    candidates.sort_by(|a, b| match (a.rerank_score, b.rerank_score) {
-        (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    });
+    // Caller (hybrid_search) handles final sorting by rerank_score + RRF + in_degree.
 }
 
 /// FTS5 search with safe query escaping.
@@ -339,8 +280,13 @@ fn is_fts5_syntax_error(err: &anyhow::Error) -> bool {
 }
 
 /// Vector search: embed the query and find nearest neighbors.
-fn vector_search(db: &Database, query: &str, limit: u32) -> Result<Vec<String>> {
-    let query_embedding = with_embedding_engine(|engine| engine.embed(query))?;
+fn vector_search<E: EmbeddingProvider + ?Sized>(
+    db: &Database,
+    query: &str,
+    limit: u32,
+    provider: &mut E,
+) -> Result<Vec<String>> {
+    let query_embedding = provider.embed_query(query)?;
     let query_bytes = embedding_to_bytes(&query_embedding);
 
     let nn_results = db.vector_search(&query_bytes, limit)?;
@@ -362,6 +308,7 @@ fn vector_search(db: &Database, query: &str, limit: u32) -> Result<Vec<String>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::test_utils::MockEmbeddingProvider;
     use cartog_core::SymbolKind;
 
     /// Create a symbol + content pair and insert into the database.
@@ -513,7 +460,15 @@ mod tests {
         seed_python_corpus(&db);
 
         // "validate token" should rank validate_token #1 (both terms in name+content)
-        let result = hybrid_search(&db, "validate token", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "validate token",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert!(result.fts_count > 0, "FTS5 should find results");
         assert_eq!(result.vec_count, 0, "no embeddings → no vector results");
         assert_eq!(result.results[0].symbol.name, "validate_token");
@@ -532,7 +487,15 @@ mod tests {
         }
 
         // "authenticate" should find AuthService (content match)
-        let result = hybrid_search(&db, "authenticate", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "authenticate",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.results[0].symbol.name, "AuthService");
 
         // send_email should NOT appear for an auth-related query
@@ -576,7 +539,15 @@ mod tests {
         );
 
         // "connect" matches DatabaseConnection's content; the others don't mention "connect"
-        let result = hybrid_search(&db, "connect", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "connect",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.results[0].symbol.name, "DatabaseConnection");
         assert_eq!(
             result.results.len(),
@@ -585,7 +556,15 @@ mod tests {
         );
 
         // "router" should rank createRouter #1
-        let result = hybrid_search(&db, "router", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "router",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.results[0].symbol.name, "createRouter");
     }
 
@@ -618,15 +597,39 @@ mod tests {
         );
 
         // "extract symbols" — both terms in extract's content; Database/resolve_edges don't have "extract"
-        let result = hybrid_search(&db, "extract symbols", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "extract symbols",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.results[0].symbol.name, "extract");
 
         // "resolve edges" — only resolve_edges has both terms
-        let result = hybrid_search(&db, "resolve edges", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "resolve edges",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.results[0].symbol.name, "resolve_edges");
 
         // "Database" should not return extract or resolve_edges as #1
-        let result = hybrid_search(&db, "Database", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "Database",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.results[0].symbol.name, "Database");
     }
 
@@ -651,7 +654,15 @@ mod tests {
         );
 
         // "handle request" — HandleRequest has both terms in name+content
-        let result = hybrid_search(&db, "handle request", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "handle request",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.results[0].symbol.name, "HandleRequest");
 
         // Repository should not appear for "handle request" (no shared terms)
@@ -684,7 +695,15 @@ mod tests {
         );
 
         // "session" — SessionManager has it in name+content, migrate doesn't
-        let result = hybrid_search(&db, "session", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "session",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.results[0].symbol.name, "SessionManager");
         let names: Vec<&str> = result
             .results
@@ -697,7 +716,15 @@ mod tests {
         );
 
         // "migrate" — exact name match
-        let result = hybrid_search(&db, "migrate", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "migrate",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.results[0].symbol.name, "migrate");
     }
 
@@ -709,7 +736,15 @@ mod tests {
         seed_python_corpus(&db);
 
         // "token" appears in validate_token and generate_token content, NOT in send_email
-        let result = hybrid_search(&db, "token", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "token",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         let names: Vec<&str> = result
             .results
             .iter()
@@ -737,7 +772,15 @@ mod tests {
         // "validate token" as a phrase matches validate_token exactly (FTS5 splits
         // underscores into separate tokens). generate_token doesn't match the phrase
         // because "validate" is not in its content.
-        let result = hybrid_search(&db, "validate token", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "validate token",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(
             result.results[0].symbol.name, "validate_token",
             "symbol matching both terms as phrase should rank #1"
@@ -745,7 +788,15 @@ mod tests {
 
         // Now test OR ranking: "generate token" — generate_token and AuthService both
         // contain "generate" and "token". Both should appear in top results.
-        let result = hybrid_search(&db, "generate token", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "generate token",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         let top_names: Vec<&str> = result
             .results
             .iter()
@@ -787,7 +838,15 @@ mod tests {
         );
 
         // "database" matches via normalized_name column ("database connection")
-        let result = hybrid_search(&db, "database", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "database",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(
             result.results.len(),
             1,
@@ -817,7 +876,15 @@ mod tests {
         );
 
         // "validate token" as phrase matches normalized_name "validate token" exactly
-        let result = hybrid_search(&db, "validate token", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "validate token",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert!(
             !result.results.is_empty(),
             "phrase 'validate token' should match validateToken via normalized_name"
@@ -837,7 +904,15 @@ mod tests {
             "TOKEN_EXPIRY = 3600",
         );
 
-        let result = hybrid_search(&db, "token expiry", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "token expiry",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(
             result.results.len(),
             1,
@@ -860,7 +935,15 @@ mod tests {
         // FTS5 is token-based, not substring-based.
         // "valid" does NOT match "validate" or "validate_token".
         // Use `cartog search` for substring matching.
-        let result = hybrid_search(&db, "valid", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "valid",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert!(
             result.results.is_empty(),
             "FTS5 does not do substring matching — 'valid' should not match 'validate_token'. \
@@ -893,7 +976,15 @@ mod tests {
         // "validate response" — no symbol has these words adjacent (phrase won't match).
         // AND fallback: process_request has both "validate" and "response" in content.
         // build_response has only "response" — should rank below process_request.
-        let result = hybrid_search(&db, "validate response", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "validate response",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert!(
             !result.results.is_empty(),
             "AND fallback should find results"
@@ -912,19 +1003,41 @@ mod tests {
         seed_python_corpus(&db);
 
         // Without filter: "token" matches functions and possibly classes
-        let all = hybrid_search(&db, "token", 10, KindFilter::All).unwrap();
+        let all = hybrid_search(
+            &db,
+            "token",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert!(all.results.len() >= 2);
 
         // With kind=Function filter: only functions returned, still respects limit
-        let funcs =
-            hybrid_search(&db, "token", 10, KindFilter::Exact(SymbolKind::Function)).unwrap();
+        let funcs = hybrid_search(
+            &db,
+            "token",
+            10,
+            KindFilter::Exact(SymbolKind::Function),
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         for r in &funcs.results {
             assert_eq!(r.symbol.kind, SymbolKind::Function);
         }
 
         // With kind=Class: AuthService mentions "token" in content
-        let classes =
-            hybrid_search(&db, "token", 10, KindFilter::Exact(SymbolKind::Class)).unwrap();
+        let classes = hybrid_search(
+            &db,
+            "token",
+            10,
+            KindFilter::Exact(SymbolKind::Class),
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         for r in &classes.results {
             assert_eq!(r.symbol.kind, SymbolKind::Class);
         }
@@ -956,8 +1069,15 @@ mod tests {
         }
 
         // Request 3 functions — should get exactly 3 despite 10 total matches
-        let result =
-            hybrid_search(&db, "handler", 3, KindFilter::Exact(SymbolKind::Function)).unwrap();
+        let result = hybrid_search(
+            &db,
+            "handler",
+            3,
+            KindFilter::Exact(SymbolKind::Function),
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(
             result.results.len(),
             3,
@@ -998,7 +1118,15 @@ mod tests {
             "func validate(token string) bool {\n\treturn checkSignature(token)\n}",
         );
 
-        let result = hybrid_search(&db, "validate", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "validate",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(
             result.results.len(),
             3,
@@ -1023,7 +1151,15 @@ mod tests {
             "def foo(): pass",
         );
 
-        let result = hybrid_search(&db, "zzz_nonexistent_term", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "zzz_nonexistent_term",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert!(result.results.is_empty());
         assert_eq!(result.fts_count, 0);
         assert_eq!(result.vec_count, 0);
@@ -1035,7 +1171,15 @@ mod tests {
         let content = "def greet(name: str) -> str:\n    return f'Hello, {name}!'";
         insert_symbol_with_content(&db, "greet", SymbolKind::Function, "hello.py", 1, content);
 
-        let result = hybrid_search(&db, "greet", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "greet",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.results.len(), 1);
         assert_eq!(result.results[0].content.as_deref(), Some(content));
     }
@@ -1054,7 +1198,15 @@ mod tests {
             );
         }
 
-        let result = hybrid_search(&db, "handler", 3, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "handler",
+            3,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert_eq!(
             result.results.len(),
             3,
@@ -1155,7 +1307,15 @@ mod tests {
             "def process_data(items):\n    return [transform(i) for i in items]",
         );
 
-        let result = hybrid_search(&db, "process data", 10, KindFilter::All).unwrap();
+        let result = hybrid_search(
+            &db,
+            "process data",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
         assert!(!result.results.is_empty());
 
         // Re-ranking depends on whether the cross-encoder model is downloadable.

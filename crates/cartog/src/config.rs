@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Default, Deserialize)]
 pub struct CartogConfig {
     pub database: Option<DatabaseConfig>,
+    pub embedding: Option<EmbeddingConfig>,
+    pub reranker: Option<RerankerConfig>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -19,11 +21,116 @@ pub struct DatabaseConfig {
     pub path: Option<String>,
 }
 
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct EmbeddingConfig {
+    /// Provider type: "local" (default) or "ollama".
+    pub provider: Option<String>,
+    /// Model name. For "local": fastembed built-in name or HuggingFace repo ID.
+    /// For "ollama": model name on the Ollama server.
+    pub model: Option<String>,
+    /// Embedding dimension. Auto-detected for built-in models, required for custom HF models.
+    pub dimension: Option<usize>,
+    /// Local provider settings (ONNX via fastembed).
+    pub local: Option<LocalEmbeddingConfig>,
+    /// Ollama provider settings.
+    pub ollama: Option<OllamaConfig>,
+}
+
+pub const DEFAULT_EMBEDDING_PROVIDER: &str = "local";
+
+impl EmbeddingConfig {
+    pub fn provider(&self) -> &str {
+        self.provider
+            .as_deref()
+            .unwrap_or(DEFAULT_EMBEDDING_PROVIDER)
+    }
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct LocalEmbeddingConfig {
+    /// Prefix prepended to text during search (e.g. "search_query: ").
+    pub query_prefix: Option<String>,
+    /// Prefix prepended to text during indexing (e.g. "search_document: ").
+    pub document_prefix: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct OllamaConfig {
+    /// Ollama server URL (default: "http://localhost:11434").
+    pub base_url: Option<String>,
+    /// Model name (default: "nomic-embed-text").
+    pub model: Option<String>,
+}
+
+pub const DEFAULT_OLLAMA_BASE_URL: &str = cartog_rag::providers::DEFAULT_OLLAMA_BASE_URL;
+pub const DEFAULT_OLLAMA_MODEL: &str = cartog_rag::providers::DEFAULT_OLLAMA_MODEL;
+
+impl OllamaConfig {
+    pub fn base_url(&self) -> &str {
+        self.base_url.as_deref().unwrap_or(DEFAULT_OLLAMA_BASE_URL)
+    }
+
+    pub fn model(&self) -> &str {
+        self.model.as_deref().unwrap_or(DEFAULT_OLLAMA_MODEL)
+    }
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct RerankerConfig {
+    /// Provider type: "local" (default) or "none".
+    pub provider: Option<String>,
+}
+
+pub const DEFAULT_RERANKER_PROVIDER: &str = "local";
+
+impl RerankerConfig {
+    pub fn provider(&self) -> &str {
+        self.provider
+            .as_deref()
+            .unwrap_or(DEFAULT_RERANKER_PROVIDER)
+    }
+}
+
+/// Convert the embedding config section into an `EmbeddingProviderConfig` for cartog-rag.
+pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProviderConfig {
+    match &config.embedding {
+        Some(embed) => {
+            let (query_prefix, document_prefix) = match &embed.local {
+                Some(local) => (local.query_prefix.clone(), local.document_prefix.clone()),
+                None => (None, None),
+            };
+            let ollama = embed.ollama.as_ref();
+            cartog_rag::EmbeddingProviderConfig {
+                provider: embed.provider().to_string(),
+                model: embed
+                    .model
+                    .clone()
+                    .or_else(|| ollama.map(|o| o.model().to_string())),
+                dimension: embed.dimension,
+                query_prefix,
+                document_prefix,
+                base_url: ollama.map(|o| o.base_url().to_string()),
+                reranker_provider: config
+                    .reranker
+                    .as_ref()
+                    .map(|r| r.provider().to_string())
+                    .unwrap_or_else(|| DEFAULT_RERANKER_PROVIDER.to_string()),
+            }
+        }
+        None => cartog_rag::EmbeddingProviderConfig::default(),
+    }
+}
+
 /// Load the local project config from `.cartog.toml`.
-pub fn load_config() -> CartogConfig {
-    local_config_path()
-        .and_then(|p| read_config(&p))
-        .unwrap_or_default()
+/// Returns the parsed config and the path it was loaded from (if any).
+pub fn load_config() -> (CartogConfig, Option<PathBuf>) {
+    match local_config_path() {
+        Some(p) => match read_config(&p) {
+            Some(cfg) => (cfg, Some(p)),
+            None => (CartogConfig::default(), None),
+        },
+        None => (CartogConfig::default(), None),
+    }
 }
 
 /// Path to the local project config: `.cartog.toml` found by walking up from
@@ -141,6 +248,14 @@ mod tests {
     }
 
     #[test]
+    fn test_read_config_invalid_toml_returns_none() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        fs::write(&cfg_path, "this is {{ not valid toml").unwrap();
+        assert!(read_config(&cfg_path).is_none());
+    }
+
+    #[test]
     fn test_read_config_empty_toml_returns_default() {
         let dir = tempfile::TempDir::new().unwrap();
         let cfg_path = dir.path().join("config.toml");
@@ -155,6 +270,7 @@ mod tests {
             database: Some(DatabaseConfig {
                 path: Some("/config/path.db".to_string()),
             }),
+            ..Default::default()
         };
         let result = resolve_db_path(Some(PathBuf::from("/explicit/path.db")), &cfg);
         assert_eq!(result, PathBuf::from("/explicit/path.db"));
@@ -166,6 +282,7 @@ mod tests {
             database: Some(DatabaseConfig {
                 path: Some("/config/proj.db".to_string()),
             }),
+            ..Default::default()
         };
         let result = resolve_db_path(None, &cfg);
         assert_eq!(result, PathBuf::from("/config/proj.db"));
@@ -199,5 +316,218 @@ mod tests {
         std::env::set_current_dir(original).unwrap();
 
         assert_eq!(result, canonical_root.join(cartog_db::DB_FILE));
+    }
+
+    // ── Embedding config tests ──
+
+    #[test]
+    fn test_embedding_config_defaults() {
+        let cfg = EmbeddingConfig::default();
+        assert_eq!(cfg.provider(), "local");
+        assert!(cfg.dimension.is_none());
+        assert!(cfg.model.is_none());
+        assert!(cfg.local.is_none());
+        assert!(cfg.ollama.is_none());
+    }
+
+    #[test]
+    fn test_embedding_config_from_toml() {
+        let toml_str = r#"
+[embedding]
+provider = "ollama"
+model = "nomic-embed-text"
+dimension = 768
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let embed = cfg.embedding.unwrap();
+        assert_eq!(embed.provider(), "ollama");
+        assert_eq!(embed.model.as_deref(), Some("nomic-embed-text"));
+        assert_eq!(embed.dimension, Some(768));
+    }
+
+    #[test]
+    fn test_embedding_config_local_with_prefixes() {
+        let toml_str = r#"
+[embedding]
+provider = "local"
+model = "BAAI/bge-small-en-v1.5"
+
+[embedding.local]
+query_prefix = "search_query: "
+document_prefix = "search_document: "
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let embed = cfg.embedding.unwrap();
+        assert_eq!(embed.provider(), "local");
+        let local = embed.local.unwrap();
+        assert_eq!(local.query_prefix.as_deref(), Some("search_query: "));
+        assert_eq!(local.document_prefix.as_deref(), Some("search_document: "));
+    }
+
+    #[test]
+    fn test_ollama_config_defaults() {
+        let cfg = OllamaConfig::default();
+        assert_eq!(cfg.base_url(), "http://localhost:11434");
+        assert_eq!(cfg.model(), "nomic-embed-text");
+    }
+
+    #[test]
+    fn test_ollama_config_from_toml() {
+        let toml_str = r#"
+[embedding.ollama]
+base_url = "http://gpu-server:11434"
+model = "mxbai-embed-large"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let ollama = cfg.embedding.unwrap().ollama.unwrap();
+        assert_eq!(ollama.base_url(), "http://gpu-server:11434");
+        assert_eq!(ollama.model(), "mxbai-embed-large");
+    }
+
+    #[test]
+    fn test_reranker_config_defaults() {
+        let cfg = RerankerConfig::default();
+        assert_eq!(cfg.provider(), "local");
+    }
+
+    #[test]
+    fn test_reranker_config_none() {
+        let toml_str = r#"
+[reranker]
+provider = "none"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.reranker.unwrap().provider(), "none");
+    }
+
+    #[test]
+    fn test_full_config_backward_compat() {
+        let toml_str = r#"
+[database]
+path = "/tmp/test.db"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        assert!(cfg.embedding.is_none());
+        assert!(cfg.reranker.is_none());
+        assert_eq!(cfg.database.unwrap().path.as_deref(), Some("/tmp/test.db"));
+    }
+
+    #[test]
+    fn test_config_unknown_fields_ignored() {
+        let toml_str = r#"
+[embedding]
+provider = "local"
+unknown_field = "should be ignored"
+"#;
+        // serde default: unknown fields are silently ignored
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.embedding.unwrap().provider(), "local");
+    }
+
+    // ── to_provider_config tests ──
+
+    #[test]
+    fn test_to_provider_config_defaults() {
+        let cfg = CartogConfig::default();
+        let pc = to_provider_config(&cfg);
+        assert_eq!(pc.provider, "local");
+        assert!(pc.model.is_none());
+        assert_eq!(pc.resolved_dimension(), 384);
+        assert!(pc.query_prefix.is_none());
+        assert!(pc.document_prefix.is_none());
+    }
+
+    #[test]
+    fn test_to_provider_config_from_toml() {
+        let toml_str = r#"
+[embedding]
+provider = "ollama"
+model = "nomic-embed-text"
+dimension = 768
+
+[embedding.local]
+query_prefix = "search_query: "
+document_prefix = "search_document: "
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let pc = to_provider_config(&cfg);
+        assert_eq!(pc.provider, "ollama");
+        assert_eq!(pc.model.as_deref(), Some("nomic-embed-text"));
+        assert_eq!(pc.resolved_dimension(), 768);
+        assert_eq!(pc.query_prefix.as_deref(), Some("search_query: "));
+        assert_eq!(pc.document_prefix.as_deref(), Some("search_document: "));
+    }
+
+    #[test]
+    fn test_provider_config_dimension_override() {
+        let pc = cartog_rag::EmbeddingProviderConfig {
+            dimension: Some(1536),
+            ..Default::default()
+        };
+        assert_eq!(pc.resolved_dimension(), 1536);
+    }
+
+    #[test]
+    fn test_provider_config_dimension_default_fallback() {
+        let pc = cartog_rag::EmbeddingProviderConfig::default();
+        assert_eq!(pc.resolved_dimension(), 384);
+        assert!(pc.dimension.is_none());
+    }
+
+    #[test]
+    fn test_to_provider_config_ollama_model_fallback() {
+        let toml_str = r#"
+[embedding]
+provider = "ollama"
+
+[embedding.ollama]
+model = "mxbai-embed-large"
+base_url = "http://gpu:11434"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let pc = to_provider_config(&cfg);
+        assert_eq!(pc.provider, "ollama");
+        assert_eq!(pc.model.as_deref(), Some("mxbai-embed-large"));
+        assert_eq!(pc.base_url.as_deref(), Some("http://gpu:11434"));
+    }
+
+    #[test]
+    fn test_to_provider_config_top_level_model_wins() {
+        let toml_str = r#"
+[embedding]
+provider = "ollama"
+model = "top-level-model"
+
+[embedding.ollama]
+model = "ollama-model"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let pc = to_provider_config(&cfg);
+        assert_eq!(pc.model.as_deref(), Some("top-level-model"),);
+    }
+
+    #[test]
+    fn test_to_provider_config_base_url_threaded() {
+        let toml_str = r#"
+[embedding]
+provider = "ollama"
+
+[embedding.ollama]
+base_url = "http://custom:11434"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let pc = to_provider_config(&cfg);
+        assert_eq!(pc.base_url.as_deref(), Some("http://custom:11434"));
+    }
+
+    #[test]
+    fn test_to_provider_config_no_base_url_when_local() {
+        let toml_str = r#"
+[embedding]
+provider = "local"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let pc = to_provider_config(&cfg);
+        assert!(pc.base_url.is_none());
     }
 }

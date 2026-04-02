@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Symbol {
     pub id: String,
     pub name: String,
@@ -198,7 +198,7 @@ impl std::fmt::Display for Visibility {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Edge {
     pub source_id: String,
     pub target_name: String,
@@ -286,7 +286,6 @@ pub struct FileInfo {
     pub num_symbols: u32,
 }
 
-/// Result of a recent-changes query: changed files and their indexed symbols.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChangesResult {
     pub changed_files: Vec<String>,

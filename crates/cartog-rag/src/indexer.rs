@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tracing::info;
 
 use cartog_db::Database;
 
-use super::embeddings::{embedding_to_bytes, EmbeddingEngine};
+use super::provider::{embedding_to_bytes, EmbeddingProvider};
 
 /// Result of a RAG indexing operation.
 #[derive(Debug, Default, serde::Serialize)]
@@ -23,8 +23,8 @@ const DB_BATCH_LIMIT: usize = 256;
 /// Process a batch of texts through the embedding engine and write results to DB.
 ///
 /// Returns the number of successfully processed items in this batch.
-fn flush_embedding_batch(
-    engine: &mut EmbeddingEngine,
+fn flush_embedding_batch<P: EmbeddingProvider + ?Sized>(
+    provider: &mut P,
     db: &Database,
     texts: &[String],
     symbol_ids: &[String],
@@ -32,7 +32,7 @@ fn flush_embedding_batch(
     result: &mut RagIndexResult,
 ) -> Result<usize> {
     let str_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-    match engine.embed_batch(&str_refs) {
+    match provider.embed_documents(&str_refs) {
         Ok(embeddings) => {
             for (embedding, sid) in embeddings.iter().zip(symbol_ids.iter()) {
                 let embedding_id = db.get_or_create_embedding_id(sid)?;
@@ -48,11 +48,10 @@ fn flush_embedding_batch(
             Ok(embeddings.len())
         }
         Err(e) => {
-            // Batch failed — fall back to one-at-a-time to isolate the bad symbol
             tracing::warn!(error = %e, "Batch embedding failed, falling back to sequential");
             let mut count = 0;
             for (text, sid) in texts.iter().zip(symbol_ids.iter()) {
-                match engine.embed(text) {
+                match provider.embed_document(text) {
                     Ok(embedding) => {
                         let embedding_id = db.get_or_create_embedding_id(sid)?;
                         let bytes = embedding_to_bytes(&embedding);
@@ -165,10 +164,11 @@ fn is_insignificant_line(line: &str) -> bool {
 /// Requires the embedding model to be available (downloaded via `cartog rag setup`
 /// or auto-downloaded on first use by fastembed).
 /// When `force` is true, clears all existing embeddings and re-embeds everything.
-pub fn index_embeddings(db: &Database, force: bool) -> Result<RagIndexResult> {
-    let mut engine = EmbeddingEngine::new()
-        .context("Failed to load embedding model. Run 'cartog rag setup' to download it.")?;
-
+pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
+    db: &Database,
+    provider: &mut P,
+    force: bool,
+) -> Result<RagIndexResult> {
     let total_content_symbols = db.symbol_content_count()?;
 
     // Auto-detect embedding format change and force re-embed
@@ -243,8 +243,7 @@ pub fn index_embeddings(db: &Database, force: bool) -> Result<RagIndexResult> {
         let texts: Vec<String> = batch.iter().map(|(t, _)| t.clone()).collect();
         let sids: Vec<String> = batch.iter().map(|(_, s)| s.clone()).collect();
 
-        let count =
-            flush_embedding_batch(&mut engine, db, &texts, &sids, &mut db_batch, &mut result)?;
+        let count = flush_embedding_batch(provider, db, &texts, &sids, &mut db_batch, &mut result)?;
         processed += count;
 
         if processed % 1000 < CHUNK_SIZE {
@@ -414,7 +413,110 @@ mod tests {
 
     #[test]
     fn test_embedding_format_version_is_current() {
-        // Ensures the constant is kept in sync — update when adding migrations
         assert_eq!(EMBEDDING_FORMAT_VERSION, 3);
+    }
+
+    // ── index_embeddings tests with mock provider ──
+
+    use crate::provider::test_utils::MockEmbeddingProvider;
+    use cartog_core::{Symbol, SymbolKind};
+
+    fn setup_db_with_symbols(n: usize) -> Database {
+        let db = Database::open_memory().unwrap();
+        for i in 0..n {
+            let name = format!("func_{i}");
+            let sym = Symbol::new(
+                &name,
+                SymbolKind::Function,
+                "test.py",
+                (i * 10 + 1) as u32,
+                (i * 10 + 10) as u32,
+                0,
+                100,
+                None,
+            );
+            db.insert_symbol(&sym).unwrap();
+            let content = format!("def {name}(x):\n    return x * {i}\n");
+            let header = format!("// File: test.py | function {name}");
+            db.upsert_symbol_content(&sym.id, &name, &content, &header)
+                .unwrap();
+        }
+        db
+    }
+
+    #[test]
+    fn test_index_embeddings_basic() {
+        let db = setup_db_with_symbols(5);
+        let mut provider = MockEmbeddingProvider::new(384);
+
+        let result = index_embeddings(&db, &mut provider, false).unwrap();
+        assert_eq!(result.symbols_embedded, 5);
+        assert_eq!(result.symbols_skipped, 0);
+        assert_eq!(result.total_content_symbols, 5);
+        assert!(provider.embed_count > 0);
+    }
+
+    #[test]
+    fn test_index_embeddings_idempotent() {
+        let db = setup_db_with_symbols(3);
+        let mut provider = MockEmbeddingProvider::new(384);
+
+        let r1 = index_embeddings(&db, &mut provider, false).unwrap();
+        assert_eq!(r1.symbols_embedded, 3);
+
+        let r2 = index_embeddings(&db, &mut provider, false).unwrap();
+        assert_eq!(r2.symbols_embedded, 0, "second run should embed nothing");
+    }
+
+    #[test]
+    fn test_index_embeddings_force_reembeds() {
+        let db = setup_db_with_symbols(3);
+        let mut provider = MockEmbeddingProvider::new(384);
+
+        let r1 = index_embeddings(&db, &mut provider, false).unwrap();
+        assert_eq!(r1.symbols_embedded, 3);
+
+        let r2 = index_embeddings(&db, &mut provider, true).unwrap();
+        assert_eq!(r2.symbols_embedded, 3, "force should re-embed everything");
+    }
+
+    #[test]
+    fn test_index_embeddings_stores_format_version() {
+        let db = setup_db_with_symbols(1);
+        let mut provider = MockEmbeddingProvider::new(384);
+
+        index_embeddings(&db, &mut provider, false).unwrap();
+
+        let version: String = db
+            .get_metadata("embedding_format_version")
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, EMBEDDING_FORMAT_VERSION.to_string());
+    }
+
+    #[test]
+    fn test_index_embeddings_empty_db() {
+        let db = Database::open_memory().unwrap();
+        let mut provider = MockEmbeddingProvider::new(384);
+
+        let result = index_embeddings(&db, &mut provider, false).unwrap();
+        assert_eq!(result.symbols_embedded, 0);
+        assert_eq!(result.total_content_symbols, 0);
+        assert_eq!(provider.embed_count, 0);
+    }
+
+    #[test]
+    fn test_index_embeddings_skips_trivial_content() {
+        let db = Database::open_memory().unwrap();
+        let sym = Symbol::new("tiny", SymbolKind::Function, "a.py", 1, 2, 0, 10, None);
+        db.insert_symbol(&sym).unwrap();
+        // Content + header below MIN_EMBED_TEXT_BYTES (40 bytes)
+        db.upsert_symbol_content(&sym.id, "tiny", "x=1", "h")
+            .unwrap();
+
+        let mut provider = MockEmbeddingProvider::new(384);
+        let result = index_embeddings(&db, &mut provider, false).unwrap();
+        assert_eq!(result.symbols_skipped, 1);
+        assert_eq!(result.symbols_embedded, 0);
     }
 }
