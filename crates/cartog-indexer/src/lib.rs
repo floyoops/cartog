@@ -74,6 +74,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
 
     for entry in WalkDir::new(&root)
         .follow_links(true)
+        .max_depth(50)
         .into_iter()
         .filter_entry(|e| !is_ignored(e))
     {
@@ -372,9 +373,10 @@ fn dedup_symbol_ids(symbols: &mut [Symbol], edges: &mut [cartog_core::Edge]) {
         if *count > 1 {
             let old_id = sym.id.clone();
             sym.id = format!("{}:{}", old_id, count);
-            renames.insert(format!("{}@{}", old_id, count), sym.id.clone());
-            // Track by position for parent_id fixup
-            renames.insert(old_id, sym.id.clone());
+            // Only insert if not already present — keeps the *first* renamed ID
+            // for edge fixup, avoiding the 3+ collision overwrite bug where
+            // the last rename would silently win.
+            renames.entry(old_id).or_insert_with(|| sym.id.clone());
         }
     }
 
@@ -382,14 +384,12 @@ fn dedup_symbol_ids(symbols: &mut [Symbol], edges: &mut [cartog_core::Edge]) {
         return;
     }
 
-    // Fix up edge source_ids that reference renamed symbols
     for edge in edges.iter_mut() {
         if let Some(new_id) = renames.get(&edge.source_id) {
             edge.source_id = new_id.clone();
         }
     }
 
-    // Fix up parent_ids that reference renamed symbols
     for sym in symbols.iter_mut() {
         if let Some(ref pid) = sym.parent_id {
             if let Some(new_id) = renames.get(pid) {
