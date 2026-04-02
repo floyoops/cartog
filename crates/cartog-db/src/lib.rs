@@ -428,11 +428,13 @@ impl Database {
 
     /// Remove all symbols, edges, and RAG data for a file (before re-indexing it).
     pub fn clear_file_data(&self, path: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
         self.clear_rag_data_for_file(path)?;
         self.conn
             .execute("DELETE FROM edges WHERE file_path = ?1", params![path])?;
         self.conn
             .execute("DELETE FROM symbols WHERE file_path = ?1", params![path])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -535,14 +537,13 @@ impl Database {
 
     /// Delete a single symbol and cascade to edges, content, and embeddings.
     pub fn delete_symbol(&self, id: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
         self.conn
             .execute("DELETE FROM edges WHERE source_id = ?1", params![id])?;
-        // Also clean up edges that target this symbol
         self.conn.execute(
             "UPDATE edges SET target_id = NULL WHERE target_id = ?1",
             params![id],
         )?;
-        // Clean RAG data — delete vector embedding BEFORE removing the map entry
         let _ = self.conn.execute(
             "DELETE FROM symbol_vec WHERE rowid IN \
              (SELECT id FROM symbol_embedding_map WHERE symbol_id = ?1)",
@@ -558,6 +559,7 @@ impl Database {
         );
         self.conn
             .execute("DELETE FROM symbols WHERE id = ?1", params![id])?;
+        tx.commit()?;
         Ok(())
     }
 
