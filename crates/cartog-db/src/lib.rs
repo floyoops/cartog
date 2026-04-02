@@ -283,11 +283,20 @@ fn handle_embedding_dimension(conn: &Connection, requested_dim: usize) -> Result
         )
         .ok();
 
+    // When the caller passes the default dimension and a different dimension is
+    // already stored, preserve the stored one. This avoids non-RAG commands
+    // (which don't know the real provider dimension) from silently wiping a
+    // vector index created by an Ollama provider with auto-detected dimension.
+    let effective_dim = match stored_dim {
+        Some(old) if requested_dim == DEFAULT_EMBEDDING_DIM && old != DEFAULT_EMBEDDING_DIM => old,
+        _ => requested_dim,
+    };
+
     if let Some(old_dim) = stored_dim {
-        if old_dim != requested_dim {
+        if old_dim != effective_dim {
             tracing::warn!(
                 old = old_dim,
-                new = requested_dim,
+                new = effective_dim,
                 "Embedding dimension changed — clearing vector index. Run `cartog rag index` to re-embed."
             );
             conn.execute("DROP TABLE IF EXISTS symbol_vec", [])
@@ -297,12 +306,12 @@ fn handle_embedding_dimension(conn: &Connection, requested_dim: usize) -> Result
         }
     }
 
-    conn.execute_batch(&rag_vec_schema(requested_dim))
+    conn.execute_batch(&rag_vec_schema(effective_dim))
         .context("Failed to create sqlite-vec table")?;
 
     conn.execute(
         "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_dimension', ?1)",
-        params![requested_dim.to_string()],
+        params![effective_dim.to_string()],
     )
     .context("Failed to store embedding dimension")?;
 
@@ -3266,6 +3275,63 @@ mod tests {
         {
             let db = Database::open(&db_path, 384).unwrap();
             assert_eq!(db.embedding_count().unwrap(), 1);
+        }
+    }
+
+    #[test]
+    fn test_default_dim_preserves_stored_non_default() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // First open with non-default dimension (e.g. Ollama auto-detected 768)
+        {
+            let db = Database::open(&db_path, 768).unwrap();
+            let sym = Symbol::new("baz", SymbolKind::Function, "c.py", 1, 10, 0, 100, None);
+            db.insert_symbol(&sym).unwrap();
+            db.upsert_symbol_content(&sym.id, "baz", "def baz():", "header")
+                .unwrap();
+            let eid = db.get_or_create_embedding_id(&sym.id).unwrap();
+            let bytes = vec![0u8; 768 * 4];
+            db.insert_embeddings(&[(eid, bytes)]).unwrap();
+        }
+
+        // Reopen with DEFAULT_EMBEDDING_DIM (384) — must preserve 768-dim embeddings
+        {
+            let db = Database::open(&db_path, DEFAULT_EMBEDDING_DIM).unwrap();
+            assert_eq!(db.embedding_count().unwrap(), 1);
+            let stored: i64 = db
+                .conn
+                .query_row(
+                    "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'embedding_dimension'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(stored, 768);
+        }
+    }
+
+    #[test]
+    fn test_explicit_non_default_dim_wipes_different_stored() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // First open with 768
+        {
+            let db = Database::open(&db_path, 768).unwrap();
+            let sym = Symbol::new("qux", SymbolKind::Function, "d.py", 1, 10, 0, 100, None);
+            db.insert_symbol(&sym).unwrap();
+            db.upsert_symbol_content(&sym.id, "qux", "def qux():", "header")
+                .unwrap();
+            let eid = db.get_or_create_embedding_id(&sym.id).unwrap();
+            let bytes = vec![0u8; 768 * 4];
+            db.insert_embeddings(&[(eid, bytes)]).unwrap();
+        }
+
+        // Reopen with explicit 1536 — this IS a real dimension change, must wipe
+        {
+            let db = Database::open(&db_path, 1536).unwrap();
+            assert_eq!(db.embedding_count().unwrap(), 0);
         }
     }
 
