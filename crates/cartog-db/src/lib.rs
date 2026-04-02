@@ -918,7 +918,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, kind, file_path, start_line, end_line,
                     start_byte, end_byte, parent_id, signature, visibility,
-                    is_async, docstring, in_degree,
+                    is_async, docstring, in_degree, content_hash, subtree_hash,
                     (CASE
                        WHEN LOWER(name) = LOWER(?1)                    THEN 0
                        WHEN LOWER(name) LIKE LOWER(?2) || '%' ESCAPE '\\' THEN 1
@@ -947,7 +947,6 @@ impl Database {
                       file_path, start_line
              LIMIT ?5",
         )?;
-        // in_degree is column 13, rank is column 14 — row_to_symbol reads 0–13
         // ?1 = raw query (exact equality), ?2 = escaped query (LIKE patterns), ?3 = kind, ?4 = file, ?5 = limit
         let rows = stmt
             .query_map(
@@ -1019,7 +1018,7 @@ impl Database {
                 "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                        s.is_async, s.docstring, s.in_degree
+                        s.is_async, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
                  FROM edges e
                  LEFT JOIN symbols s ON e.source_id = s.id
                  LEFT JOIN symbols sym2 ON e.target_id = sym2.id
@@ -1035,7 +1034,7 @@ impl Database {
                 "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                        s.is_async, s.docstring, s.in_degree
+                        s.is_async, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
                  FROM edges e
                  LEFT JOIN symbols s ON e.source_id = s.id
                  LEFT JOIN symbols sym2 ON e.target_id = sym2.id
