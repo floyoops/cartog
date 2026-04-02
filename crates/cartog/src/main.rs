@@ -12,7 +12,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Resolve database path: --db / CARTOG_DB > .cartog.toml > git root > cwd
-    let cartog_config = config::load_config();
+    let (cartog_config, config_path) = config::load_config();
     let db_path = config::resolve_db_path(cli.db.clone(), &cartog_config);
     let provider_config = config::to_provider_config(&cartog_config);
 
