@@ -7,5 +7,11 @@
   "author": {
     "name": "Julien Rollin"
   },
-  "skills": "./skills/"
+  "skills": "./skills/",
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve", "--watch"]
+    }
+  }
 }
