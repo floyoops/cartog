@@ -308,7 +308,14 @@ See [Usage — MCP Server](docs/usage.md#mcp-server) for per-client installation
 
 ## Agent Skill
 
-Install cartog as an [Agent Skill](https://agentskills.io) for Claude Code, Cursor, Copilot, and other compatible agents:
+Install cartog as a Claude Code plugin (includes skill + MCP + auto-setup):
+
+```bash
+/plugin marketplace add jrollin/cartog
+/plugin install cartog@cartog-plugins
+```
+
+Or install as an [Agent Skill](https://agentskills.io) for Cursor, Copilot, and other compatible agents:
 
 ```bash
 npx skills add jrollin/cartog
