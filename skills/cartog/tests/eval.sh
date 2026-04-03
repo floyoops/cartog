@@ -148,11 +148,12 @@ $query"
     judge_prompt="You are an evaluator. Score the agent response as PASS or FAIL.
 
 Judging rules:
-- The FIRST command the agent lists is what matters most for scoring.
+- The FIRST command the agent lists or identifies is what matters most for scoring.
 - Follow-up or conditional commands (e.g., 'if no results, then...') are acceptable and should NOT cause a FAIL.
 - Anti-patterns apply to the FIRST action only, not to hypothetical follow-ups the agent mentions.
 - PASS = the agent's FIRST command matches the expected behavior and avoids anti-patterns.
 - FAIL = the agent's FIRST command is wrong or matches an anti-pattern.
+- If the agent asks for tool permissions but correctly identifies the right command/tool name (e.g., mentions cartog_callees, cartog_refs, cartog map), that counts as PASS — the agent understood which command to use.
 
 Respond with exactly one line: PASS or FAIL, followed by a colon and a brief reason.
 Example: PASS: agent correctly used rag search as first command

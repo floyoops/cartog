@@ -18,9 +18,16 @@ description: >-
 
 # cartog — Code Graph Navigation Skill
 
+## Quick Start
+
+1. **Ensure indexed** — run the setup script (see [Setup](#setup) below). This is required before any command works.
+2. **Explore an unfamiliar codebase** — `cartog map` gives a file tree + top symbols ranked by centrality. Start here when onboarding or orienting.
+3. **Search for anything** — `cartog rag search "your query"` is the default entry point. It handles keywords, natural language, and concept queries in a single call.
+
 ## When to Use
 
 Use cartog **before** reaching for grep, cat, or file reads when you need to:
+- **Orient in a codebase** → `cartog map [--tokens N]` (start here for unfamiliar projects)
 - Find code by name, concept, or behavior → `cartog rag search "query"`
 - Search project documentation → `cartog rag search "query" --kind document`
 - Understand the structure of a file → `cartog outline <file>`
@@ -29,7 +36,6 @@ Use cartog **before** reaching for grep, cat, or file reads when you need to:
 - Assess refactoring impact → `cartog impact <name> --depth 3`
 - Understand class hierarchies → `cartog hierarchy <class>`
 - See file dependencies → `cartog deps <file>`
-- Get a codebase overview → `cartog map [--tokens N]`
 - See what changed recently → `cartog changes [--commits N]`
 
 ## How to Run
@@ -65,6 +71,66 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | `cartog deps <file>` | `cartog_deps` | `file` |
 | `cartog changes` | `cartog_changes` | `commits?`, `kind?` |
 | `cartog stats` | `cartog_stats` | — |
+
+## Setup
+
+Before first use, ensure cartog is installed and indexed.
+
+If the project uses Ollama (check `.cartog.toml` for `[embedding] provider = "ollama"`), skip `rag setup` — models are managed by the Ollama server.
+
+The `scripts/` directory is located next to this SKILL.md file. **Before running any setup command**, look at the absolute path from which this SKILL.md was loaded (visible in your tool call history), take its parent directory, and use that as the scripts root in the bash commands below.
+
+For example: if this file was loaded from `/home/user/.claude/skills/cartog/SKILL.md`, run:
+```bash
+# Install if missing
+command -v cartog || bash "/home/user/.claude/skills/cartog/scripts/install.sh"
+
+# Run the setup script (handles version check + 3 indexing phases)
+bash "/home/user/.claude/skills/cartog/scripts/ensure_indexed.sh"
+```
+
+The setup script checks for newer cartog versions (cached, at most once per 24h).
+If an update is available it prints a notice like:
+```
+New cartog version available: 0.7.0 (installed: 0.6.1). Update with: bash "/path/to/skill/scripts/install.sh" 0.7.0
+```
+When you see this notice, ask the user if they want to update before continuing. If they agree, run the suggested command, then re-run `bash "/path/to/skill/scripts/ensure_indexed.sh"`.
+
+### Search quality tiers
+
+`cartog rag search` works at three quality levels depending on setup state:
+
+| Tier | After | FTS5 | Reranker | Vector | Quality |
+|---|---|---|---|---|---|
+| 1 | `cartog index .` | Yes | No | No | Keyword matching only |
+| 2 | `+ cartog rag setup` | Yes | **Yes** | No | Keyword + neural reranking |
+| 3 | `+ cartog rag index .` | Yes | Yes | **Yes** | Full hybrid (best) |
+
+The setup script runs tier 1+2 blocking, then tier 3 in the background.
+`cartog rag search` is usable immediately after tier 2 — vector search becomes available
+transparently once background embedding completes.
+
+> **First run**: tier 2 downloads ~1.2GB of ONNX models (cached in `~/.cache/cartog/models/`).
+> This may take a few minutes — do not abort. Subsequent runs are instant.
+
+## Database Location
+
+The index is stored in a SQLite database. cartog resolves the path automatically:
+
+| Priority | Source |
+|----------|--------|
+| 1 | `--db <path>` flag or `CARTOG_DB` env var |
+| 2 | `.cartog.toml` → `[database] path = "..."` at git root |
+| 3 | Auto git-root: DB placed at the root of the current git repository |
+| 4 | `.cartog.db` in the current directory (fallback) |
+
+For most projects, no configuration is needed — running `cartog index .` from any subdirectory will place the DB at the git root automatically.
+
+```bash
+# Override examples
+cartog --db /tmp/myproject.db index .
+CARTOG_DB=~/.local/share/cartog/proj.db cartog index .
+```
 
 ## Why cartog Over grep/glob
 
@@ -126,66 +192,6 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 - Chain multiple `cartog` CLI commands with `&&` or `|` — each invocation opens a fresh SQLite connection with full initialization overhead (PRAGMAs, schema checks, cold cache). Run them as **separate tool calls** instead
 - Pipe `cartog` output through `grep` — cartog already returns focused, structured results. Filtering with grep discards context (line numbers, kinds, file paths) and can break `&&` chains when grep finds no match (exit code 1)
 - Combine unrelated cartog queries in one bash command — this creates false dependencies and hides failures. See `references/query_cookbook.md` → "Anti-patterns to avoid" for examples
-
-## Setup
-
-Before first use, ensure cartog is installed and indexed.
-
-If the project uses Ollama (check `.cartog.toml` for `[embedding] provider = "ollama"`), skip `rag setup` — models are managed by the Ollama server.
-
-The `scripts/` directory is located next to this SKILL.md file. **Before running any setup command**, look at the absolute path from which this SKILL.md was loaded (visible in your tool call history), take its parent directory, and use that as the scripts root in the bash commands below.
-
-For example: if this file was loaded from `/home/user/.claude/skills/cartog/SKILL.md`, run:
-```bash
-# Install if missing
-command -v cartog || bash "/home/user/.claude/skills/cartog/scripts/install.sh"
-
-# Run the setup script (handles version check + 3 indexing phases)
-bash "/home/user/.claude/skills/cartog/scripts/ensure_indexed.sh"
-```
-
-The setup script checks for newer cartog versions (cached, at most once per 24h).
-If an update is available it prints a notice like:
-```
-New cartog version available: 0.7.0 (installed: 0.6.1). Update with: bash "/path/to/skill/scripts/install.sh" 0.7.0
-```
-When you see this notice, ask the user if they want to update before continuing. If they agree, run the suggested command, then re-run `bash "/path/to/skill/scripts/ensure_indexed.sh"`.
-
-### Search quality tiers
-
-`cartog rag search` works at three quality levels depending on setup state:
-
-| Tier | After | FTS5 | Reranker | Vector | Quality |
-|---|---|---|---|---|---|
-| 1 | `cartog index .` | Yes | No | No | Keyword matching only |
-| 2 | `+ cartog rag setup` | Yes | **Yes** | No | Keyword + neural reranking |
-| 3 | `+ cartog rag index .` | Yes | Yes | **Yes** | Full hybrid (best) |
-
-The setup script runs tier 1+2 blocking, then tier 3 in the background.
-`cartog rag search` is usable immediately after tier 2 — vector search becomes available
-transparently once background embedding completes.
-
-> **First run**: tier 2 downloads ~1.2GB of ONNX models (cached in `~/.cache/cartog/models/`).
-> This may take a few minutes — do not abort. Subsequent runs are instant.
-
-## Database Location
-
-The index is stored in a SQLite database. cartog resolves the path automatically:
-
-| Priority | Source |
-|----------|--------|
-| 1 | `--db <path>` flag or `CARTOG_DB` env var |
-| 2 | `.cartog.toml` → `[database] path = "..."` at git root |
-| 3 | Auto git-root: DB placed at the root of the current git repository |
-| 4 | `.cartog.db` in the current directory (fallback) |
-
-For most projects, no configuration is needed — running `cartog index .` from any subdirectory will place the DB at the git root automatically.
-
-```bash
-# Override examples
-cartog --db /tmp/myproject.db index .
-CARTOG_DB=~/.local/share/cartog/proj.db cartog index .
-```
 
 ## Commands Reference
 
@@ -317,42 +323,20 @@ cartog --json rag search "authentication"
 
 Before changing any symbol (rename, extract, move, delete):
 
-### Phase 1: Narrow with heuristic graph (~1s)
+1. `cartog search <name>` — confirm exact symbol name and file
+2. `cartog refs <name>` — find every usage
+3. `cartog impact <name> --depth 3` — transitive blast radius
+4. `cartog hierarchy <name>` — if it's a class, check subclasses too
+5. Apply changes, then `cartog index . --no-lsp` to update the graph
+6. Re-run `cartog refs <name>` to confirm no stale references remain
 
-1. **Identify** — `cartog search <name>` to confirm the exact symbol name and file
-2. **Map references** — `cartog refs <name>` to find every usage
-3. **Assess blast radius** — `cartog impact <name> --depth 3` for transitive dependents
-4. **Check hierarchy** — `cartog hierarchy <name>` if it's a class (subclasses need updating too)
-
-### Phase 2: Upgrade to LSP if needed (~15-60s first call)
-
-Upgrade to LSP when the heuristic graph has gaps:
-- `refs` returns **fewer results than expected** (you know more callers exist)
-- **Ambiguous symbol** — two classes have the same method name, `impact` can't tell which is called
-- `--json` output shows `target_id: null` on edges you care about
-
-```bash
-cartog index .                   # re-index with LSP auto-detected (if compiled with lsp feature)
-cartog impact <name> --depth 3   # re-check — more edges resolved
-```
-
-If no LSP servers are on PATH, indexing silently falls back to heuristic-only.
-Use `--no-lsp` to skip LSP when you want speed over precision.
-
-> **Performance tip**: each `cartog index .` via Bash spawns LSP servers from scratch (~15-60s).
-> If you plan multiple index calls in a session (refactoring loop), use `cartog serve` as an MCP server instead — it keeps LSP servers warm across calls, making the 2nd+ index near-instant.
-
-### Phase 3: Apply and verify
-
-5. **Plan change order** — update leaf dependents first, work inward toward the source
-6. **Apply changes** — modify files
-7. **Re-index** — `cartog index . --no-lsp` to quickly update the graph
-8. **Verify** — re-run `cartog refs <name>` to confirm no stale references remain
+For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `references/query_cookbook.md` → "Assess refactoring scope".
 
 ## Decision Heuristics
 
 | I need to... | Use |
 |---|---|
+| Orient in an unfamiliar codebase | `cartog map` (`--tokens N` for budget control) — **start here** |
 | Find code by name, concept, or behavior | `cartog rag search "query"` |
 | Search project documentation | `cartog rag search "query" --kind document` |
 | Search both code and docs | `cartog rag search "query" --kind all` |
@@ -363,7 +347,6 @@ Use `--no-lsp` to skip LSP when you want speed over precision.
 | Check if a change is safe | `cartog impact <name> --depth 3` |
 | Understand class hierarchy | `cartog hierarchy <class>` |
 | See file dependencies | `cartog deps <file>` |
-| Get a codebase overview | `cartog map` (`--tokens N` for budget control) |
 | See what changed recently | `cartog changes` (`--commits N` for more history) |
 | Improve graph precision for a refactoring | `cartog index .` (with LSP auto-detected) |
 | Fast re-index after code changes | `cartog index . --no-lsp` |
