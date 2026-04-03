@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.10.0] - 2026-04-02
+## [0.10.1] - 2026-04-03
 
 ### Bug Fixes
 
@@ -48,6 +48,7 @@
 - Update documentation for multi-provider embeddings ([`2c09bb8`](https://github.com/jrollin/cartog/commit/2c09bb822739f6afef900105e29d79d8e50eed09))
 - **site**: Reorganize landing page and add provider config docs ([`f655c98`](https://github.com/jrollin/cartog/commit/f655c983548eb06e147bc999bc7fbe7b18d6668b))
 - **readme**: Broaden positioning and add doc site link ([`173c3ba`](https://github.com/jrollin/cartog/commit/173c3badd95fe6f99d7c3918d44e70954e366901))
+- Add marketplace step to plugin install instructions ([`60a32fa`](https://github.com/jrollin/cartog/commit/60a32fa5e7d9fd06bf9b1042a3309e1a91410dd3))
 
 ### Features
 
@@ -76,6 +77,7 @@
 - **rag**: Add Markdown document support with code-only default ([`7f3b234`](https://github.com/jrollin/cartog/commit/7f3b234fee72bf6fc0e9fb94de95045c64754033))
 - **rag**: Pluggable embedding providers with TOML configuration ([`d6835b7`](https://github.com/jrollin/cartog/commit/d6835b771f776bac5cc028c1de2c0bbac1cbf68d))
 - Add `config` command to display current configuration ([`e419cd5`](https://github.com/jrollin/cartog/commit/e419cd505aa0601c814fcc6bc498b15346973a48))
+- **mcp**: Add mcp config in plugin ([`562a2cd`](https://github.com/jrollin/cartog/commit/562a2cdb04942c7d776ca01f528c34c78315459a))
 
 ### Miscellaneous
 
@@ -94,6 +96,7 @@
 - Extract default constants and avoid double config-path walk ([`aaac621`](https://github.com/jrollin/cartog/commit/aaac6211e4ae213cf87c7639bd5548324dd24ae4))
 - Deduplicate Ollama constants and harden config parsing ([`425a5f5`](https://github.com/jrollin/cartog/commit/425a5f581819ee8f8af8c67b699e13dd59e878d2))
 - Harden types and document constraints ([`1703fd8`](https://github.com/jrollin/cartog/commit/1703fd8af21867cd47afe58876fe61dd458eda3e))
+- **skill**: Improve SKILL.md structure and eval judge tolerance ([`c2c687e`](https://github.com/jrollin/cartog/commit/c2c687e9656db592f2a4b30d2eedc22d253eba1c))
 
 ## [0.3.1] - 2026-02-26
 
