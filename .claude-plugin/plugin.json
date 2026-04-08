@@ -13,5 +13,18 @@
       "command": "cartog",
       "args": ["serve", "--watch"]
     }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'When answering questions about this codebase, prefer using cartog MCP tools (cartog_search, cartog_rag_search, cartog_refs, cartog_outline, cartog_impact, cartog_callees, cartog_hierarchy, cartog_deps, cartog_changes) over Grep, Glob, and Read for code navigation, search, and structural queries. Use cartog_rag_search as the default entry point for finding code. Only fall back to Grep/Read for string literals, config values, or reading actual implementation logic.'"
+          }
+        ]
+      }
+    ]
   }
 }

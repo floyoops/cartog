@@ -206,20 +206,36 @@ fn mcp_err(msg: impl std::fmt::Display) -> McpError {
     McpError::internal_error(msg.to_string(), None)
 }
 
-/// Build a JSON text response, appending a hint if the DB has no indexed files.
-fn json_response(db: &Database, json: String) -> Result<CallToolResult, McpError> {
-    // Single lightweight check instead of full stats() (which runs 4 COUNT queries).
+/// Static routing hints per tool — guides the agent to the next logical step.
+fn suggestions_for(tool: &str) -> Option<&'static str> {
+    match tool {
+        "cartog_index" => Some("Next: use cartog_rag_search to find code, or cartog_search to look up a symbol name."),
+        "cartog_search" => Some("Next: use cartog_refs to find usages, cartog_callees to trace calls, or cartog_impact to assess blast radius."),
+        "cartog_rag_search" => Some("Next: use cartog_outline to see file structure, or cartog_refs to find all usages of a symbol."),
+        "cartog_outline" => Some("Next: use Read with offset/limit to see specific lines, or cartog_refs to find usages of a symbol."),
+        "cartog_refs" => Some("Next: use cartog_impact to assess blast radius, or cartog_callees to trace what a function calls."),
+        "cartog_callees" => Some("Next: use cartog_refs to find callers, or cartog_impact to assess blast radius."),
+        "cartog_impact" => Some("Next: read the affected files to plan changes, or use cartog_hierarchy to check class inheritance."),
+        "cartog_hierarchy" => Some("Next: use cartog_refs to find usages, or cartog_impact to assess blast radius."),
+        "cartog_deps" => Some("Next: use cartog_outline to see file structure, or cartog_refs to find usages of a symbol."),
+        "cartog_changes" => Some("Next: use cartog_refs or cartog_impact on changed symbols to understand downstream effects."),
+        _ => None,
+    }
+}
+
+/// Build a JSON text response with next-tool suggestions appended.
+fn tool_response(db: &Database, json: String, tool: &str) -> Result<CallToolResult, McpError> {
     let is_empty = !db
         .has_indexed_files()
         .map_err(|e| mcp_err(format!("stats check failed: {e}")))?;
+    let mut text = json;
     if is_empty {
-        let hint = "\n\n(Index is empty. Run cartog_index first to build the code graph.)";
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "{json}{hint}"
-        ))]))
-    } else {
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        text.push_str("\n\n(Index is empty. Run cartog_index first to build the code graph.)");
+    } else if let Some(hint) = suggestions_for(tool) {
+        text.push_str("\n\n");
+        text.push_str(hint);
     }
+    Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
 // ── MCP Server ──
@@ -273,7 +289,7 @@ impl CartogServer {
 
     /// Build or rebuild the code graph index for a directory.
     #[tool(
-        description = "Build or rebuild the code graph index. Indexes source files with tree-sitter, extracts symbols and edges, stores in SQLite. Incremental by default (only re-indexes changed files)."
+        description = "Build or rebuild the code graph index. Run this first before any other cartog tool, or after making code changes to keep the graph current. Incremental by default — only re-indexes changed files. Use force=true if results seem stale."
     )]
     async fn cartog_index(
         &self,
@@ -329,7 +345,12 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            let mut text = json;
+            if let Some(hint) = suggestions_for("cartog_index") {
+                text.push_str("\n\n");
+                text.push_str(hint);
+            }
+            Ok(CallToolResult::success(vec![Content::text(text)]))
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -337,7 +358,7 @@ impl CartogServer {
 
     /// Show symbols and structure of a file without reading its content.
     #[tool(
-        description = "Show symbols and structure of a file (functions, classes, methods, imports with line ranges). Use instead of reading the file when you need structure, not content."
+        description = "Show file structure: functions, classes, methods, imports with signatures and line ranges. Use this INSTEAD of reading a file when you need to understand what's in it. Then use Read with offset/limit for specific lines you need."
     )]
     async fn cartog_outline(
         &self,
@@ -357,7 +378,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&symbols)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            json_response(&db, json)
+            tool_response(&db, json, "cartog_outline")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -365,7 +386,7 @@ impl CartogServer {
 
     /// Find all references to a symbol (calls, imports, inherits, type references, raises).
     #[tool(
-        description = "Find all references to a symbol. Returns call sites, imports, inheritance, type annotations, and raise/rescue usages. Optionally filter by kind: calls, imports, inherits, references, raises."
+        description = "Find all usages of a symbol across the codebase. Use when asked 'where is X used?', 'who calls X?', 'who imports X?'. Filter by kind: calls, imports, inherits, references, raises. Requires an exact symbol name — use cartog_search first if unsure of the name."
     )]
     async fn cartog_refs(
         &self,
@@ -403,7 +424,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            json_response(&db, json)
+            tool_response(&db, json, "cartog_refs")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -411,7 +432,7 @@ impl CartogServer {
 
     /// Find what a symbol calls.
     #[tool(
-        description = "Find what a symbol calls. Returns all outgoing call edges from functions/methods matching the given name."
+        description = "Trace what a function calls. Use when asked 'what does X call?', 'show me the call graph of X', or to understand execution flow. Requires an exact symbol name."
     )]
     async fn cartog_callees(
         &self,
@@ -431,7 +452,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&edges)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            json_response(&db, json)
+            tool_response(&db, json, "cartog_callees")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -439,7 +460,7 @@ impl CartogServer {
 
     /// Transitive impact analysis — what breaks if this symbol changes?
     #[tool(
-        description = "Transitive impact analysis. Shows everything that transitively depends on a symbol up to N hops. Use before refactoring to assess blast radius."
+        description = "Assess blast radius before refactoring. Shows everything that transitively depends on a symbol up to N hops. Use when asked 'what breaks if I change X?', 'is it safe to rename/delete X?', or before any rename/extract/move/delete refactoring."
     )]
     async fn cartog_impact(
         &self,
@@ -465,7 +486,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            json_response(&db, json)
+            tool_response(&db, json, "cartog_impact")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -473,7 +494,7 @@ impl CartogServer {
 
     /// Show inheritance hierarchy for a class.
     #[tool(
-        description = "Show inheritance hierarchy for a class. Returns parent-child relationships for the given class name."
+        description = "Show class inheritance tree. Use when asked 'show the class hierarchy', 'what extends X?', 'what does X inherit from?'. Returns parent-child relationships."
     )]
     async fn cartog_hierarchy(
         &self,
@@ -498,7 +519,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            json_response(&db, json)
+            tool_response(&db, json, "cartog_hierarchy")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -506,7 +527,7 @@ impl CartogServer {
 
     /// File-level import dependencies.
     #[tool(
-        description = "Show file-level import dependencies. Returns all import edges from the given file."
+        description = "Show what a file imports. Use when asked 'what does this file depend on?', 'show imports for X'. Returns file-level import edges."
     )]
     async fn cartog_deps(
         &self,
@@ -526,7 +547,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&edges)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            json_response(&db, json)
+            tool_response(&db, json, "cartog_deps")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -534,10 +555,7 @@ impl CartogServer {
 
     /// Search for symbols by name — use this to discover exact names before calling refs/callees/impact.
     #[tool(
-        description = "Search symbols by name (case-insensitive prefix + substring match). \
-                       Use to discover symbol names before calling refs/callees/impact. \
-                       Optionally filter by kind (function|class|method|variable|import|document) or file path. \
-                       Returns up to 100 results ranked: exact match → prefix → substring."
+        description = "Find symbols by exact or partial name. Use ONLY to get a precise symbol name before calling cartog_refs, cartog_callees, or cartog_impact. For general code discovery, use cartog_rag_search instead. Supports prefix and substring matching, case-insensitive."
     )]
     async fn cartog_search(
         &self,
@@ -583,7 +601,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&symbols)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            json_response(&db, json)
+            tool_response(&db, json, "cartog_search")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -591,7 +609,7 @@ impl CartogServer {
 
     /// Index statistics summary.
     #[tool(
-        description = "Show index statistics: file count, symbol count, edge count, resolution rate, breakdown by language and symbol kind."
+        description = "Show index health: file count, symbol count, edge count, resolution rate. Use to verify the index is built and check coverage."
     )]
     async fn cartog_stats(&self) -> Result<CallToolResult, McpError> {
         let db = Arc::clone(&self.db);
@@ -615,7 +633,7 @@ impl CartogServer {
 
     /// Show symbols affected by recent git changes.
     #[tool(
-        description = "Show symbols affected by recent git changes. Returns changed files and their indexed symbols from the last N commits plus working tree changes. Use to understand what code was recently modified."
+        description = "Show what changed recently. Returns symbols affected by the last N git commits plus working tree changes. Use when asked 'what changed?', 'what did I modify?', or to understand recent code activity before a review."
     )]
     async fn cartog_changes(
         &self,
@@ -657,7 +675,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            json_response(&db, json)
+            tool_response(&db, json, "cartog_changes")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -665,7 +683,7 @@ impl CartogServer {
 
     /// Build embedding index for semantic code search.
     #[tool(
-        description = "Build embedding index for semantic search. Requires the embedding model to be downloaded first (run 'cartog rag setup' from CLI). Embeds all code symbols and Markdown documents for vector similarity search."
+        description = "Build the embedding index for semantic search. Run after cartog_index to enable vector similarity search. Requires the embedding model (run 'cartog rag setup' from CLI first). Usually not needed — cartog_rag_search works with keyword-only search even without embeddings."
     )]
     async fn cartog_rag_index(
         &self,
@@ -707,7 +725,7 @@ impl CartogServer {
 
     /// Semantic search over code symbols using hybrid FTS5 + vector search.
     #[tool(
-        description = "Semantic search over code and documentation. Combines keyword (FTS5/BM25) and vector similarity search with Reciprocal Rank Fusion. Returns code only by default; use kind='document' for docs or kind='all' for both. Use for natural language queries."
+        description = "Search code by concept, keyword, or natural language — the DEFAULT entry point for finding code. Use when asked 'find code related to...', 'how does X work?', 'show me the authentication logic'. Returns code by default; use kind='document' for docs, kind='all' for both. Works even without embeddings (keyword matching). Prefer this over Grep for code discovery."
     )]
     async fn cartog_rag_search(
         &self,
@@ -758,7 +776,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            json_response(&db, json)
+            tool_response(&db, json, "cartog_rag_search")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -772,23 +790,24 @@ impl ServerHandler for CartogServer {
             .with_server_info(Implementation::new("cartog", env!("CARGO_PKG_VERSION")))
             .with_protocol_version(ProtocolVersion::LATEST)
             .with_instructions(
-                "cartog is a code graph indexer with semantic search. It pre-computes a graph of symbols \
-                 (functions, classes, methods, imports) and edges (calls, imports, inherits, \
-                 type references, raises) using tree-sitter, stored in SQLite.\n\n\
-                  Workflow:\n\
-                  1. Run cartog_index first to build/update the graph (use force=true if results seem stale).\n\
-                  2. Use cartog_search to discover symbol names by partial match before calling refs/callees/impact.\n\
-                  3. Use cartog_outline instead of reading a file when you need structure, not content.\n\
-                  4. Use cartog_refs to find all usages of a symbol (filter with kind param).\n\
-                  5. Use cartog_impact before refactoring to assess blast radius.\n\
-                  6. Re-run cartog_index after making code changes to keep the graph current.\n\
-                  7. Use cartog_changes to see symbols affected by recent git commits.\n\
-                  8. Only fall back to reading files when you need actual implementation logic.\n\n\
-                  Semantic search (if embedding model is installed):\n\
-                  - Run cartog_rag_index to build the embedding index (after cartog_index).\n\
-                  - Use cartog_rag_search for natural language queries. Returns code only by default.\n\
-                  - Use kind='document' for Markdown docs, kind='all' for both code and docs.\n\
-                  - Combines keyword (BM25) and vector similarity search for best results.\n\n\
+                "cartog is a code graph indexer with semantic search. \
+                 ALWAYS prefer cartog tools over Grep, Glob, and Read for code navigation and search.\n\n\
+                 Default entry point: cartog_rag_search — use for ANY code discovery query (keywords, natural language, concepts). \
+                 Only fall back to Grep for string literals, config values, or when cartog returns no results.\n\n\
+                 Quick reference:\n\
+                 - Find code → cartog_rag_search (default)\n\
+                 - Get exact symbol name → cartog_search (then feed into refs/callees/impact)\n\
+                 - File structure → cartog_outline (instead of reading the file)\n\
+                 - Who uses X? → cartog_refs\n\
+                 - What does X call? → cartog_callees\n\
+                 - Safe to change X? → cartog_impact\n\
+                 - Class hierarchy → cartog_hierarchy\n\
+                 - File imports → cartog_deps\n\
+                 - Recent changes → cartog_changes\n\n\
+                 Rules:\n\
+                 - Run cartog_index first if the index is empty.\n\
+                 - cartog_refs/callees/impact need exact symbol names — use cartog_search to find them.\n\
+                 - Only read files when you need actual implementation logic, not structure.\n\n\
                  Supports: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, Markdown (.md).",
             )
     }
