@@ -13,5 +13,18 @@
       "command": "cartog",
       "args": ["serve", "--watch"]
     }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash skills/cartog/scripts/ensure_indexed.sh"
+          }
+        ]
+      }
+    ]
   }
 }

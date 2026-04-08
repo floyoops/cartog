@@ -87,15 +87,18 @@
   tags: [routing, structural]
 
 - id: search_impact_analysis
-  description: Impact analysis requires cartog search then impact
+  description: '"Is it safe to rename X?" should lead to impact analysis'
   user_query: "Is it safe to rename SessionManager?"
   expected:
     tool_calls:
-      - "cartog search SessionManager"
       - "cartog impact SessionManager --depth 3"
+      - "cartog search SessionManager"
+      - "cartog refs SessionManager"
     reasoning: >
-      Impact analysis is a structural command requiring exact symbol name.
-      cartog search provides the name, impact shows the blast radius.
+      "Is it safe to rename X?" maps to impact analysis. The user gave an exact
+      symbol name, so cartog impact directly is ideal. cartog search first to
+      confirm the name, or cartog refs to find usages, are also acceptable as
+      first steps — as long as cartog impact appears in the plan.
   anti_patterns:
     - Using only cartog rag search without a structural impact command
     - Skipping impact analysis entirely
@@ -201,11 +204,13 @@
     reasoning: >
       The user wants both code and documentation results. Since rag search defaults
       to code only, the agent must use --kind all to include both code symbols and
-      Markdown document sections.
+      Markdown document sections. The key requirement is that the agent identifies
+      cartog rag search with --kind all as the correct tool, even if it also
+      mentions needing permissions.
   anti_patterns:
-    - 'cartog rag search without --kind all (returns code only by default)'
     - Running two separate searches (one for code, one for docs)
     - grep for error handling across .md and .py files
+    - Not mentioning --kind all or kind=all at all
   tags: [routing, documentation]
 
 # ============================================================
