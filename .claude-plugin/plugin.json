@@ -21,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash skills/cartog/scripts/ensure_indexed.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/cartog/scripts/ensure_indexed.sh\""
           }
         ]
       }
