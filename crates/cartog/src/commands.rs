@@ -971,6 +971,16 @@ fn check_config(config_path: Option<&Path>) -> CheckResult {
 }
 
 fn check_database(db_path: &Path, embedding_dim: usize) -> CheckResult {
+    if !db_path.exists() {
+        return CheckResult {
+            name: "database".into(),
+            status: CheckStatus::Warn,
+            message: format!(
+                "database not found at {}, run 'cartog index'",
+                db_path.display()
+            ),
+        };
+    }
     match Database::open(db_path, embedding_dim) {
         Ok(db) => match db.stats() {
             Ok(stats) if stats.num_files > 0 => CheckResult {
@@ -994,16 +1004,13 @@ fn check_database(db_path: &Path, embedding_dim: usize) -> CheckResult {
             Err(e) => CheckResult {
                 name: "database".into(),
                 status: CheckStatus::Error,
-                message: format!("failed to query database: {e}"),
+                message: format!("failed to query database at {}: {e}", db_path.display()),
             },
         },
-        Err(_) => CheckResult {
+        Err(e) => CheckResult {
             name: "database".into(),
-            status: CheckStatus::Warn,
-            message: format!(
-                "database not found at {}, run 'cartog index'",
-                db_path.display()
-            ),
+            status: CheckStatus::Error,
+            message: format!("failed to open database at {}: {e}", db_path.display()),
         },
     }
 }
@@ -1045,12 +1052,29 @@ fn check_embedding_provider(config: &rag::EmbeddingProviderConfig) -> CheckResul
                 .unwrap_or(rag::providers::DEFAULT_OLLAMA_BASE_URL);
             match parse_host_port(base_url) {
                 Some(addr) => {
-                    match std::net::TcpStream::connect_timeout(
-                        &addr.parse().unwrap_or_else(|_| {
-                            std::net::SocketAddr::from(([127, 0, 0, 1], 11434))
-                        }),
-                        Duration::from_secs(3),
-                    ) {
+                    let resolve_result: Result<std::net::SocketAddr, _> =
+                        std::net::ToSocketAddrs::to_socket_addrs(&addr.as_str())
+                            .map(|mut addrs| addrs.next())
+                            .and_then(|opt| {
+                                opt.ok_or_else(|| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::AddrNotAvailable,
+                                        format!("no addresses resolved for {addr}"),
+                                    )
+                                })
+                            });
+                    let socket_addr = match resolve_result {
+                        Ok(sa) => sa,
+                        Err(e) => {
+                            return CheckResult {
+                                name: "embedding".into(),
+                                status: CheckStatus::Error,
+                                message: format!("cannot resolve ollama host '{addr}': {e}"),
+                            };
+                        }
+                    };
+                    match std::net::TcpStream::connect_timeout(&socket_addr, Duration::from_secs(3))
+                    {
                         Ok(_) => CheckResult {
                             name: "embedding".into(),
                             status: CheckStatus::Ok,
@@ -1222,6 +1246,7 @@ pub fn cmd_watch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_estimate_tokens() {
@@ -1386,6 +1411,7 @@ mod tests {
     // ── Doctor check tests ──
 
     #[test]
+    #[serial]
     fn test_check_git_repo_inside_git() {
         let dir = tempfile::TempDir::new().unwrap();
         std::fs::create_dir(dir.path().join(".git")).unwrap();
@@ -1402,6 +1428,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_check_git_repo_outside_git() {
         let dir = tempfile::TempDir::new().unwrap();
         let original = std::env::current_dir().unwrap();

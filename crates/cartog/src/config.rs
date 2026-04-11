@@ -212,6 +212,7 @@ pub fn expand_tilde(p: PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
 
     #[test]
@@ -289,6 +290,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_resolve_fallback_when_no_config_and_no_git() {
         let dir = tempfile::TempDir::new().unwrap();
         let original = std::env::current_dir().unwrap();
@@ -301,6 +303,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_resolve_git_root_detection() {
         let dir = tempfile::TempDir::new().unwrap();
         let canonical_root = dir.path().canonicalize().unwrap();
