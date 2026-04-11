@@ -77,6 +77,14 @@ fn main() -> Result<()> {
         Command::Config => {
             commands::cmd_config(&cartog_config, config_path.as_deref(), &db_path, cli.json)
         }
+        Command::Doctor => commands::cmd_doctor(
+            &cartog_config,
+            config_path.as_deref(),
+            &db_path,
+            cli.json,
+            embedding_dim,
+            &provider_config,
+        ),
         Command::Search {
             query,
             kind,

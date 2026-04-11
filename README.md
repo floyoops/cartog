@@ -188,6 +188,7 @@ cartog impact SessionManager --depth 3      # What breaks if I change this?
 cartog hierarchy BaseService                # Inheritance tree
 cartog deps src/routes/auth.py              # File-level imports
 cartog stats                                # Index summary
+cartog doctor                               # Check requirements are met
 
 # Watch (auto re-index on file changes)
 cartog watch .                              # Watch for changes, re-index automatically
