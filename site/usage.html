@@ -55,6 +55,7 @@
           <a href="#cmd-hierarchy">cartog hierarchy</a>
           <a href="#cmd-deps">cartog deps</a>
           <a href="#cmd-stats">cartog stats</a>
+          <a href="#cmd-doctor">cartog doctor</a>
           <a href="#cmd-map">cartog map</a>
           <a href="#cmd-changes">cartog changes</a>
           <a href="#cmd-watch">cartog watch</a>
@@ -299,6 +300,12 @@ cartog refs validate_token --kind calls  <span class="comment"># only call sites
       <h2 id="cmd-stats"><code>cartog stats</code></h2>
       <p>Summary of the index — file count, symbol count, edge resolution rate.</p>
       <pre>cartog stats</pre>
+
+      <h2 id="cmd-doctor"><code>cartog doctor</code></h2>
+      <p>Validate that all requirements are met and everything is working. Checks git repo, config, database, embedding provider, and reranker.</p>
+      <pre>cartog doctor                 <span class="comment"># check all requirements</span>
+cartog --json doctor          <span class="comment"># structured JSON output</span></pre>
+      <p>Each check reports <strong>OK</strong>, <strong>Warn</strong>, or <strong>Error</strong>. Exits with code 1 if any check is an error. Run this when commands fail unexpectedly or after first setup.</p>
 
       <h2 id="cmd-map"><code>cartog map</code></h2>
       <p>Token-budget-aware codebase summary — file tree + top symbols ranked by reference count.</p>

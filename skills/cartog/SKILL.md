@@ -72,6 +72,7 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | `cartog deps <file>` | `cartog_deps` | `file` |
 | `cartog changes` | `cartog_changes` | `commits?`, `kind?` |
 | `cartog stats` | `cartog_stats` | — |
+| `cartog doctor` | — (CLI only) | — |
 
 ## Setup
 
@@ -279,6 +280,13 @@ cartog changes --kind function           # only functions
 ```
 Shows symbols affected by recent git changes, grouped by file.
 
+### Doctor (environment health check)
+```bash
+cartog doctor                            # check all requirements
+cartog --json doctor                     # structured JSON output
+```
+Validates git repo, config, database, embedding provider, and reranker. Returns OK / Warn / Error per check and exits with code 1 if any error. Run this when commands fail unexpectedly or after first setup to verify everything is working.
+
 ### Stats (index summary)
 ```bash
 cartog stats
@@ -351,6 +359,7 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 | See what changed recently | `cartog changes` (`--commits N` for more history) |
 | Improve graph precision for a refactoring | `cartog index .` (with LSP auto-detected) |
 | Fast re-index after code changes | `cartog index . --no-lsp` |
+| Diagnose why something is broken | `cartog doctor` |
 | Read actual implementation logic | `cat <file>` (cartog indexes structure, not content) |
 | Search for string literals / config | `grep` (cartog doesn't index these) |
 | Nothing from search or rag | Fall back to `grep` |
