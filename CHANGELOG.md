@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.10.1] - 2026-04-03
+## [0.11.0] - 2026-04-11
 
 ### Bug Fixes
 
@@ -35,6 +35,7 @@
 - **db**: Add chunking guards and reorder migration ([`8fef1b1`](https://github.com/jrollin/cartog/commit/8fef1b170f09e7e81a605696e33baad10082e157))
 - **indexer**: Prevent symlink loops and fix dedup collision bug ([`e5acbc4`](https://github.com/jrollin/cartog/commit/e5acbc41e81e7d2d52c47a1e686846e20bb46c07))
 - **lsp**: Detect EOF in read_headers to avoid infinite loop ([`ac0ea59`](https://github.com/jrollin/cartog/commit/ac0ea59ea3e017c8d28842c44793e6269fe1856e))
+- **doctor**: Improve robustness of health checks ([`7d3931c`](https://github.com/jrollin/cartog/commit/7d3931cb2ea5962d31081e6d6c04df492b00216e))
 
 ### Documentation
 
@@ -49,6 +50,7 @@
 - **site**: Reorganize landing page and add provider config docs ([`f655c98`](https://github.com/jrollin/cartog/commit/f655c983548eb06e147bc999bc7fbe7b18d6668b))
 - **readme**: Broaden positioning and add doc site link ([`173c3ba`](https://github.com/jrollin/cartog/commit/173c3badd95fe6f99d7c3918d44e70954e366901))
 - Add marketplace step to plugin install instructions ([`60a32fa`](https://github.com/jrollin/cartog/commit/60a32fa5e7d9fd06bf9b1042a3309e1a91410dd3))
+- **doctor**: Add doctor command to skill and site ([`25c4689`](https://github.com/jrollin/cartog/commit/25c46898f68b60e736036a5c94d67923a7a9957f))
 
 ### Features
 
@@ -78,6 +80,9 @@
 - **rag**: Pluggable embedding providers with TOML configuration ([`d6835b7`](https://github.com/jrollin/cartog/commit/d6835b771f776bac5cc028c1de2c0bbac1cbf68d))
 - Add `config` command to display current configuration ([`e419cd5`](https://github.com/jrollin/cartog/commit/e419cd505aa0601c814fcc6bc498b15346973a48))
 - **mcp**: Add mcp config in plugin ([`562a2cd`](https://github.com/jrollin/cartog/commit/562a2cdb04942c7d776ca01f528c34c78315459a))
+- **mcp**: Improve tool discoverability and agent guidance ([`3a52040`](https://github.com/jrollin/cartog/commit/3a52040ca01fa58c2147476e1c4ce86904dabf63))
+- **plugin**: Use ensure_indexed.sh as SessionStart hook ([`b1994f8`](https://github.com/jrollin/cartog/commit/b1994f8dc94e5332008189ab2f9e4ed4196ab541))
+- **cli**: Add doctor command to validate environment ([`3e6f00d`](https://github.com/jrollin/cartog/commit/3e6f00d3983858c416cc0d1b60135870cb51a5d6))
 
 ### Miscellaneous
 
@@ -89,6 +94,7 @@
 - **deps**: Upgrade tree-sitter, notify, rusqlite, rmcp to latest ([`c00701b`](https://github.com/jrollin/cartog/commit/c00701b22c1264c42e12cdd1e1f640287e6378a6))
 - **plugin**: Remove marketplace.json and add metadata to plugin.json ([`3fc95e5`](https://github.com/jrollin/cartog/commit/3fc95e50bdd816d43c8dc02281e832dbf21c78ad))
 - **github**: Add community health files ([`6c247c2`](https://github.com/jrollin/cartog/commit/6c247c282db4b2f5094580425c2fcb2032576e03))
+- **ci**: Add codecov.yml with 1% threshold tolerance ([`7d4af4a`](https://github.com/jrollin/cartog/commit/7d4af4a75f0682a66291c31066a07a692c27220c))
 
 ### Refactor
 
@@ -97,6 +103,10 @@
 - Deduplicate Ollama constants and harden config parsing ([`425a5f5`](https://github.com/jrollin/cartog/commit/425a5f581819ee8f8af8c67b699e13dd59e878d2))
 - Harden types and document constraints ([`1703fd8`](https://github.com/jrollin/cartog/commit/1703fd8af21867cd47afe58876fe61dd458eda3e))
 - **skill**: Improve SKILL.md structure and eval judge tolerance ([`c2c687e`](https://github.com/jrollin/cartog/commit/c2c687e9656db592f2a4b30d2eedc22d253eba1c))
+
+### Testing
+
+- **doctor**: Improve coverage with report and formatting tests ([`d76ee30`](https://github.com/jrollin/cartog/commit/d76ee30c2011d96728ebb42f7e7c9b74105a956f))
 
 ## [0.3.1] - 2026-02-26
 
