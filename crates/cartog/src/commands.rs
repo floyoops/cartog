@@ -1108,6 +1108,64 @@ fn check_reranker(config: &rag::EmbeddingProviderConfig) -> CheckResult {
     }
 }
 
+fn build_report(checks: Vec<CheckResult>) -> DoctorReport {
+    let ok = checks
+        .iter()
+        .filter(|c| c.status == CheckStatus::Ok)
+        .count();
+    let warn = checks
+        .iter()
+        .filter(|c| c.status == CheckStatus::Warn)
+        .count();
+    let error = checks
+        .iter()
+        .filter(|c| c.status == CheckStatus::Error)
+        .count();
+
+    DoctorReport {
+        summary: DoctorSummary {
+            total: checks.len(),
+            ok,
+            warn,
+            error,
+        },
+        checks,
+    }
+}
+
+fn format_report_human(report: &DoctorReport) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+
+    for check in &report.checks {
+        writeln!(
+            out,
+            "  [{}] {}: {}",
+            check.status.icon(),
+            check.name,
+            check.message,
+        )
+        .unwrap();
+    }
+    writeln!(out).unwrap();
+
+    let s = &report.summary;
+    if s.error > 0 {
+        writeln!(
+            out,
+            "{} checks passed, {} warnings, {} errors",
+            s.ok, s.warn, s.error
+        )
+        .unwrap();
+    } else if s.warn > 0 {
+        writeln!(out, "{} checks passed, {} warnings", s.ok, s.warn).unwrap();
+    } else {
+        writeln!(out, "All {} checks passed", s.ok).unwrap();
+    }
+
+    out
+}
+
 /// Check that requirements are met and everything is working.
 pub fn cmd_doctor(
     config: &CartogConfig,
@@ -1127,51 +1185,15 @@ pub fn cmd_doctor(
         check_reranker(provider_config),
     ];
 
-    let ok = checks
-        .iter()
-        .filter(|c| c.status == CheckStatus::Ok)
-        .count();
-    let warn = checks
-        .iter()
-        .filter(|c| c.status == CheckStatus::Warn)
-        .count();
-    let error = checks
-        .iter()
-        .filter(|c| c.status == CheckStatus::Error)
-        .count();
-
-    let report = DoctorReport {
-        summary: DoctorSummary {
-            total: checks.len(),
-            ok,
-            warn,
-            error,
-        },
-        checks,
-    };
+    let report = build_report(checks);
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        for check in &report.checks {
-            println!(
-                "  [{}] {}: {}",
-                check.status.icon(),
-                check.name,
-                check.message,
-            );
-        }
-        println!();
-        if error > 0 {
-            println!("{} checks passed, {} warnings, {} errors", ok, warn, error);
-        } else if warn > 0 {
-            println!("{} checks passed, {} warnings", ok, warn);
-        } else {
-            println!("All {} checks passed", ok);
-        }
+        print!("{}", format_report_human(&report));
     }
 
-    if error > 0 {
+    if report.summary.error > 0 {
         std::process::exit(1);
     }
 
@@ -1537,5 +1559,206 @@ mod tests {
         assert_eq!(json["checks"][1]["status"], "warn");
         assert_eq!(json["summary"]["total"], 2);
         assert_eq!(json["summary"]["ok"], 1);
+    }
+
+    // ── build_report tests ──
+
+    #[test]
+    fn test_build_report_all_ok() {
+        let checks = vec![
+            CheckResult {
+                name: "a".into(),
+                status: CheckStatus::Ok,
+                message: "ok".into(),
+            },
+            CheckResult {
+                name: "b".into(),
+                status: CheckStatus::Ok,
+                message: "ok".into(),
+            },
+        ];
+        let report = build_report(checks);
+        assert_eq!(report.summary.total, 2);
+        assert_eq!(report.summary.ok, 2);
+        assert_eq!(report.summary.warn, 0);
+        assert_eq!(report.summary.error, 0);
+    }
+
+    #[test]
+    fn test_build_report_mixed() {
+        let checks = vec![
+            CheckResult {
+                name: "a".into(),
+                status: CheckStatus::Ok,
+                message: "fine".into(),
+            },
+            CheckResult {
+                name: "b".into(),
+                status: CheckStatus::Warn,
+                message: "meh".into(),
+            },
+            CheckResult {
+                name: "c".into(),
+                status: CheckStatus::Error,
+                message: "bad".into(),
+            },
+        ];
+        let report = build_report(checks);
+        assert_eq!(report.summary.total, 3);
+        assert_eq!(report.summary.ok, 1);
+        assert_eq!(report.summary.warn, 1);
+        assert_eq!(report.summary.error, 1);
+    }
+
+    #[test]
+    fn test_build_report_empty() {
+        let report = build_report(vec![]);
+        assert_eq!(report.summary.total, 0);
+        assert_eq!(report.summary.ok, 0);
+        assert_eq!(report.summary.warn, 0);
+        assert_eq!(report.summary.error, 0);
+    }
+
+    // ── format_report_human tests ──
+
+    #[test]
+    fn test_format_report_human_all_ok() {
+        let report = build_report(vec![
+            CheckResult {
+                name: "git".into(),
+                status: CheckStatus::Ok,
+                message: "git repository".into(),
+            },
+            CheckResult {
+                name: "db".into(),
+                status: CheckStatus::Ok,
+                message: "42 files".into(),
+            },
+        ]);
+        let out = format_report_human(&report);
+        assert!(out.contains("[+] git: git repository"));
+        assert!(out.contains("[+] db: 42 files"));
+        assert!(out.contains("All 2 checks passed"));
+    }
+
+    #[test]
+    fn test_format_report_human_with_warnings() {
+        let report = build_report(vec![
+            CheckResult {
+                name: "git".into(),
+                status: CheckStatus::Ok,
+                message: "ok".into(),
+            },
+            CheckResult {
+                name: "config".into(),
+                status: CheckStatus::Warn,
+                message: "missing".into(),
+            },
+        ]);
+        let out = format_report_human(&report);
+        assert!(out.contains("[!] config: missing"));
+        assert!(out.contains("1 checks passed, 1 warnings"));
+        assert!(!out.contains("errors"));
+    }
+
+    #[test]
+    fn test_format_report_human_with_errors() {
+        let report = build_report(vec![
+            CheckResult {
+                name: "git".into(),
+                status: CheckStatus::Ok,
+                message: "ok".into(),
+            },
+            CheckResult {
+                name: "embed".into(),
+                status: CheckStatus::Warn,
+                message: "not cached".into(),
+            },
+            CheckResult {
+                name: "db".into(),
+                status: CheckStatus::Error,
+                message: "broken".into(),
+            },
+        ]);
+        let out = format_report_human(&report);
+        assert!(out.contains("[x] db: broken"));
+        assert!(out.contains("1 checks passed, 1 warnings, 1 errors"));
+    }
+
+    // ── check_database with indexed data ──
+
+    #[test]
+    fn test_check_database_with_data() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = Database::open(&db_path, 384).unwrap();
+        // Insert a minimal file so stats.num_files > 0
+        db.upsert_file(&cartog_core::FileInfo {
+            path: "test.py".into(),
+            last_modified: 0.0,
+            hash: "abc123".into(),
+            language: "python".into(),
+            num_symbols: 0,
+        })
+        .unwrap();
+        drop(db);
+
+        let result = check_database(&db_path, 384);
+        assert_eq!(result.status, CheckStatus::Ok);
+        assert!(result.message.contains("1 files"));
+    }
+
+    // ── check_embedding_provider local variants ──
+
+    #[test]
+    fn test_check_embedding_local_cached() {
+        // This test reflects actual machine state — the local model is cached on CI/dev
+        let config = rag::EmbeddingProviderConfig::default();
+        let result = check_embedding_provider(&config);
+        // Either Ok (cached) or Warn (not cached) — never Error for "local"
+        assert_ne!(result.status, CheckStatus::Error);
+        assert_eq!(result.name, "embedding");
+    }
+
+    #[test]
+    fn test_check_reranker_local() {
+        let config = rag::EmbeddingProviderConfig::default();
+        let result = check_reranker(&config);
+        // Either Ok (cached) or Warn (not cached) — never Error for "local"
+        assert_ne!(result.status, CheckStatus::Error);
+        assert_eq!(result.name, "reranker");
+    }
+
+    // ── check_embedding_provider ollama with bad URL ──
+
+    #[test]
+    fn test_check_embedding_ollama_bad_url() {
+        let config = rag::EmbeddingProviderConfig {
+            provider: "ollama".into(),
+            base_url: Some("not-a-url".into()),
+            ..Default::default()
+        };
+        let result = check_embedding_provider(&config);
+        assert_eq!(result.status, CheckStatus::Error);
+        assert!(result.message.contains("cannot parse"));
+    }
+
+    // ── check_embedding_provider ollama with default URL (unreachable in test) ──
+
+    #[test]
+    fn test_check_embedding_ollama_default_url() {
+        let config = rag::EmbeddingProviderConfig {
+            provider: "ollama".into(),
+            base_url: None,
+            ..Default::default()
+        };
+        let result = check_embedding_provider(&config);
+        // On machines without ollama running, this will be Error
+        // On machines with ollama running, this will be Ok
+        assert_eq!(result.name, "embedding");
+        assert!(
+            result.status == CheckStatus::Ok || result.status == CheckStatus::Error,
+            "ollama check should be Ok or Error, not Warn"
+        );
     }
 }
