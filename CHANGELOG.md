@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.11.0] - 2026-04-11
+## [0.11.1] - 2026-04-11
 
 ### Bug Fixes
 
@@ -36,6 +36,7 @@
 - **indexer**: Prevent symlink loops and fix dedup collision bug ([`e5acbc4`](https://github.com/jrollin/cartog/commit/e5acbc41e81e7d2d52c47a1e686846e20bb46c07))
 - **lsp**: Detect EOF in read_headers to avoid infinite loop ([`ac0ea59`](https://github.com/jrollin/cartog/commit/ac0ea59ea3e017c8d28842c44793e6269fe1856e))
 - **doctor**: Improve robustness of health checks ([`7d3931c`](https://github.com/jrollin/cartog/commit/7d3931cb2ea5962d31081e6d6c04df492b00216e))
+- **mcp**: Suppress dead_code warning on tool_router field ([`b123928`](https://github.com/jrollin/cartog/commit/b123928ac496362070d9d6af32c7cb6787200195))
 
 ### Documentation
 
