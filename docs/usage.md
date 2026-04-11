@@ -308,6 +308,36 @@ src/commands.rs:
 
 Symbols are grouped by file. Files changed but not indexed (e.g., lock files, config) are listed separately. Markdown files (`.md`) are now indexed as document sections.
 
+### `cartog doctor`
+
+Check that all requirements are met and everything is working. Validates the environment based on the current configuration.
+
+```bash
+cartog doctor
+```
+
+```
+  [+] git: git repository at /home/user/project
+  [+] config: loaded from /home/user/project/.cartog.toml
+  [+] database: 42 files, 387 symbols at /home/user/project/.cartog.db
+  [+] embedding: local model cached
+  [+] reranker: local model cached
+
+All 5 checks passed
+```
+
+**Checks performed:**
+
+| Check | OK | Warn | Error |
+|-------|-----|------|-------|
+| git | Inside a git repo | — | Not a git repo |
+| config | `.cartog.toml` found and parsed | No config file (using defaults) | — |
+| database | DB exists with indexed data | DB empty or missing | DB cannot be opened |
+| embedding | Local model cached / Ollama reachable | Local model not downloaded | Ollama unreachable / unknown provider |
+| reranker | Local model cached / disabled | Local model not downloaded | Unknown provider |
+
+Exits with code 1 if any check is an error. Supports `--json` for structured output.
+
 ### `cartog watch [path] [--debounce N] [--rag] [--rag-delay N]`
 
 Watch for file changes and auto-re-index. Keeps the code graph fresh during development.

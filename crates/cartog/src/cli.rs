@@ -156,6 +156,9 @@ pub enum Command {
     /// Display the current configuration
     Config,
 
+    /// Check that requirements are met and everything is working
+    Doctor,
+
     /// Search symbols by name (case-insensitive prefix + substring match)
     Search {
         /// Query string to match against symbol names

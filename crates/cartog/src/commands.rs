@@ -893,6 +893,291 @@ struct ValueDisplay {
     default: String,
 }
 
+// ── Doctor Command ──
+
+#[derive(Serialize)]
+struct CheckResult {
+    name: String,
+    status: CheckStatus,
+    message: String,
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum CheckStatus {
+    Ok,
+    Warn,
+    Error,
+}
+
+impl CheckStatus {
+    fn icon(self) -> &'static str {
+        match self {
+            CheckStatus::Ok => "+",
+            CheckStatus::Warn => "!",
+            CheckStatus::Error => "x",
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct DoctorReport {
+    checks: Vec<CheckResult>,
+    summary: DoctorSummary,
+}
+
+#[derive(Serialize)]
+struct DoctorSummary {
+    total: usize,
+    ok: usize,
+    warn: usize,
+    error: usize,
+}
+
+fn check_git_repo() -> CheckResult {
+    let mut dir = std::env::current_dir().unwrap_or_default();
+    loop {
+        if dir.join(".git").exists() {
+            return CheckResult {
+                name: "git".into(),
+                status: CheckStatus::Ok,
+                message: format!("git repository at {}", dir.display()),
+            };
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    CheckResult {
+        name: "git".into(),
+        status: CheckStatus::Error,
+        message: "not inside a git repository".into(),
+    }
+}
+
+fn check_config(config_path: Option<&Path>) -> CheckResult {
+    match config_path {
+        Some(p) => CheckResult {
+            name: "config".into(),
+            status: CheckStatus::Ok,
+            message: format!("loaded from {}", p.display()),
+        },
+        None => CheckResult {
+            name: "config".into(),
+            status: CheckStatus::Warn,
+            message: "no .cartog.toml found (using defaults)".into(),
+        },
+    }
+}
+
+fn check_database(db_path: &Path, embedding_dim: usize) -> CheckResult {
+    match Database::open(db_path, embedding_dim) {
+        Ok(db) => match db.stats() {
+            Ok(stats) if stats.num_files > 0 => CheckResult {
+                name: "database".into(),
+                status: CheckStatus::Ok,
+                message: format!(
+                    "{} files, {} symbols at {}",
+                    stats.num_files,
+                    stats.num_symbols,
+                    db_path.display()
+                ),
+            },
+            Ok(_) => CheckResult {
+                name: "database".into(),
+                status: CheckStatus::Warn,
+                message: format!(
+                    "database exists but is empty, run 'cartog index' ({})",
+                    db_path.display()
+                ),
+            },
+            Err(e) => CheckResult {
+                name: "database".into(),
+                status: CheckStatus::Error,
+                message: format!("failed to query database: {e}"),
+            },
+        },
+        Err(_) => CheckResult {
+            name: "database".into(),
+            status: CheckStatus::Warn,
+            message: format!(
+                "database not found at {}, run 'cartog index'",
+                db_path.display()
+            ),
+        },
+    }
+}
+
+/// Parse "http://host:port" into a "host:port" string for TCP probing.
+fn parse_host_port(url: &str) -> Option<String> {
+    let without_scheme = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))?;
+    let host_port = without_scheme.trim_end_matches('/');
+    if host_port.contains(':') {
+        Some(host_port.to_string())
+    } else {
+        Some(format!("{host_port}:80"))
+    }
+}
+
+fn check_embedding_provider(config: &rag::EmbeddingProviderConfig) -> CheckResult {
+    match config.provider.as_str() {
+        "local" => {
+            if rag::is_embedding_model_cached() {
+                CheckResult {
+                    name: "embedding".into(),
+                    status: CheckStatus::Ok,
+                    message: "local model cached".into(),
+                }
+            } else {
+                CheckResult {
+                    name: "embedding".into(),
+                    status: CheckStatus::Warn,
+                    message: "local model not downloaded, run 'cartog rag setup'".into(),
+                }
+            }
+        }
+        "ollama" => {
+            let base_url = config
+                .base_url
+                .as_deref()
+                .unwrap_or(rag::providers::DEFAULT_OLLAMA_BASE_URL);
+            match parse_host_port(base_url) {
+                Some(addr) => {
+                    match std::net::TcpStream::connect_timeout(
+                        &addr.parse().unwrap_or_else(|_| {
+                            std::net::SocketAddr::from(([127, 0, 0, 1], 11434))
+                        }),
+                        Duration::from_secs(3),
+                    ) {
+                        Ok(_) => CheckResult {
+                            name: "embedding".into(),
+                            status: CheckStatus::Ok,
+                            message: format!("ollama reachable at {base_url}"),
+                        },
+                        Err(e) => CheckResult {
+                            name: "embedding".into(),
+                            status: CheckStatus::Error,
+                            message: format!("cannot reach ollama at {base_url}: {e}"),
+                        },
+                    }
+                }
+                None => CheckResult {
+                    name: "embedding".into(),
+                    status: CheckStatus::Error,
+                    message: format!("cannot parse ollama URL: {base_url}"),
+                },
+            }
+        }
+        other => CheckResult {
+            name: "embedding".into(),
+            status: CheckStatus::Error,
+            message: format!("unknown provider '{other}'"),
+        },
+    }
+}
+
+fn check_reranker(config: &rag::EmbeddingProviderConfig) -> CheckResult {
+    match config.reranker_provider.as_str() {
+        "none" => CheckResult {
+            name: "reranker".into(),
+            status: CheckStatus::Ok,
+            message: "disabled".into(),
+        },
+        "local" => {
+            if rag::is_reranker_model_cached() {
+                CheckResult {
+                    name: "reranker".into(),
+                    status: CheckStatus::Ok,
+                    message: "local model cached".into(),
+                }
+            } else {
+                CheckResult {
+                    name: "reranker".into(),
+                    status: CheckStatus::Warn,
+                    message: "local model not downloaded, run 'cartog rag setup'".into(),
+                }
+            }
+        }
+        other => CheckResult {
+            name: "reranker".into(),
+            status: CheckStatus::Error,
+            message: format!("unknown provider '{other}'"),
+        },
+    }
+}
+
+/// Check that requirements are met and everything is working.
+pub fn cmd_doctor(
+    config: &CartogConfig,
+    config_path: Option<&Path>,
+    db_path: &Path,
+    json: bool,
+    embedding_dim: usize,
+    provider_config: &rag::EmbeddingProviderConfig,
+) -> Result<()> {
+    let _ = config; // config is read indirectly via provider_config
+
+    let checks = vec![
+        check_git_repo(),
+        check_config(config_path),
+        check_database(db_path, embedding_dim),
+        check_embedding_provider(provider_config),
+        check_reranker(provider_config),
+    ];
+
+    let ok = checks
+        .iter()
+        .filter(|c| c.status == CheckStatus::Ok)
+        .count();
+    let warn = checks
+        .iter()
+        .filter(|c| c.status == CheckStatus::Warn)
+        .count();
+    let error = checks
+        .iter()
+        .filter(|c| c.status == CheckStatus::Error)
+        .count();
+
+    let report = DoctorReport {
+        summary: DoctorSummary {
+            total: checks.len(),
+            ok,
+            warn,
+            error,
+        },
+        checks,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        for check in &report.checks {
+            println!(
+                "  [{}] {}: {}",
+                check.status.icon(),
+                check.name,
+                check.message,
+            );
+        }
+        println!();
+        if error > 0 {
+            println!("{} checks passed, {} warnings, {} errors", ok, warn, error);
+        } else if warn > 0 {
+            println!("{} checks passed, {} warnings", ok, warn);
+        } else {
+            println!("All {} checks passed", ok);
+        }
+    }
+
+    if error > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
 /// Watch for file changes and auto-re-index.
 pub fn cmd_watch(
     db_path: &Path,
@@ -1074,5 +1359,183 @@ mod tests {
         let result = truncate_to_budget(text, 5);
         assert!(result.ends_with("... (truncated to fit token budget)"));
         // Should not panic on char boundary issues
+    }
+
+    // ── Doctor check tests ──
+
+    #[test]
+    fn test_check_git_repo_inside_git() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let subdir = dir.path().join("sub");
+        std::fs::create_dir(&subdir).unwrap();
+
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&subdir).unwrap();
+        let result = check_git_repo();
+        std::env::set_current_dir(original).unwrap();
+
+        assert_eq!(result.status, CheckStatus::Ok);
+        assert_eq!(result.name, "git");
+    }
+
+    #[test]
+    fn test_check_git_repo_outside_git() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let result = check_git_repo();
+        std::env::set_current_dir(original).unwrap();
+
+        assert_eq!(result.status, CheckStatus::Error);
+    }
+
+    #[test]
+    fn test_check_config_present() {
+        let result = check_config(Some(Path::new("/project/.cartog.toml")));
+        assert_eq!(result.status, CheckStatus::Ok);
+        assert!(result.message.contains(".cartog.toml"));
+    }
+
+    #[test]
+    fn test_check_config_absent() {
+        let result = check_config(None);
+        assert_eq!(result.status, CheckStatus::Warn);
+        assert!(result.message.contains("defaults"));
+    }
+
+    #[test]
+    fn test_check_database_missing() {
+        let result = check_database(Path::new("/nonexistent/path.db"), 384);
+        assert_eq!(result.status, CheckStatus::Warn);
+        assert!(result.message.contains("not found"));
+    }
+
+    #[test]
+    fn test_check_database_empty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let _db = Database::open(&db_path, 384).unwrap();
+        let result = check_database(&db_path, 384);
+        assert_eq!(result.status, CheckStatus::Warn);
+        assert!(result.message.contains("empty"));
+    }
+
+    #[test]
+    fn test_check_reranker_disabled() {
+        let config = rag::EmbeddingProviderConfig {
+            reranker_provider: "none".into(),
+            ..Default::default()
+        };
+        let result = check_reranker(&config);
+        assert_eq!(result.status, CheckStatus::Ok);
+        assert!(result.message.contains("disabled"));
+    }
+
+    #[test]
+    fn test_check_reranker_unknown_provider() {
+        let config = rag::EmbeddingProviderConfig {
+            reranker_provider: "foobar".into(),
+            ..Default::default()
+        };
+        let result = check_reranker(&config);
+        assert_eq!(result.status, CheckStatus::Error);
+        assert!(result.message.contains("foobar"));
+    }
+
+    #[test]
+    fn test_check_embedding_unknown_provider() {
+        let config = rag::EmbeddingProviderConfig {
+            provider: "unknown".into(),
+            ..Default::default()
+        };
+        let result = check_embedding_provider(&config);
+        assert_eq!(result.status, CheckStatus::Error);
+        assert!(result.message.contains("unknown"));
+    }
+
+    #[test]
+    fn test_check_embedding_ollama_unreachable() {
+        let config = rag::EmbeddingProviderConfig {
+            provider: "ollama".into(),
+            base_url: Some("http://127.0.0.1:19999".into()),
+            ..Default::default()
+        };
+        let result = check_embedding_provider(&config);
+        assert_eq!(result.status, CheckStatus::Error);
+        assert!(result.message.contains("cannot reach"));
+    }
+
+    #[test]
+    fn test_check_status_icons() {
+        assert_eq!(CheckStatus::Ok.icon(), "+");
+        assert_eq!(CheckStatus::Warn.icon(), "!");
+        assert_eq!(CheckStatus::Error.icon(), "x");
+    }
+
+    #[test]
+    fn test_parse_host_port_standard() {
+        assert_eq!(
+            parse_host_port("http://localhost:11434"),
+            Some("localhost:11434".into())
+        );
+    }
+
+    #[test]
+    fn test_parse_host_port_no_port() {
+        assert_eq!(
+            parse_host_port("http://example.com"),
+            Some("example.com:80".into())
+        );
+    }
+
+    #[test]
+    fn test_parse_host_port_https() {
+        assert_eq!(
+            parse_host_port("https://example.com:443"),
+            Some("example.com:443".into())
+        );
+    }
+
+    #[test]
+    fn test_parse_host_port_trailing_slash() {
+        assert_eq!(
+            parse_host_port("http://localhost:11434/"),
+            Some("localhost:11434".into())
+        );
+    }
+
+    #[test]
+    fn test_parse_host_port_no_scheme() {
+        assert_eq!(parse_host_port("localhost:11434"), None);
+    }
+
+    #[test]
+    fn test_doctor_report_json_serialization() {
+        let report = DoctorReport {
+            checks: vec![
+                CheckResult {
+                    name: "git".into(),
+                    status: CheckStatus::Ok,
+                    message: "git repository".into(),
+                },
+                CheckResult {
+                    name: "config".into(),
+                    status: CheckStatus::Warn,
+                    message: "no config".into(),
+                },
+            ],
+            summary: DoctorSummary {
+                total: 2,
+                ok: 1,
+                warn: 1,
+                error: 0,
+            },
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["checks"][0]["status"], "ok");
+        assert_eq!(json["checks"][1]["status"], "warn");
+        assert_eq!(json["summary"]["total"], 2);
+        assert_eq!(json["summary"]["ok"], 1);
     }
 }
