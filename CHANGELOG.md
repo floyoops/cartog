@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.11.2] - 2026-04-11
+## [0.11.3] - 2026-04-11
 
 ### Bug Fixes
 
@@ -38,6 +38,7 @@
 - **doctor**: Improve robustness of health checks ([`7d3931c`](https://github.com/jrollin/cartog/commit/7d3931cb2ea5962d31081e6d6c04df492b00216e))
 - **mcp**: Suppress dead_code warning on tool_router field ([`b123928`](https://github.com/jrollin/cartog/commit/b123928ac496362070d9d6af32c7cb6787200195))
 - **plugin**: Remove .mcp.json to avoid duplicate MCP server with plugin ([`1bee808`](https://github.com/jrollin/cartog/commit/1bee8087a71b2b692016b8cf19b4ae7675151cc8))
+- **plugin**: Use CLAUDE_PLUGIN_ROOT for hook script path ([`0f91692`](https://github.com/jrollin/cartog/commit/0f9169222f547ad99d9c64709edb6fb7e368da02))
 
 ### Documentation
 
