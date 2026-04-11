@@ -246,7 +246,10 @@ fn tool_response(db: &Database, json: String, tool: &str) -> Result<CallToolResu
 ///   `lsp_manager` → `db` → `embedding_provider` → `reranker_provider`
 #[derive(Clone)]
 pub struct CartogServer {
-    #[expect(dead_code, reason = "stored by convention; routing uses Self::tool_router()")]
+    #[expect(
+        dead_code,
+        reason = "stored by convention; routing uses Self::tool_router()"
+    )]
     tool_router: ToolRouter<Self>,
     /// Shared database connection, opened once at server start.
     db: Arc<Mutex<Database>>,
