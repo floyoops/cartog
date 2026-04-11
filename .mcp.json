@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "cartog": {
-      "command": "cartog",
-      "args": ["serve", "--watch"]
-    }
-  }
-}
