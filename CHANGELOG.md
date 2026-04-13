@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.11.3] - 2026-04-11
+## [0.12.0] - 2026-04-13
 
 ### Bug Fixes
 
@@ -54,6 +54,7 @@
 - **readme**: Broaden positioning and add doc site link ([`173c3ba`](https://github.com/jrollin/cartog/commit/173c3badd95fe6f99d7c3918d44e70954e366901))
 - Add marketplace step to plugin install instructions ([`60a32fa`](https://github.com/jrollin/cartog/commit/60a32fa5e7d9fd06bf9b1042a3309e1a91410dd3))
 - **doctor**: Add doctor command to skill and site ([`25c4689`](https://github.com/jrollin/cartog/commit/25c46898f68b60e736036a5c94d67923a7a9957f))
+- **readme,site**: Rewrite README for broader dev audience, fix stale site content ([`9aa8a9e`](https://github.com/jrollin/cartog/commit/9aa8a9e89b54235fcfb860df990a9c6b8769cb7a))
 
 ### Features
 
@@ -86,6 +87,7 @@
 - **mcp**: Improve tool discoverability and agent guidance ([`3a52040`](https://github.com/jrollin/cartog/commit/3a52040ca01fa58c2147476e1c4ce86904dabf63))
 - **plugin**: Use ensure_indexed.sh as SessionStart hook ([`b1994f8`](https://github.com/jrollin/cartog/commit/b1994f8dc94e5332008189ab2f9e4ed4196ab541))
 - **cli**: Add doctor command to validate environment ([`3e6f00d`](https://github.com/jrollin/cartog/commit/3e6f00d3983858c416cc0d1b60135870cb51a5d6))
+- **release**: Enable lsp feature and add binary smoke test ([`62c7b76`](https://github.com/jrollin/cartog/commit/62c7b76f7980368cbf4cf7a611bb0a9f40b86a64))
 
 ### Miscellaneous
 
