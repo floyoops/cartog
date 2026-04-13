@@ -9,79 +9,107 @@
 
 **Map your codebase. Navigate by graph, not grep.**
 
-Cartog pre-computes a code graph — symbols, calls, imports, inheritance — and lets you query it in microseconds. Use it from the CLI, as an MCP server for AI agents, or both. Everything runs locally: no API calls, no cloud, no data leaves your machine.
+Single binary. Microsecond queries. 100% local.
 
-> **[Documentation site →](https://jrollin.github.io/cartog/)**
+Cartog pre-computes a code graph — symbols, calls, imports, inheritance — and lets you query it instantly. Use it from the CLI for day-to-day navigation, as an MCP server for AI agents, or both. No Python, no pip, no Docker. One binary, one SQLite file, zero cloud dependencies.
 
-## Why Cartog
-
-| | grep/cat/find | Cartog |
-|---|---|---|
-| **Query latency** | multi-step | 8-450 μs |
-| **Recall** (completeness) | 78% | 97% |
-| **Transitive analysis** | impossible | `impact --depth 3` traces callers-of-callers |
-| **Semantic search** | no | local ONNX / Ollama |
-| **Privacy** | local | **100% local** — no remote calls |
-
-Measured across 13 scenarios, 5 languages ([full benchmark suite](benchmarks/)).
-
-### What you get
-
-- **Single binary, self-contained** — `cargo install cartog` and you're done. No Docker, no config.
-- **100% local** — tree-sitter parsing + SQLite storage + local embeddings. Your code never leaves your machine.
-- **Dual search** — keyword search (sub-ms, symbol names) and semantic search (natural language). Configurable embedding providers (local ONNX or [Ollama](https://ollama.com)).
-- **Impact analysis** — `cartog impact --depth 3` traces callers-of-callers. Know the blast radius before you change anything.
-- **Live index** — `cartog watch` auto re-indexes on file changes. Always query fresh data.
-- **Optional LSP precision** — auto-detects language servers on PATH to boost edge resolution from ~25% to ~42-81%.
-
-### For LLM agents
-
-- **MCP server** — `cartog serve` exposes 12 tools over stdio. Plug into Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible agent.
-- **Agent skill** — teaches your agent when and how to use Cartog. Search routing, refactoring workflows, fallback heuristics.
-- **Token efficient** — 83% fewer tokens per query vs grep/cat workflows. One `refs` call replaces 6+ discovery steps.
+> **[Documentation site](https://jrollin.github.io/cartog/)**
 
 ![cartog demo](docs/demo.gif)
 
 ## Quick Start
 
 ```bash
-cargo install cartog
+cargo install cartog          # or download a binary from GitHub Releases
 cd your-project
-cartog index .               # build the graph (~95ms for 4k LOC, incremental)
-cartog search validate       # find symbols by name (sub-millisecond)
-cartog refs validate_token   # who calls/imports/references this?
-cartog impact validate_token # what breaks if I change this?
+cartog index .                # build the graph (~95ms for 4k LOC)
 ```
 
-### Add semantic search (optional, still fully local)
+That's it. Now query:
 
 ```bash
-cartog rag setup             # download embedding + re-ranker models (~1.2GB, one-time)
-cartog rag index .           # embed all symbols + documents into sqlite-vec
-cartog rag search "authentication token validation"   # natural language queries
+cartog search validate        # find symbols by name         (sub-ms)
+cartog refs validate_token    # who calls this?              (< 500 us)
+cartog impact validate_token  # what breaks if I change it?  (< 20 ms)
+cartog outline src/auth.py    # file structure, no cat       (< 15 us)
 ```
 
-Indexes both **code** (functions, classes, methods) and **Markdown documents** (READMEs, design docs, API docs). Returns code by default; use `--kind document` for docs or `--kind all` for both.
+## Why Cartog
 
-Models are downloaded once to `~/.cache/cartog/models/` and run locally via ONNX Runtime. No API keys, no network calls at query time.
+Every code navigation tool makes you choose: fast but shallow (grep), or precise but slow (language servers). Cartog gives you both.
 
-> **Using Ollama instead?** Configure `.cartog.toml` with `[embedding] provider = "ollama"` and skip `rag setup` — models are managed by Ollama. See [Configuration](#configuration).
+| | grep / cat / find | Language servers | **Cartog** |
+|---|---|---|---|
+| **Query speed** | depends on codebase size | seconds to start | **8-450 us** |
+| **Transitive analysis** | impossible | partial | **`impact --depth 5`** |
+| **Setup** | none | per-language config | **one binary, zero config** |
+| **Languages** | all (text) | one per server | **8 languages, one tool** |
+| **Token cost** (LLM context) | ~1,700 tokens/query | n/a | **~280 tokens/query** |
+| **Recall** (completeness) | 78% | ~100% | **97%** |
+| **Privacy** | local | local | **100% local** |
+
+Measured across 13 scenarios, 5 languages ([benchmark suite](crates/cartog/benches/queries.rs)).
+
+## What You Get
+
+### Fast structural queries
+
+Pre-computed graph means no re-reading files, no multi-step discovery.
+
+```bash
+cartog search parse              # symbol name lookup (sub-ms)
+cartog refs UserService          # all callers, importers, inheritors
+cartog callees authenticate      # what does this function call?
+cartog impact SessionManager     # blast radius — callers-of-callers, depth N
+cartog hierarchy BaseService     # inheritance tree
+cartog deps src/routes/auth.py   # file-level imports
+cartog changes --commits 5       # symbols affected by recent git commits
+cartog map --tokens 4000         # codebase overview, ranked by centrality
+```
+
+### Semantic search (optional, still fully local)
+
+```bash
+cartog rag setup                 # download models (~1.2 GB, one-time)
+cartog rag index .               # embed symbols + docs into sqlite-vec
+cartog rag search "authentication token validation"
+```
+
+Three-tier hybrid pipeline: **FTS5 keyword** + **vector KNN** + **cross-encoder re-ranking**. Indexes both code (functions, classes, methods) and Markdown documents. Models run locally via ONNX Runtime — no API keys, no network calls.
+
+> **Prefer Ollama?** Set `provider = "ollama"` in `.cartog.toml`. See [Configuration](#configuration).
+
+### Live index
+
+```bash
+cartog watch .                   # auto re-index on file changes
+cartog watch . --rag             # also re-embed (deferred, non-blocking)
+```
+
+### MCP server for AI agents
+
+```bash
+cartog serve                     # 12 tools over stdio
+cartog serve --watch --rag       # with live re-indexing + semantic search
+```
+
+Works with Claude Code, Cursor, Windsurf, Zed, OpenCode — any MCP client.
+
+### Optional LSP precision
+
+Cartog auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph) and uses them to boost edge resolution from ~25% to **up to 81%**. Results persist in SQLite — pay the cost once.
 
 ## Install
 
 ### From crates.io
 
 ```bash
-cargo install cartog                    # core (heuristic resolution only)
-cargo install cartog --features lsp     # + LSP-based resolution (recommended)
-cargo install cartog --features ollama-embedding  # + Ollama embedding support
+cargo install cartog                           # core
+cargo install cartog --features lsp            # + LSP resolution (recommended)
+cargo install cartog --features ollama-embedding  # + Ollama support
 ```
 
-The `lsp` feature adds ~50KB to the binary. It auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph) and uses them to resolve edges that heuristic matching can't. No extra config needed — if a server is on PATH, it's used automatically.
-
 ### Pre-built binaries
-
-Download from [GitHub Releases](https://github.com/jrollin/cartog/releases/latest):
 
 ```bash
 # macOS (Apple Silicon)
@@ -103,104 +131,83 @@ sudo mv cartog /usr/local/bin/
 # Windows (x86_64) — download .zip from releases page
 ```
 
-## Configuration
-
-The database path is resolved automatically — no config needed for standard use:
-
-1. **`--db` flag / `CARTOG_DB` env var** — explicit override (highest priority)
-2. **`.cartog.toml`** at the git root — project-specific config
-3. **Auto git-root detection** — DB placed at the root of the git repository
-4. **cwd fallback** — `.cartog.db` in the current directory
+### Claude Code plugin
 
 ```bash
-# Override database location
-cartog --db /tmp/myproject.db index .
-CARTOG_DB=~/.local/share/cartog/proj.db cartog search foo
-
-# --db is global — applies to all subcommands
-cartog --db /tmp/x.db stats
+/plugin marketplace add jrollin/cartog
+/plugin install cartog@cartog-plugins
 ```
 
-**`.cartog.toml`** (optional, place at project root):
-```toml
-[database]
-path = "~/.local/share/cartog/myproject.db"
-
-# Embedding provider (optional — defaults to local ONNX)
-[embedding]
-provider = "ollama"          # "local" (default) or "ollama"
-model = "nomic-embed-text"
-
-[embedding.ollama]
-base_url = "http://localhost:11434"
-
-# Reranker (optional — defaults to local cross-encoder)
-[reranker]
-provider = "none"            # "local" (default) or "none"
-```
-
-Useful when indexing from a parent directory across multiple projects, or when storing the DB outside the repo. See [`docs/usage.md`](docs/usage.md) for details.
-
-## Search: Keyword, Semantic, or Both
-
-cartog offers two search modes that complement each other:
-
-| Query type | Command | Speed | Best for |
-|---|---|---|---|
-| Symbol name / partial name | `cartog search parse` | sub-ms | You know the name: `validate_token`, `AuthService` |
-| Natural language / concept | `cartog rag search "error handling"` | ~150-500ms | You know the behavior, not the name |
-| Broad keyword, unsure | Run both in parallel | sub-ms + ~300ms | `auth`, `config` — catch names + semantics |
-
-**Narrowing pattern**: `cartog search parse` returns 30 hits? Narrow with `cartog rag search "parse JSON response body"` to pinpoint the right ones.
+### Agent Skill (Cursor, Copilot, others)
 
 ```bash
-# Direct keyword search — fast, exact
-cartog search validate_token
-cartog search parse --kind function --limit 10
-
-# Semantic search — natural language, conceptual
-cartog rag search "database connection pooling"
-cartog rag search "error handling" --kind function
-
-# Both in parallel when unsure
-cartog search auth & cartog rag search "authentication and authorization"
+npx skills add jrollin/cartog
 ```
+
+## Why Not...
+
+**grep/ripgrep?** Great for string literals and config values. But grep can't trace call chains, can't do transitive impact analysis, and floods your context with raw text. Cartog returns structured, ranked, deduplicated results — one `refs` call replaces 6+ discovery steps.
+
+**A language server?** LSPs give perfect precision but require per-language setup, take seconds to start, and only cover one language at a time. Cartog covers 8 languages with one binary and answers in microseconds. When you need LSP precision, cartog can use it as an optional layer.
+
+**Python-based graph tools?** They solve a similar problem but require a Python runtime, pip dependencies, and virtual environments. Cartog is a single static binary — download and run. It also queries 10-100x faster thanks to compiled Rust + SQLite.
+
+## MCP Server Setup
+
+```bash
+# Claude Code
+claude mcp add cartog -- cartog serve --watch --rag
+```
+
+For other clients, add to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve", "--watch", "--rag"]
+    }
+  }
+}
+```
+
+See [Usage — MCP Server](docs/usage.md#mcp-server) for per-client details (Cursor, Windsurf, Zed, OpenCode).
 
 ## Commands
 
 ```bash
 # Index
-cartog index .                              # Build the graph (with LSP if available)
-cartog index . --no-lsp                     # Fast heuristic-only (~1-4s)
-cartog index . --force                      # Re-index all files
+cartog index .                              # build the graph (with LSP if available)
+cartog index . --no-lsp                     # heuristic-only (~1-4s)
+cartog index . --force                      # re-index all files
 
 # Search
-cartog search validate                      # Find symbols by partial name
-cartog search validate --kind function      # Filter by kind
-cartog rag search "token validation"        # Semantic search (natural language)
+cartog search validate                      # partial name match (sub-ms)
+cartog search validate --kind function      # filter by kind
+cartog rag search "token validation"        # semantic search (natural language)
 
 # Navigate
-cartog outline src/auth/tokens.py           # File structure without reading it
-cartog refs validate_token                  # Who references this? (calls, imports, inherits, types)
-cartog refs validate_token --kind calls     # Filter: only call sites
-cartog callees authenticate                 # What does this call?
-cartog impact SessionManager --depth 3      # What breaks if I change this?
-cartog hierarchy BaseService                # Inheritance tree
-cartog deps src/routes/auth.py              # File-level imports
-cartog stats                                # Index summary
-cartog doctor                               # Check requirements are met
+cartog outline src/auth/tokens.py           # file structure without reading it
+cartog refs validate_token                  # who references this?
+cartog refs validate_token --kind calls     # only call sites
+cartog callees authenticate                 # what does this call?
+cartog impact SessionManager --depth 3      # what breaks if I change this?
+cartog hierarchy BaseService                # inheritance tree
+cartog deps src/routes/auth.py              # file-level imports
 
-# Watch (auto re-index on file changes)
-cartog watch .                              # Watch for changes, re-index automatically
-cartog watch . --rag                        # Also re-embed symbols (deferred)
+# Inspect
+cartog stats                                # index summary
+cartog map --tokens 4000                    # codebase overview by centrality
+cartog changes --commits 5                  # recently changed symbols
+cartog doctor                               # environment health check
 
-# MCP Server
-cartog serve                                # MCP server over stdio (12 tools)
-cartog serve --watch                        # With background file watcher
-cartog serve --watch --rag                  # Watcher + deferred RAG embedding
+# Watch & Serve
+cartog watch .                              # auto re-index on save
+cartog serve --watch --rag                  # MCP server with live index
 ```
 
-All commands support `--json` for structured output.
+All commands support `--json` for structured output and `--tokens N` for budget-aware output.
 
 <details>
 <summary><strong>Example outputs</strong></summary>
@@ -230,8 +237,6 @@ function  validate_session  auth/tokens.py:68
 function  validate_user     services/user.py:12
 ```
 
-Results ranked: exact match > prefix > substring. Case-insensitive.
-
 ### impact
 
 ```
@@ -253,6 +258,19 @@ references  process  routes/auth.py:22
 
 </details>
 
+## Supported Languages
+
+| Language | Extensions | Symbols | Edges |
+|----------|-----------|---------|-------|
+| Python | .py, .pyi | functions, classes, methods, imports, variables | calls, imports, inherits, raises, type refs |
+| TypeScript | .ts, .tsx | functions, classes, methods, imports, variables | calls, imports, inherits, type refs, new |
+| JavaScript | .js, .jsx, .mjs, .cjs | functions, classes, methods, imports, variables | calls, imports, inherits, new |
+| Rust | .rs | functions, structs, traits, impls, imports | calls, imports, inherits (trait impl), type refs |
+| Go | .go | functions, structs, interfaces, imports | calls, imports, type refs |
+| Ruby | .rb | functions, classes, modules, imports | calls, imports, inherits, raises, rescue types |
+| Java | .java | classes, interfaces, enums, methods, imports | calls, imports, inherits, raises, type refs, new |
+| Markdown | .md | document sections (chunked by heading) | — |
+
 ## How It Works
 
 ```mermaid
@@ -264,106 +282,21 @@ graph LR
     E -->|query| F["rag search<br/>(FTS5 + vector KNN + reranker)"]
 ```
 
-1. **Index** — walks your project, parses code with tree-sitter and chunks Markdown by heading, extracts symbols (functions, classes, methods, imports, variables, document sections) and edges (calls, imports, inherits, raises, type references)
-2. **Store** — writes everything to a local `.cartog.db` SQLite file
-3. **Resolve (heuristic)** — links edges by name with scope-aware matching (same file > import path > same directory > unique project match)
-4. **Resolve (LSP, optional)** — for edges the heuristic couldn't resolve, sends `textDocument/definition` to language servers for compiler-grade precision. Results persist in the DB.
-5. **Embed** (optional) — generates vector embeddings via configurable provider (local ONNX or Ollama), stored in sqlite-vec
-6. **Query** — instant lookups against the pre-computed graph, hybrid FTS5 + vector search with RRF merge and cross-encoder re-ranking
+1. **Index** — tree-sitter parses your code, extracts symbols (functions, classes, methods) and edges (calls, imports, inherits, type refs). Markdown is chunked by heading.
+2. **Store** — everything goes into a local `.cartog.db` SQLite file.
+3. **Resolve (heuristic)** — links edges by name with scope-aware matching.
+4. **Resolve (LSP, optional)** — sends unresolved edges to language servers for compiler-grade precision. Results persist.
+5. **Embed (optional)** — generates vector embeddings via local ONNX or Ollama, stored in sqlite-vec.
+6. **Query** — instant lookups against the pre-computed graph. Hybrid FTS5 + vector search with RRF merge and cross-encoder re-ranking.
 
-Re-indexing is incremental: git diff + SHA-256 skips unchanged files, and Merkle-tree diffing within changed files updates only modified symbols. `cartog watch` automates this on file changes.
-
-**Everything runs on your machine.** No API keys. No cloud endpoints. No telemetry. Your code stays local.
-
-## MCP Server
-
-cartog runs as an [MCP](https://modelcontextprotocol.io/) server, exposing 12 tools (10 core + 2 RAG) over stdio.
-
-```bash
-# Claude Code
-claude mcp add cartog -- cartog serve
-
-# With live re-indexing
-claude mcp add cartog -- cartog serve --watch --rag
-
-# Cursor — add to .cursor/mcp.json
-# Windsurf — add to ~/.codeium/windsurf/mcp_config.json
-# OpenCode — add to .opencode.json
-# Zed — add to ~/.config/zed/settings.json
-```
-
-Common config (JSON):
-
-```json
-{
-  "mcpServers": {
-    "cartog": {
-      "command": "cartog",
-      "args": ["serve", "--watch", "--rag"]
-    }
-  }
-}
-```
-
-See [Usage — MCP Server](docs/usage.md#mcp-server) for per-client installation details.
-
-## Agent Skill
-
-Install cartog as a Claude Code plugin (includes skill + MCP + auto-setup):
-
-```bash
-/plugin marketplace add jrollin/cartog
-/plugin install cartog@cartog-plugins
-```
-
-Or install as an [Agent Skill](https://agentskills.io) for Cursor, Copilot, and other compatible agents:
-
-```bash
-npx skills add jrollin/cartog
-```
-
-Or install manually:
-
-```bash
-cp -r skills/cartog ~/.claude/skills/
-```
-
-The skill teaches your AI agent **when and how** to use cartog — including search routing (rag search as default, structural search for refs/callees/impact), refactoring workflows, and when to fall back to grep. See [Agent Skill](docs/usage.md#agent-skill) for details.
-
-## Privacy
-
-Cartog is designed for air-gapped and privacy-conscious environments:
-
-- **Parsing**: tree-sitter runs in-process, no external calls
-- **Storage**: SQLite file in your project directory (`.cartog.db`)
-- **Embeddings**: local ONNX by default (`~/.cache/cartog/models/`), or Ollama on localhost — no external API calls either way
-- **Re-ranking**: cross-encoder runs locally via ONNX, no API
-- **MCP server**: communicates over stdio only, no network sockets
-- **No telemetry**, no analytics, no phone-home of any kind
-
-Your code never leaves your machine. Not during indexing, not during search, not ever.
-
-## Supported Languages
-
-| Language | Extensions | Symbols | Edges |
-|----------|-----------|---------|-------|
-| Python | .py, .pyi | functions, classes, methods, imports, variables | calls, imports, inherits, raises, type refs |
-| TypeScript | .ts, .tsx | functions, classes, methods, imports, variables | calls, imports, inherits, type refs, new |
-| JavaScript | .js, .jsx, .mjs, .cjs | functions, classes, methods, imports, variables | calls, imports, inherits, new |
-| Rust | .rs | functions, structs, traits, impls, imports | calls, imports, inherits (trait impl), type refs |
-| Go | .go | functions, structs, interfaces, imports | calls, imports, type refs |
-| Ruby | .rb | functions, classes, modules, imports | calls, imports, inherits, raises, rescue types |
-| Java | .java | classes, interfaces, enums, methods, imports, variables | calls, imports, inherits, raises, type refs, new |
-| Markdown | .md | document sections (chunked by heading) | — |
+Re-indexing is incremental: git diff + SHA-256 skips unchanged files, Merkle-tree diffing updates only modified symbols. `cartog watch` automates this on file save.
 
 ## Performance
 
-Indexing: **69 files / 4k LOC in 95ms** (Python fixture, release build). Incremental re-index skips unchanged files.
+Indexing: **69 files / 4k LOC in 95ms** (incremental re-index skips unchanged files).
 
-Query latency (criterion benchmarks on the same fixture):
-
-| Query type | Latency |
-|-----------|---------|
+| Query | Latency |
+|-------|---------|
 | outline | 8-14 us |
 | hierarchy | 8-9 us |
 | deps | 25 us |
@@ -373,27 +306,52 @@ Query latency (criterion benchmarks on the same fixture):
 | refs | 258-471 us |
 | impact (depth 3) | 2.7-17 ms |
 
-## Edge Resolution: Heuristic vs LSP
+### Edge Resolution
 
-cartog uses a two-tier resolution strategy. The heuristic pass runs instantly; LSP is optional and adds precision.
-
-| Project type | Language | Heuristic only | With LSP | Time (LSP) |
-|---------|----------|---------------|----------|------------|
+| Project | Language | Heuristic | With LSP | LSP time |
+|---------|----------|-----------|----------|----------|
 | TS microservice (230 files) | TypeScript | 37% | **81%** | 13s |
 | Vue.js SPA (739 files) | Vue/TS/JS | 31% | **72%** | 25s |
 | Rust CLI (358 files) | Rust | 25% | **44%** | 72s |
 
-Remaining unresolved edges are mostly calls to external libraries (std, node_modules, crates) — definitions outside the project boundary.
+Unresolved edges are mostly calls to external libraries outside the project boundary.
 
-**When to use LSP**: before a major refactoring, when `refs` or `impact` seem incomplete.
-**When to skip** (`--no-lsp`): day-to-day exploration, post-change verification, watch mode.
+## Configuration
 
-## Design Trade-offs
+Database path is resolved automatically — no config needed for standard use:
 
-- **Two-tier resolution** — fast heuristic pass (~1s) for daily use, optional LSP for precision refactoring. Results persist in SQLite — pay the LSP cost once.
-- **Self-contained** — single binary, all dependencies compiled in. LSP is opt-in via language servers already on your PATH.
-- **Incremental** — git diff + SHA256 per file, Merkle-tree diff per symbol. Stable IDs survive line movements.
-- **Local-first** — embedding models run locally via ONNX Runtime by default. Alternatively, use Ollama for GPU acceleration. Either way, your code stays private — no external API calls.
+1. `--db` flag / `CARTOG_DB` env var (highest priority)
+2. `.cartog.toml` at git root
+3. Auto git-root detection
+4. `.cartog.db` in current directory
+
+**`.cartog.toml`** (optional):
+
+```toml
+[database]
+path = "~/.local/share/cartog/myproject.db"
+
+[embedding]
+provider = "ollama"          # "local" (default) or "ollama"
+model = "nomic-embed-text"
+
+[embedding.ollama]
+base_url = "http://localhost:11434"
+
+[reranker]
+provider = "none"            # "local" (default) or "none"
+```
+
+## Privacy
+
+- **Parsing**: tree-sitter runs in-process
+- **Storage**: SQLite file in your project directory
+- **Embeddings**: local ONNX or Ollama on localhost
+- **Re-ranking**: cross-encoder runs locally via ONNX
+- **MCP server**: stdio only, no network sockets
+- **No telemetry**, no analytics, no phone-home
+
+Your code never leaves your machine.
 
 ## Documentation
 
