@@ -39,7 +39,56 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --features lsp --target ${{ matrix.target }}
+
+      # Smoke-test the built binary (all runners are native — no cross-compilation)
+      - name: Smoke test (unix)
+        if: runner.os != 'Windows'
+        run: |
+          BIN=target/${{ matrix.target }}/release/cartog
+          set -e
+
+          # Binary executes and reports correct version
+          VERSION=$($BIN --version)
+          echo "$VERSION"
+          echo "$VERSION" | grep -q "cartog"
+
+          # All expected subcommands are present
+          HELP=$($BIN --help)
+          for cmd in index outline search refs callees impact hierarchy deps stats doctor config map changes watch serve rag; do
+            echo "$HELP" | grep -q "$cmd" || { echo "FAIL: missing subcommand '$cmd'"; exit 1; }
+          done
+
+          # RAG subcommands exist (proves provider-local is compiled in)
+          RAG_HELP=$($BIN rag --help)
+          for cmd in setup index search; do
+            echo "$RAG_HELP" | grep -q "$cmd" || { echo "FAIL: missing rag subcommand '$cmd'"; exit 1; }
+          done
+
+          echo "Smoke test passed"
+
+      - name: Smoke test (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          BIN=target/${{ matrix.target }}/release/cartog.exe
+          set -e
+
+          VERSION=$($BIN --version)
+          echo "$VERSION"
+          echo "$VERSION" | grep -q "cartog"
+
+          HELP=$($BIN --help)
+          for cmd in index outline search refs callees impact hierarchy deps stats doctor config map changes watch serve rag; do
+            echo "$HELP" | grep -q "$cmd" || { echo "FAIL: missing subcommand '$cmd'"; exit 1; }
+          done
+
+          RAG_HELP=$($BIN rag --help)
+          for cmd in setup index search; do
+            echo "$RAG_HELP" | grep -q "$cmd" || { echo "FAIL: missing rag subcommand '$cmd'"; exit 1; }
+          done
+
+          echo "Smoke test passed"
 
       # Package unix
       - name: Package (unix)
