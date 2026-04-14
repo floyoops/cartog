@@ -7,6 +7,7 @@
   "author": {
     "name": "Julien Rollin"
   },
+  "agents": "./agents/",
   "skills": "./skills/",
   "mcpServers": {
     "cartog": {

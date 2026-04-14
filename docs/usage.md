@@ -705,4 +705,52 @@ RUST_LOG=debug cartog serve   # per-request tool call logging
 | Compatibility | Claude Code only | MCP clients only | Any LLM with bash |
 | Latency | Fork+exec per command | Persistent process | Fork+exec per command |
 
-Use the **plugin** for Claude Code (simplest setup, includes skill + scripts). Use **MCP** when you want lower token cost with an MCP-compatible client. Use the **skill** for non-Claude Code environments.
+Use the **plugin** for Claude Code (simplest setup, includes skill + scripts + agents). Use **MCP** when you want lower token cost with an MCP-compatible client. Use the **skill** for non-Claude Code environments.
+
+## Agents
+
+cartog ships autonomous agents that execute multi-step workflows end-to-end. Agents are bundled in the plugin and available after plugin installation.
+
+### Available Agents
+
+| Agent | Description | Invocation |
+|-------|-------------|------------|
+| `codebase-onboarding` | Structured onboarding report — adapts to project type and size | `@codebase-onboarding` or "help me understand this project" |
+
+### How Agents Work
+
+Agents differ from the cartog skill:
+
+- **Skill** (reactive): Claude uses cartog commands in response to your questions — you drive the workflow
+- **Agent** (autonomous): you give a goal, the agent executes a multi-step plan using cartog, and produces a deliverable
+
+Agents use the CLI via Bash (not MCP), so they work as subagents with isolated context. They are self-contained — no skill injection overhead.
+
+### Manual Installation
+
+If not using the plugin, copy agent definitions to your Claude Code agents directory:
+
+```bash
+cp agents/codebase-onboarding.md ~/.claude/agents/
+```
+
+### Agent: `codebase-onboarding`
+
+Produces a structured onboarding report for an unfamiliar codebase. The agent adapts to the project — a CLI tool gets different treatment than a web API or a library.
+
+**Workflow:**
+1. **Discover** — `cartog stats` + `cartog map` + manifest/README to determine project type and scale
+2. **Architecture** — trace top-centrality symbols with `callees`/`refs` to map module layout
+3. **Entry points** — targeted searches based on project type (CLI commands, API routes, public surface, etc.)
+4. **Conventions** — test patterns, code style config, recent git activity
+
+Output: a structured markdown report. Sections that don't apply are omitted.
+
+**Usage:**
+```
+@codebase-onboarding
+# or
+"Use the codebase-onboarding agent to analyze this project"
+# or start a session as the agent
+claude --agent codebase-onboarding
+```
