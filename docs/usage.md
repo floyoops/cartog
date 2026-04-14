@@ -459,11 +459,17 @@ cartog is available as a [Claude Code plugin](https://docs.anthropic.com/en/docs
 
 ### Installation
 
-```bash
-# Register the marketplace
-/plugin marketplace add jrollin/cartog
+Run these two commands **one at a time** in Claude Code:
 
-# Install the plugin
+1. Register the marketplace:
+
+```bash
+/plugin marketplace add jrollin/cartog
+```
+
+2. Install the plugin:
+
+```bash
 /plugin install cartog@cartog-plugins
 ```
 

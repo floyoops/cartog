@@ -133,8 +133,13 @@ sudo mv cartog /usr/local/bin/
 
 ### Claude Code plugin
 
+Run these two commands **one at a time** in Claude Code:
+
 ```bash
 /plugin marketplace add jrollin/cartog
+```
+
+```bash
 /plugin install cartog@cartog-plugins
 ```
 
