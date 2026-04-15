@@ -716,6 +716,7 @@ cartog ships autonomous agents that execute multi-step workflows end-to-end. Age
 | Agent | Description | Invocation |
 |-------|-------------|------------|
 | `codebase-onboarding` | Structured onboarding report — adapts to project type and size | `@codebase-onboarding` or "help me understand this project" |
+| `refactoring-scout` | Pre-flight blast radius analysis before a refactoring | `@refactoring-scout` or "is it safe to change X?" |
 
 ### How Agents Work
 
@@ -731,7 +732,7 @@ Agents use the CLI via Bash (not MCP), so they work as subagents with isolated c
 If not using the plugin, copy agent definitions to your Claude Code agents directory:
 
 ```bash
-cp agents/codebase-onboarding.md ~/.claude/agents/
+cp agents/*.md ~/.claude/agents/
 ```
 
 ### Agent: `codebase-onboarding`
@@ -753,4 +754,23 @@ Output: a structured markdown report. Sections that don't apply are omitted.
 "Use the codebase-onboarding agent to analyze this project"
 # or start a session as the agent
 claude --agent codebase-onboarding
+```
+
+### Agent: `refactoring-scout`
+
+Pre-flight analysis before changing a symbol, module, or file. Maps the full blast radius and produces a go/no-go recommendation.
+
+**Workflow:**
+1. **Locate** — confirm exact symbol with `cartog search`, disambiguate if needed
+2. **Map blast radius** — `refs` + `impact --depth 3` + `callees` + `hierarchy` (for classes)
+3. **Assess risk** — Low / Medium / High based on affected file count and transitive depth
+4. **Report** — affected files, risk warnings, and a concrete update checklist
+
+**Usage:**
+```
+@refactoring-scout "rename TrackerRepository"
+# or
+"Is it safe to delete the UtilsHelper class?"
+# or start a session as the agent
+claude --agent refactoring-scout
 ```
