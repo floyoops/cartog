@@ -1,0 +1,133 @@
+# Golden examples for cartog agent behavioral testing.
+#
+# Each scenario runs an agent end-to-end on a real codebase and evaluates
+# the output against quality criteria.
+#
+# Schema:
+#   - id: unique identifier
+#     agent: agent filename (relative to agents/)
+#     description: what this tests
+#     cwd: working directory to run the agent in
+#     prompt: the prompt to send to the agent
+#     criteria:
+#       must_contain: phrases the output MUST include (checked with grep -i)
+#       must_not_contain: phrases the output must NOT include (checked with grep -i)
+#       quality: free-text rubric for LLM-as-judge (soft evaluation)
+#     tags: [onboarding, refactoring, ...]
+#
+# Checking strategy:
+#   - must_contain / must_not_contain: deterministic grep (hard pass/fail)
+#   - quality: LLM-as-judge (soft evaluation for nuanced criteria)
+#
+# Usage:
+#   bash agents/tests/eval.sh                               # run all
+#   bash agents/tests/eval.sh --id onboarding_rust_cli      # run one
+#   bash agents/tests/eval.sh --tag onboarding              # run by tag
+#   bash agents/tests/eval.sh --dry-run                     # show prompts
+
+# ============================================================
+# codebase-onboarding agent
+# ============================================================
+
+- id: onboarding_rust_cli
+  agent: codebase-onboarding.md
+  description: Onboarding report for a Rust CLI tool (cartog itself)
+  cwd: .
+  prompt: "Produce the onboarding report for this codebase"
+  criteria:
+    must_contain:
+      - "Rust"
+      - "tree-sitter"
+      - "SQLite"
+      - "cartog-db"
+      - "cartog-languages"
+      - "cartog-indexer"
+    must_not_contain:
+      - "Express"
+      - "Django"
+      - "Not applicable"
+      - "No API routes"
+    quality: >
+      Report should identify cartog as a Rust CLI tool / Cargo workspace.
+      Must describe the crate architecture (core, db, languages, indexer, rag, mcp).
+      Should focus on crates/ directory, not be dominated by benchmarks/fixtures/.
+      Sections that don't apply (e.g. API routes) should be omitted, not filled with N/A.
+      No hallucinated frameworks or endpoints.
+  tags: [onboarding, rust]
+
+# ============================================================
+# refactoring-scout agent
+# ============================================================
+
+- id: refactoring_low_risk
+  agent: refactoring-scout.md
+  description: Low-risk rename with small blast radius
+  cwd: .
+  prompt: "Is it safe to rename cmd_rag_search?"
+  criteria:
+    must_contain:
+      - "commands.rs"
+      - "main.rs"
+    must_not_contain:
+      - "High risk"
+    quality: >
+      Report should identify cmd_rag_search as a function in commands.rs
+      with a single call site in main.rs. Should classify as low risk or
+      explicitly say it's safe to rename. Should NOT suggest incremental
+      approaches or feature flags — this is a trivial two-file change.
+  tags: [refactoring, low-risk]
+
+- id: refactoring_high_risk_trait
+  agent: refactoring-scout.md
+  description: High-risk change to a core trait with many implementations
+  cwd: .
+  prompt: "Can I safely delete the Extractor trait?"
+  criteria:
+    must_contain:
+      - "PythonExtractor"
+      - "get_extractor"
+      - "cartog-indexer"
+    must_not_contain:
+      - "Low risk"
+    quality: >
+      Report should clearly advise against deletion — Extractor is the core
+      extraction interface with 8+ implementations. Must identify at least
+      3 language extractors, the get_extractor factory, and the indexer as
+      the primary consumer. Should classify as high risk or equivalent.
+  tags: [refactoring, high-risk]
+
+- id: refactoring_source_vs_test
+  agent: refactoring-scout.md
+  description: Report separates source references from test references
+  cwd: .
+  prompt: "What breaks if I change the Database struct in cartog-db?"
+  criteria:
+    must_contain:
+      - "cartog-db"
+      - "src/"
+      - "test"
+    must_not_contain: []
+    quality: >
+      Report must clearly distinguish source code references from test
+      references. Acceptable formats: separate sections, separate tables,
+      or explicit labels. Listing all references in a single undifferentiated
+      list is a FAIL. The word "test" appearing once in passing is not enough —
+      there must be a visible separation between production and test impact.
+  tags: [refactoring, source-test-split]
+
+- id: refactoring_ambiguous_symbol
+  agent: refactoring-scout.md
+  description: Agent handles ambiguous symbol name by focusing on source code
+  cwd: .
+  prompt: "What's the blast radius of changing main?"
+  criteria:
+    must_contain:
+      - "crates/cartog"
+    must_not_contain: []
+    quality: >
+      "main" exists in crates/cartog/src/main.rs and in multiple benchmark
+      fixtures. The agent should focus on the real project main, not fixtures.
+      It should either pick crates/cartog/src/main.rs as the target, or list
+      alternatives and explain which one it analyzed. Benchmark fixture mains
+      should not dominate the report.
+  tags: [refactoring, disambiguation]

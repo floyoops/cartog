@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-skill check-py check-ts check-go check-rs check-rb check-java bench bench-criterion bench-rag eval-skill
+.PHONY: check check-rust check-fixtures check-skill check-py check-ts check-go check-rs check-rb check-java bench bench-criterion bench-rag eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -54,6 +54,9 @@ check-skill: ## Run skill tests (ensure_indexed.sh + install.sh unit tests)
 
 eval-skill: ## Run LLM-as-judge skill evaluation (requires claude CLI)
 	bash skills/cartog/tests/eval.sh
+
+eval-agents: ## Run LLM-as-judge agent evaluation (requires claude CLI)
+	bash agents/tests/eval.sh
 
 # --- Benchmarks ---
 
