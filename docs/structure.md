@@ -78,6 +78,14 @@ cartog/
 │           ├── rag_relevancy.rs  # RAG relevancy benchmark (P@k, R@k, NDCG)
 │           └── fixtures/
 │               └── auth/    # Python fixtures for indexer tests
+├── .claude-plugin/
+│   └── plugin.json          # Plugin manifest (skills, agents, MCP server, hooks)
+├── agents/                  # Autonomous agent definitions (Claude Code)
+│   ├── codebase-onboarding.md  # Produces structured onboarding reports
+│   ├── refactoring-scout.md    # Pre-flight blast radius analysis
+│   └── tests/
+│       ├── golden_examples.yaml  # Behavioral test scenarios
+│       └── eval.sh              # LLM-as-judge evaluation runner
 ├── skills/
 │   └── cartog/              # Agent Skill (agentskills.io)
 │       ├── SKILL.md         # Behavioral instructions for AI agents
