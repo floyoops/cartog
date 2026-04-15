@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.12.0] - 2026-04-13
+## [0.12.1] - 2026-04-15
 
 ### Bug Fixes
 
@@ -55,6 +55,8 @@
 - Add marketplace step to plugin install instructions ([`60a32fa`](https://github.com/jrollin/cartog/commit/60a32fa5e7d9fd06bf9b1042a3309e1a91410dd3))
 - **doctor**: Add doctor command to skill and site ([`25c4689`](https://github.com/jrollin/cartog/commit/25c46898f68b60e736036a5c94d67923a7a9957f))
 - **readme,site**: Rewrite README for broader dev audience, fix stale site content ([`9aa8a9e`](https://github.com/jrollin/cartog/commit/9aa8a9e89b54235fcfb860df990a9c6b8769cb7a))
+- Split plugin install into separate steps ([`d6279d8`](https://github.com/jrollin/cartog/commit/d6279d87f0ab4b3cf76ddeca193ad99594e92c88))
+- **structure**: Add agents/ and .claude-plugin/ to project tree ([`cf4f161`](https://github.com/jrollin/cartog/commit/cf4f161b9e64d848ccfea0ac7bf7e212c2cbc6c8))
 
 ### Features
 
@@ -88,6 +90,8 @@
 - **plugin**: Use ensure_indexed.sh as SessionStart hook ([`b1994f8`](https://github.com/jrollin/cartog/commit/b1994f8dc94e5332008189ab2f9e4ed4196ab541))
 - **cli**: Add doctor command to validate environment ([`3e6f00d`](https://github.com/jrollin/cartog/commit/3e6f00d3983858c416cc0d1b60135870cb51a5d6))
 - **release**: Enable lsp feature and add binary smoke test ([`62c7b76`](https://github.com/jrollin/cartog/commit/62c7b76f7980368cbf4cf7a611bb0a9f40b86a64))
+- **agent**: Add codebase-onboarding agent ([`6b4fc74`](https://github.com/jrollin/cartog/commit/6b4fc744e4b9c15c9fc5d3d0ba3ed7049df9254d))
+- **agent**: Add refactoring-scout agent ([`46bdb71`](https://github.com/jrollin/cartog/commit/46bdb7141113e11b36930762f60628b61e26733a))
 
 ### Miscellaneous
 
@@ -112,6 +116,7 @@
 ### Testing
 
 - **doctor**: Improve coverage with report and formatting tests ([`d76ee30`](https://github.com/jrollin/cartog/commit/d76ee30c2011d96728ebb42f7e7c9b74105a956f))
+- **agents**: Add behavioral eval framework with golden examples ([`05056fe`](https://github.com/jrollin/cartog/commit/05056fe27771cb7348e412963d13472a7483d429))
 
 ## [0.3.1] - 2026-02-26
 
