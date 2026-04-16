@@ -123,6 +123,12 @@ pub fn hybrid_search<E: EmbeddingProvider + ?Sized>(
 /// When `kind_filter` is set, results are filtered before applying `limit`,
 /// so the caller always gets up to `limit` results of the requested kind.
 /// `tuning` lets the caller override retrieval/rerank thresholds from config.
+///
+/// Eager reranker variant: the caller pre-loads the cross-encoder model.
+/// Useful for long-lived processes (MCP server) that warm the reranker once
+/// at startup and reuse it across many queries. For one-shot CLI commands
+/// that may not need the reranker at all, prefer [`hybrid_search_tuned_lazy`]
+/// which defers the ONNX model load until it knows it's actually needed.
 pub fn hybrid_search_tuned<E: EmbeddingProvider + ?Sized>(
     db: &Database,
     query: &str,
@@ -132,18 +138,13 @@ pub fn hybrid_search_tuned<E: EmbeddingProvider + ?Sized>(
     reranker: Option<&mut dyn RerankerProvider>,
     tuning: &SearchTuning,
 ) -> Result<HybridSearchResult> {
-    // `retrieval_multiplier` is user-controlled via `.cartog.toml` and `limit`
-    // can be up to `MAX_SEARCH_LIMIT`; use saturating math so a pathological
-    // config never overflows in release (panic in debug, wrap in release).
     let retrieval_limit = limit
         .saturating_mul(tuning.retrieval_multiplier)
         .max(tuning.retrieval_floor);
 
-    // 1. FTS5 keyword search
     let fts_results = fts5_search_safe(db, query, retrieval_limit)?;
     let fts_count = fts_results.len() as u32;
 
-    // 2. Vector search (if embeddings exist in the DB)
     let vec_results = if db.embedding_count()? > 0 {
         vector_search(db, query, retrieval_limit, embedding_provider)?
     } else {
@@ -151,22 +152,18 @@ pub fn hybrid_search_tuned<E: EmbeddingProvider + ?Sized>(
     };
     let vec_count = vec_results.len() as u32;
 
-    // 3. RRF merge
     let ranked_lists: Vec<(&str, Vec<String>)> =
         vec![("fts5", fts_results), ("vector", vec_results)];
     let merged = rrf_merge(&ranked_lists, 60.0);
     let merged_count = merged.len() as u32;
 
-    // 4. Hydrate all merged candidates with symbol data + content.
     let candidate_ids: Vec<String> = merged.iter().map(|(id, _, _)| id.clone()).collect();
-
     let symbols = db.get_symbols_by_ids(&candidate_ids)?;
 
     let score_map: HashMap<&str, (f64, &Vec<String>)> = merged
         .iter()
         .map(|(id, score, sources)| (id.as_str(), (*score, sources)))
         .collect();
-
     let symbol_map: HashMap<&str, &Symbol> = symbols.iter().map(|s| (s.id.as_str(), s)).collect();
 
     let empty_sources = Vec::new();
@@ -190,10 +187,6 @@ pub fn hybrid_search_tuned<E: EmbeddingProvider + ?Sized>(
         }
     }
 
-    // 5. Cross-encoder re-ranking (if provider is available).
-    //    Cap at `rerank_max` candidates to bound latency; skip entirely
-    //    when fewer than `rerank_min` candidates survived RRF (no benefit
-    //    from a cross-encoder over a trivially small candidate pool).
     let rerank_cap = tuning.rerank_max as usize;
     let rerank_min = tuning.rerank_min as usize;
     let rerank_slice = if candidates.len() > rerank_cap {
@@ -208,6 +201,112 @@ pub fn hybrid_search_tuned<E: EmbeddingProvider + ?Sized>(
         _ => {}
     }
 
+    Ok(sort_filter_and_pack(
+        candidates,
+        (fts_count, vec_count, merged_count),
+        limit,
+        kind_filter,
+    ))
+}
+
+/// Lazy variant: the reranker provider is constructed on demand, but only
+/// when retrieval has produced at least `tuning.rerank_min` candidates.
+/// Avoids loading the ONNX cross-encoder model (~100-200ms + memory) when
+/// the result set is already too small to benefit from reranking.
+pub fn hybrid_search_tuned_lazy<E, F>(
+    db: &Database,
+    query: &str,
+    limit: u32,
+    kind_filter: KindFilter,
+    embedding_provider: &mut E,
+    reranker_factory: Option<F>,
+    tuning: &SearchTuning,
+) -> Result<HybridSearchResult>
+where
+    E: EmbeddingProvider + ?Sized,
+    F: FnOnce() -> Option<Box<dyn RerankerProvider>>,
+{
+    let retrieval_limit = limit
+        .saturating_mul(tuning.retrieval_multiplier)
+        .max(tuning.retrieval_floor);
+
+    let fts_results = fts5_search_safe(db, query, retrieval_limit)?;
+    let fts_count = fts_results.len() as u32;
+
+    let vec_results = if db.embedding_count()? > 0 {
+        vector_search(db, query, retrieval_limit, embedding_provider)?
+    } else {
+        Vec::new()
+    };
+    let vec_count = vec_results.len() as u32;
+
+    let ranked_lists: Vec<(&str, Vec<String>)> =
+        vec![("fts5", fts_results), ("vector", vec_results)];
+    let merged = rrf_merge(&ranked_lists, 60.0);
+    let merged_count = merged.len() as u32;
+
+    let candidate_ids: Vec<String> = merged.iter().map(|(id, _, _)| id.clone()).collect();
+    let symbols = db.get_symbols_by_ids(&candidate_ids)?;
+
+    let score_map: HashMap<&str, (f64, &Vec<String>)> = merged
+        .iter()
+        .map(|(id, score, sources)| (id.as_str(), (*score, sources)))
+        .collect();
+    let symbol_map: HashMap<&str, &Symbol> = symbols.iter().map(|s| (s.id.as_str(), s)).collect();
+
+    let empty_sources = Vec::new();
+    let mut candidates: Vec<SearchResult> = Vec::new();
+    for id in &candidate_ids {
+        if let Some(sym) = symbol_map.get(id.as_str()) {
+            let (score, sources) = score_map
+                .get(id.as_str())
+                .copied()
+                .unwrap_or((0.0, &empty_sources));
+
+            let content = db.get_symbol_content(id)?.map(|(c, _)| c);
+
+            candidates.push(SearchResult {
+                symbol: (*sym).clone(),
+                content,
+                rrf_score: score,
+                rerank_score: None,
+                sources: sources.clone(),
+            });
+        }
+    }
+
+    let rerank_cap = tuning.rerank_max as usize;
+    let rerank_min = tuning.rerank_min as usize;
+    let rerank_slice = if candidates.len() > rerank_cap {
+        &mut candidates[..rerank_cap]
+    } else {
+        &mut candidates[..]
+    };
+    // Only touch the factory once we know we'd actually use its output.
+    let maybe_reranker = reranker_factory
+        .filter(|_| rerank_slice.len() >= rerank_min)
+        .and_then(|f| f());
+    if let Some(mut reranker) = maybe_reranker {
+        rerank_candidates(reranker.as_mut(), query, rerank_slice);
+    }
+
+    Ok(sort_filter_and_pack(
+        candidates,
+        (fts_count, vec_count, merged_count),
+        limit,
+        kind_filter,
+    ))
+}
+
+/// Shared tail of the two `hybrid_search_tuned*` entry points: sort by
+/// (rerank_score → rrf_score → in_degree), apply `kind_filter`, truncate to
+/// `limit`, pack into a `HybridSearchResult`.
+fn sort_filter_and_pack(
+    mut candidates: Vec<SearchResult>,
+    counts: (u32, u32, u32),
+    limit: u32,
+    kind_filter: KindFilter,
+) -> HybridSearchResult {
     // 5b. Stable tiebreaker: within same score, prefer higher in-degree (more referenced).
     candidates.sort_by(|a, b| {
         let score_cmp = match (a.rerank_score, b.rerank_score) {
@@ -244,12 +343,12 @@ pub fn hybrid_search_tuned<E: EmbeddingProvider + ?Sized>(
         results.push(candidate);
     }
 
-    Ok(HybridSearchResult {
+    HybridSearchResult {
         results,
-        fts_count,
-        vec_count,
-        merged_count,
-    })
+        fts_count: counts.0,
+        vec_count: counts.1,
+        merged_count: counts.2,
+    }
 }
 
 /// Re-rank candidates in place using a cross-encoder.
