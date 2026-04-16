@@ -4,10 +4,13 @@
 //! extracts symbols and edges via [`cartog_languages`], and writes results to
 //! [`cartog_db`]. Uses Merkle tree hashing for surgical symbol-level updates.
 
-use std::path::Path;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
+use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use tracing::warn;
 use walkdir::WalkDir;
@@ -15,6 +18,93 @@ use walkdir::WalkDir;
 use cartog_core::{FileInfo, Symbol};
 use cartog_db::Database;
 use cartog_languages::{detect_language, get_extractor, Extractor};
+
+thread_local! {
+    /// Per-worker cache of tree-sitter extractors. Reused across files within
+    /// a single rayon worker thread so the Parser is constructed once per
+    /// language per thread instead of once per file.
+    static THREAD_EXTRACTORS: RefCell<HashMap<&'static str, Box<dyn Extractor>>>
+        = RefCell::new(HashMap::new());
+}
+
+/// Output of the parallel per-file parse phase.
+enum ParseOutput {
+    /// Stored hash matched — no re-parse needed.
+    Skipped,
+    /// File was parsed; caller must run the Merkle-diff + DB write path.
+    Parsed {
+        rel_path: String,
+        lang: &'static str,
+        source: String,
+        hash: String,
+        modified: f64,
+        symbols: Vec<Symbol>,
+        edges: Vec<cartog_core::Edge>,
+    },
+    /// Read or extraction failed — already logged; caller increments nothing.
+    Failed,
+}
+
+fn parse_one_file(
+    path: &Path,
+    rel_path: &str,
+    lang: &'static str,
+    force: bool,
+    stored_hash: Option<&str>,
+) -> ParseOutput {
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => return ParseOutput::Failed, // binary
+        Err(e) => {
+            warn!(file = %rel_path, error = %e, "cannot read file");
+            return ParseOutput::Failed;
+        }
+    };
+
+    let hash = file_hash(&source);
+
+    // Hash-based skip (only when not forcing).
+    if !force {
+        if let Some(old) = stored_hash {
+            if old == hash {
+                return ParseOutput::Skipped;
+            }
+        }
+    }
+
+    let modified = file_modified(path);
+
+    // Extract symbols/edges using the per-thread extractor cache.
+    let extraction = THREAD_EXTRACTORS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let extractor = map
+            .entry(lang)
+            .or_insert_with(|| get_extractor(lang).expect("lang was validated by detect_language"))
+            .as_mut();
+        extractor.extract(&source, rel_path)
+    });
+
+    let mut extraction = match extraction {
+        Ok(e) => e,
+        Err(err) => {
+            warn!(file = %rel_path, error = %err, "extraction failed");
+            return ParseOutput::Failed;
+        }
+    };
+
+    dedup_symbol_ids(&mut extraction.symbols, &mut extraction.edges);
+    compute_merkle_hashes(&mut extraction.symbols, &source);
+
+    ParseOutput::Parsed {
+        rel_path: rel_path.to_string(),
+        lang,
+        source,
+        hash,
+        modified,
+        symbols: extraction.symbols,
+        edges: extraction.edges,
+    }
+}
 
 /// Summary of an indexing operation.
 #[derive(Debug, Default, serde::Serialize)]
@@ -50,10 +140,6 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
 
     let root = root.canonicalize().context("Failed to resolve root path")?;
 
-    // Cache one extractor (with its Parser) per language to avoid recreating parsers per file.
-    let mut extractors: std::collections::HashMap<&'static str, Box<dyn Extractor>> =
-        std::collections::HashMap::new();
-
     // Collect files that should be indexed
     let mut current_files = std::collections::HashSet::new();
 
@@ -72,6 +158,16 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
         git_changed_files(&root, last_commit.as_deref())
     };
 
+    // Pre-fetch stored file hashes in one query so workers can decide
+    // skip-by-hash without touching SQLite.
+    let stored_hashes = if force {
+        std::collections::HashMap::new()
+    } else {
+        db.all_file_hashes().unwrap_or_default()
+    };
+
+    // ── Phase 1: walk + filter candidates (cheap, single-threaded) ──
+    let mut candidates: Vec<(PathBuf, String, &'static str)> = Vec::new();
     for entry in WalkDir::new(&root)
         .follow_links(true)
         .max_depth(50)
@@ -85,79 +181,65 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
                 continue;
             }
         };
-
         if !entry.file_type().is_file() {
             continue;
         }
-
         let path = entry.path();
         let rel_path = match path.strip_prefix(&root) {
             Ok(p) => p.to_string_lossy().to_string(),
             Err(_) => continue,
         };
-
         let lang = match detect_language(Path::new(&rel_path)) {
             Some(l) => l,
             None => continue,
         };
-
         current_files.insert(rel_path.clone());
 
-        // ── Change detection (deferred file read) ──
+        // Git-based skip: files not in the changed set and already indexed stay put.
         if !force {
             if let Some(ref changed) = changed_files {
-                // Git-based: skip files not in the changed set that already exist in db
-                if !changed.contains(&rel_path) && db.get_file(&rel_path)?.is_some() {
+                if !changed.contains(&rel_path) && stored_hashes.contains_key(&rel_path) {
                     result.files_skipped += 1;
                     continue;
                 }
             }
         }
 
-        let source = match std::fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => continue, // binary file
-            Err(e) => {
-                warn!(file = %rel_path, error = %e, "cannot read file");
+        candidates.push((path.to_path_buf(), rel_path, lang));
+    }
+
+    // ── Phase 2: parallel parse + extract (CPU-bound, rayon-worker pool) ──
+    let parsed: Vec<ParseOutput> = candidates
+        .par_iter()
+        .map(|(abs, rel, lang)| {
+            parse_one_file(
+                abs,
+                rel,
+                lang,
+                force,
+                stored_hashes.get(rel).map(String::as_str),
+            )
+        })
+        .collect();
+
+    // ── Phase 3: sequential DB writes, preserving walk order ──
+    for item in parsed {
+        let (rel_path, lang, source, hash, modified, symbols, edges) = match item {
+            ParseOutput::Skipped => {
+                result.files_skipped += 1;
                 continue;
             }
+            ParseOutput::Failed => continue,
+            ParseOutput::Parsed {
+                rel_path,
+                lang,
+                source,
+                hash,
+                modified,
+                symbols,
+                edges,
+            } => (rel_path, lang, source, hash, modified, symbols, edges),
         };
-
-        let hash = file_hash(&source);
-
-        // Hash-based check: even for git-detected changes, skip if content is identical
-        // (handles touched-but-not-modified files)
-        if !force {
-            if let Ok(Some(existing)) = db.get_file(&rel_path) {
-                if existing.hash == hash {
-                    result.files_skipped += 1;
-                    continue;
-                }
-            }
-        }
-
-        let modified = file_modified(path);
-
-        // Extract symbols and edges — reuse the cached extractor for this language
-        // so the tree-sitter Parser inside is allocated only once per language.
-        let extractor = extractors
-            .entry(lang)
-            .or_insert_with(|| get_extractor(lang).expect("lang was validated by detect_language"))
-            .as_mut();
-
-        let mut extraction = match extractor.extract(&source, &rel_path) {
-            Ok(e) => e,
-            Err(err) => {
-                warn!(file = %rel_path, error = %err, "extraction failed");
-                continue;
-            }
-        };
-
-        // Dedup: append `:N` suffix for symbols with colliding stable IDs
-        dedup_symbol_ids(&mut extraction.symbols, &mut extraction.edges);
-
-        // Compute Merkle hashes for all extracted symbols
-        compute_merkle_hashes(&mut extraction.symbols, &source);
 
         // Try Merkle diff against stored hashes
         let old_hashes = db.get_symbol_hashes_for_file(&rel_path)?;
@@ -166,44 +248,29 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
 
         if has_old_hashes {
             // Merkle diff: surgical updates
-            let diff = merkle_diff(&extraction.symbols, &old_hashes);
+            let diff = merkle_diff(&symbols, &old_hashes);
 
             dirty_files.insert(rel_path.clone());
 
-            // Remove deleted symbols
-            for id in &diff.removed {
-                db.delete_symbol(id)?;
-                result.symbols_removed += 1;
-            }
+            db.delete_symbols(&diff.removed)?;
+            result.symbols_removed += diff.removed.len() as u32;
 
-            // Insert new symbols
-            for &idx in &diff.added {
-                db.insert_symbol(&extraction.symbols[idx])?;
-                result.symbols_added += 1;
-            }
+            let mut changed: Vec<cartog_core::Symbol> = Vec::with_capacity(
+                diff.added.len() + diff.modified.len() + diff.children_changed.len(),
+            );
+            changed.extend(diff.added.iter().map(|&i| symbols[i].clone()));
+            changed.extend(diff.modified.iter().map(|&i| symbols[i].clone()));
+            changed.extend(diff.children_changed.iter().map(|&i| symbols[i].clone()));
+            db.insert_symbols(&changed)?;
 
-            // Update modified symbols (full replace)
-            for &idx in &diff.modified {
-                let sym = &extraction.symbols[idx];
-                db.insert_symbol(sym)?; // INSERT OR REPLACE
-                result.symbols_modified += 1;
-            }
-
-            // Update symbols whose children changed (own content same, subtree differs)
-            // Need to update position + subtree_hash so next diff sees current state
-            for &idx in &diff.children_changed {
-                let sym = &extraction.symbols[idx];
-                db.insert_symbol(sym)?; // INSERT OR REPLACE updates all fields including hashes
-            }
-
+            result.symbols_added += diff.added.len() as u32;
+            result.symbols_modified += diff.modified.len() as u32;
             result.symbols_unchanged += diff.unchanged as u32;
 
-            // Always re-insert edges for changed files (edge extraction is per-file)
             db.clear_edges_for_file(&rel_path)?;
-            db.insert_edges(&extraction.edges)?;
-            result.edges_added += extraction.edges.len() as u32;
+            db.insert_edges(&edges)?;
+            result.edges_added += edges.len() as u32;
 
-            // Update RAG content for added + modified symbols
             let dirty_indices: Vec<usize> = diff
                 .added
                 .iter()
@@ -212,7 +279,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
                 .collect();
             let contents: Vec<(String, String, String, String)> = dirty_indices
                 .iter()
-                .map(|&i| &extraction.symbols[i])
+                .map(|&i| &symbols[i])
                 .filter(|sym| sym.kind != cartog_core::SymbolKind::Import)
                 .filter_map(|sym| {
                     extract_symbol_content(&source, sym).map(|(content, header)| {
@@ -228,15 +295,13 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
             dirty_files.insert(rel_path.clone());
             db.clear_file_data(&rel_path)?;
 
-            db.insert_symbols(&extraction.symbols)?;
-            db.insert_edges(&extraction.edges)?;
+            db.insert_symbols(&symbols)?;
+            db.insert_edges(&edges)?;
 
-            result.symbols_added += extraction.symbols.len() as u32;
-            result.edges_added += extraction.edges.len() as u32;
+            result.symbols_added += symbols.len() as u32;
+            result.edges_added += edges.len() as u32;
 
-            // Store symbol content for RAG/semantic search
-            let contents: Vec<(String, String, String, String)> = extraction
-                .symbols
+            let contents: Vec<(String, String, String, String)> = symbols
                 .iter()
                 .filter(|sym| sym.kind != cartog_core::SymbolKind::Import)
                 .filter_map(|sym| {
@@ -250,7 +315,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
             }
         }
 
-        let num_symbols = extraction.symbols.len() as u32;
+        let num_symbols = symbols.len() as u32;
 
         db.upsert_file(&FileInfo {
             path: rel_path,
@@ -263,10 +328,14 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
         result.files_indexed += 1;
     }
 
-    // Remove files that no longer exist
+    // Remove files that no longer exist. Treat deletions as "dirty" so the
+    // scoped incremental-repair branch below still runs when the *only* change
+    // is a file deletion — otherwise unchanged files keep dangling target_ids
+    // and stale in-degrees until the next edit.
     let all_indexed = db.all_files()?;
     for indexed_path in all_indexed {
         if !current_files.contains(&indexed_path) {
+            dirty_files.insert(indexed_path.clone());
             db.remove_file(&indexed_path)?;
             result.files_removed += 1;
         }
@@ -362,7 +431,7 @@ fn file_modified(path: &Path) -> f64 {
 /// (e.g., conditional function definitions), the second occurrence gets `:2`, third `:3`, etc.
 /// Edge source_ids and parent_ids are updated to match.
 fn dedup_symbol_ids(symbols: &mut [Symbol], edges: &mut [cartog_core::Edge]) {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     let mut seen: HashMap<String, u32> = HashMap::new();
     let mut renames: HashMap<String, String> = HashMap::new();
@@ -372,31 +441,44 @@ fn dedup_symbol_ids(symbols: &mut [Symbol], edges: &mut [cartog_core::Edge]) {
         *count += 1;
         if *count > 1 {
             let old_id = sym.id.clone();
-            sym.id = format!("{}:{}", old_id, count);
-            // Only insert if not already present — keeps the *first* renamed ID
-            // for edge fixup, avoiding the 3+ collision overwrite bug where
-            // the last rename would silently win.
+            sym.id = format!("{old_id}:{count}");
+            // First-rename wins: edges originally pointing at the collided id
+            // (which the extractor produced without knowing which instance was
+            // the owner) get attributed to the first renamed instance. The
+            // zero-th instance keeps the short id and keeps its own edges only
+            // if none collided — any ambiguity is resolved by sending the
+            // ambiguous edges to the first-rename bucket, leaving the unrenamed
+            // instance clean.
             renames.entry(old_id).or_insert_with(|| sym.id.clone());
         }
     }
 
-    if renames.is_empty() {
-        return;
-    }
-
-    for edge in edges.iter_mut() {
-        if let Some(new_id) = renames.get(&edge.source_id) {
-            edge.source_id = new_id.clone();
+    if !renames.is_empty() {
+        for edge in edges.iter_mut() {
+            if let Some(new_id) = renames.get(&edge.source_id) {
+                edge.source_id = new_id.clone();
+            }
         }
-    }
 
-    for sym in symbols.iter_mut() {
-        if let Some(ref pid) = sym.parent_id {
-            if let Some(new_id) = renames.get(pid) {
-                sym.parent_id = Some(new_id.clone());
+        for sym in symbols.iter_mut() {
+            if let Some(ref pid) = sym.parent_id {
+                if let Some(new_id) = renames.get(pid) {
+                    sym.parent_id = Some(new_id.clone());
+                }
             }
         }
     }
+
+    // Invariant: after dedup, every edge.source_id must correspond to a
+    // surviving symbol id. Broken invariants here cause foreign-key cascades
+    // later and silent data loss, so bail loudly in debug builds.
+    debug_assert!(
+        {
+            let ids: HashSet<&str> = symbols.iter().map(|s| s.id.as_str()).collect();
+            edges.iter().all(|e| ids.contains(e.source_id.as_str()))
+        },
+        "dedup_symbol_ids left an edge with a dangling source_id"
+    );
 }
 
 // ── Merkle-tree hashing ──
@@ -898,6 +980,96 @@ mod tests {
         // Content should be truncated before the '─' (snapped to char boundary)
         assert_eq!(content.len(), MAX_CONTENT_BYTES - 1);
         assert!(content.is_char_boundary(content.len()));
+    }
+
+    // ── Dedup tests ──
+
+    #[test]
+    fn test_dedup_3way_collision_preserves_invariant() {
+        // Three symbols with the same stable id — simulates conditional
+        // redefinitions (e.g. `if/elif/else: def foo`).
+        let mk_sym = || {
+            cartog_core::Symbol::new(
+                "foo",
+                cartog_core::SymbolKind::Function,
+                "test.py",
+                1,
+                2,
+                0,
+                10,
+                None,
+            )
+        };
+        let base_id = mk_sym().id.clone();
+        let mut symbols = vec![mk_sym(), mk_sym(), mk_sym()];
+        let mut edges = vec![
+            cartog_core::Edge::new(
+                base_id.clone(),
+                "bar",
+                cartog_core::EdgeKind::Calls,
+                "test.py",
+                1,
+            ),
+            cartog_core::Edge::new(
+                base_id.clone(),
+                "baz",
+                cartog_core::EdgeKind::Calls,
+                "test.py",
+                2,
+            ),
+        ];
+
+        dedup_symbol_ids(&mut symbols, &mut edges);
+
+        // All three ids must now be distinct.
+        let ids: std::collections::HashSet<_> = symbols.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids.len(), 3, "3-way collision should produce 3 unique ids");
+
+        // First instance keeps the short id; 2nd and 3rd get numeric suffixes.
+        assert_eq!(symbols[0].id, base_id);
+        assert_eq!(symbols[1].id, format!("{base_id}:2"));
+        assert_eq!(symbols[2].id, format!("{base_id}:3"));
+
+        // Invariant: every edge.source_id must resolve to a surviving symbol.
+        for edge in &edges {
+            assert!(
+                ids.contains(edge.source_id.as_str()),
+                "edge source_id {:?} has no matching symbol after dedup",
+                edge.source_id
+            );
+        }
+    }
+
+    #[test]
+    fn test_dedup_no_collision_leaves_ids_unchanged() {
+        let mut symbols = vec![
+            cartog_core::Symbol::new(
+                "a",
+                cartog_core::SymbolKind::Function,
+                "f.py",
+                1,
+                2,
+                0,
+                10,
+                None,
+            ),
+            cartog_core::Symbol::new(
+                "b",
+                cartog_core::SymbolKind::Function,
+                "f.py",
+                3,
+                4,
+                11,
+                20,
+                None,
+            ),
+        ];
+        let id_a = symbols[0].id.clone();
+        let id_b = symbols[1].id.clone();
+        let mut edges: Vec<cartog_core::Edge> = vec![];
+        dedup_symbol_ids(&mut symbols, &mut edges);
+        assert_eq!(symbols[0].id, id_a);
+        assert_eq!(symbols[1].id, id_b);
     }
 
     // ── Merkle hashing tests ──

@@ -71,6 +71,9 @@ CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_path);
 CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_id);
+-- Composite: speeds up same-directory edge resolution
+-- (WHERE name = ? AND file_path LIKE ?) in `resolve_edges_pass`.
+CREATE INDEX IF NOT EXISTS idx_symbols_name_file ON symbols(name, file_path);
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_name);
 CREATE INDEX IF NOT EXISTS idx_edges_target_id ON edges(target_id);
@@ -318,6 +321,64 @@ fn handle_embedding_dimension(conn: &Connection, requested_dim: usize) -> Result
     Ok(())
 }
 
+/// If the next migration will wipe existing data, copy the database to a
+/// timestamped backup file first. No-op for in-memory or empty databases.
+fn backup_before_destructive_migration(conn: &Connection, db_path: &std::path::Path) -> Result<()> {
+    let current: u32 = conn
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(1);
+    let has_hash_cols = conn
+        .prepare("SELECT content_hash FROM symbols LIMIT 0")
+        .is_ok();
+
+    // Mirrors the condition in `migrate()` for the 2→3 wipe.
+    let will_wipe = current < 3 || !has_hash_cols;
+    if !will_wipe {
+        return Ok(());
+    }
+
+    let symbol_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+        .unwrap_or(0);
+    if symbol_count == 0 {
+        return Ok(());
+    }
+
+    // Skip in-memory / URI-mode databases — nothing to back up.
+    let path_str = db_path.to_string_lossy();
+    if path_str.is_empty() || path_str == ":memory:" || path_str.starts_with("file:") {
+        return Ok(());
+    }
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut backup_os = db_path.as_os_str().to_os_string();
+    backup_os.push(format!(".pre-v{current}-{ts}.bak"));
+    let backup_path = std::path::PathBuf::from(backup_os);
+
+    // VACUUM INTO produces a consistent copy, safe alongside WAL.
+    // Escape any single-quotes in the path literal.
+    let escaped = backup_path.to_string_lossy().replace('\'', "''");
+    conn.execute(&format!("VACUUM INTO '{escaped}'"), [])
+        .with_context(|| format!("Failed to back up database to {}", backup_path.display()))?;
+
+    info!(
+        backup = %backup_path.display(),
+        old_version = current,
+        new_version = SCHEMA_VERSION,
+        symbols = symbol_count,
+        "schema migration will clear indexed data — created backup"
+    );
+
+    Ok(())
+}
+
 impl Database {
     /// Open or create the database at the given path.
     ///
@@ -326,7 +387,8 @@ impl Database {
     /// is cleared and recreated (a re-index via `cartog rag index` is needed).
     pub fn open(path: impl AsRef<std::path::Path>, embedding_dim: usize) -> Result<Self> {
         register_sqlite_vec();
-        let conn = Connection::open(path.as_ref()).context("Failed to open database")?;
+        let db_path = path.as_ref();
+        let conn = Connection::open(db_path).context("Failed to open database")?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
@@ -340,6 +402,7 @@ impl Database {
             .context("Failed to create schema")?;
         conn.execute_batch(RAG_SCHEMA)
             .context("Failed to create RAG schema")?;
+        backup_before_destructive_migration(&conn, db_path)?;
         migrate(&conn);
         handle_embedding_dimension(&conn, embedding_dim)?;
         Ok(Self { conn })
@@ -532,6 +595,50 @@ impl Database {
                     start_byte = ?4, end_byte = ?5 WHERE id = ?1",
             params![id, start_line, end_line, start_byte, end_byte],
         )?;
+        Ok(())
+    }
+
+    /// Delete multiple symbols and cascade (edges, content, embeddings) in a
+    /// single transaction.
+    pub fn delete_symbols(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let mut del_out = self
+            .conn
+            .prepare_cached("DELETE FROM edges WHERE source_id = ?1")?;
+        let mut null_in = self
+            .conn
+            .prepare_cached("UPDATE edges SET target_id = NULL WHERE target_id = ?1")?;
+        let mut del_vec = self.conn.prepare_cached(
+            "DELETE FROM symbol_vec WHERE rowid IN \
+             (SELECT id FROM symbol_embedding_map WHERE symbol_id = ?1)",
+        )?;
+        let mut del_map = self
+            .conn
+            .prepare_cached("DELETE FROM symbol_embedding_map WHERE symbol_id = ?1")?;
+        let mut del_content = self
+            .conn
+            .prepare_cached("DELETE FROM symbol_content WHERE symbol_id = ?1")?;
+        let mut del_sym = self
+            .conn
+            .prepare_cached("DELETE FROM symbols WHERE id = ?1")?;
+        for id in ids {
+            del_out.execute(params![id])?;
+            null_in.execute(params![id])?;
+            del_vec.execute(params![id])?;
+            del_map.execute(params![id])?;
+            del_content.execute(params![id])?;
+            del_sym.execute(params![id])?;
+        }
+        drop(del_out);
+        drop(null_in);
+        drop(del_vec);
+        drop(del_map);
+        drop(del_content);
+        drop(del_sym);
+        tx.commit()?;
         Ok(())
     }
 
@@ -1080,29 +1187,67 @@ impl Database {
     }
 
     /// Transitive impact analysis: everything reachable within `depth` hops.
+    ///
+    /// Evaluated as a single recursive CTE rather than iterating `refs()` per
+    /// frontier node — saves N round-trips and lets SQLite's planner amortize
+    /// the LEFT JOINs. Each unique edge is returned once, labeled with the
+    /// minimum depth at which it was reached.
     pub fn impact(&self, name: &str, max_depth: u32) -> Result<Vec<(Edge, u32)>> {
-        let mut results = Vec::new();
-        let mut visited = std::collections::HashSet::new();
-        let mut frontier: Vec<(String, u32)> = vec![(name.to_string(), 0)];
-
-        while let Some((current, depth)) = frontier.pop() {
-            if depth >= max_depth || visited.contains(&current) {
-                continue;
-            }
-            visited.insert(current.clone());
-
-            let refs = self.refs(&current, None)?;
-            for (edge, sym) in refs {
-                results.push((edge, depth + 1));
-                if let Some(s) = sym {
-                    if !visited.contains(&s.name) {
-                        frontier.push((s.name, depth + 1));
-                    }
-                }
-            }
+        if max_depth == 0 {
+            return Ok(Vec::new());
         }
 
-        Ok(results)
+        let sql = "
+            WITH RECURSIVE impacted(
+                edge_id, source_id, target_name, target_id, kind,
+                file_path, line, source_name, depth
+            ) AS (
+                SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
+                       e.file_path, e.line, s.name, 1
+                FROM edges e
+                LEFT JOIN symbols s ON e.source_id = s.id
+                LEFT JOIN symbols sym2 ON e.target_id = sym2.id
+                WHERE e.target_name = ?1 OR sym2.name = ?1
+
+                UNION
+
+                SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
+                       e.file_path, e.line, s.name, i.depth + 1
+                FROM impacted i
+                JOIN edges e
+                  ON (e.target_name = i.source_name
+                      OR EXISTS (
+                          SELECT 1 FROM symbols t
+                          WHERE t.id = e.target_id AND t.name = i.source_name
+                      ))
+                LEFT JOIN symbols s ON e.source_id = s.id
+                WHERE i.source_name IS NOT NULL AND i.depth < ?2
+            )
+            SELECT source_id, target_name, target_id, kind, file_path, line,
+                   MIN(depth) AS depth
+            FROM impacted
+            GROUP BY edge_id
+            ORDER BY depth, edge_id
+        ";
+
+        let mut stmt = self.conn.prepare_cached(sql)?;
+        let rows = stmt
+            .query_map(params![name, max_depth], |row| {
+                let kind_str: String = row.get(3)?;
+                let kind = kind_str.parse().unwrap_or(EdgeKind::References);
+                let edge = Edge {
+                    source_id: row.get(0)?,
+                    target_name: row.get(1)?,
+                    target_id: row.get(2)?,
+                    kind,
+                    file_path: row.get(4)?,
+                    line: row.get(5)?,
+                };
+                let depth: u32 = row.get(6)?;
+                Ok((edge, depth))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Index statistics.
@@ -1246,6 +1391,20 @@ impl Database {
             .query_map([], |row| row.get(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Load (path, hash) pairs for every indexed file in one query.
+    ///
+    /// Used by the parallel indexer to avoid per-file DB round trips when
+    /// deciding whether a file needs re-parsing.
+    pub fn all_file_hashes(&self) -> Result<std::collections::HashMap<String, String>> {
+        let mut stmt = self.conn.prepare("SELECT path, hash FROM files")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows.into_iter().collect())
     }
 
     // ── RAG: Symbol Content ──
@@ -2258,6 +2417,92 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].1, 1); // first hop
         assert_eq!(results[1].1, 2); // second hop
+    }
+
+    #[test]
+    fn test_impact_depth_zero_returns_empty() {
+        let db = Database::open_memory().unwrap();
+        let a = test_symbol("a", SymbolKind::Function, "a.py", 1);
+        db.insert_symbols(&[a]).unwrap();
+        assert!(db.impact("a", 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_impact_cycle_terminates() {
+        // Cycle: a → b → a. impact("a", 3) must not loop forever.
+        let db = Database::open_memory().unwrap();
+        let a = test_symbol("a", SymbolKind::Function, "a.py", 1);
+        let b = test_symbol("b", SymbolKind::Function, "b.py", 1);
+        db.insert_symbols(&[a.clone(), b.clone()]).unwrap();
+        db.insert_edges(&[
+            Edge {
+                source_id: a.id.clone(),
+                target_name: "b".to_string(),
+                target_id: Some(b.id.clone()),
+                kind: EdgeKind::Calls,
+                file_path: "a.py".to_string(),
+                line: 2,
+            },
+            Edge {
+                source_id: b.id.clone(),
+                target_name: "a".to_string(),
+                target_id: Some(a.id.clone()),
+                kind: EdgeKind::Calls,
+                file_path: "b.py".to_string(),
+                line: 2,
+            },
+        ])
+        .unwrap();
+
+        // Each of the two edges is returned once, labeled with its shallowest depth.
+        let results = db.impact("a", 5).unwrap();
+        assert_eq!(results.len(), 2);
+        for (_, depth) in &results {
+            assert!(*depth >= 1 && *depth <= 5);
+        }
+    }
+
+    #[test]
+    fn test_impact_fanout_dedupes_by_edge() {
+        // Two callers of `shared`, each also calling each other → diamond.
+        // Each edge should appear once.
+        let db = Database::open_memory().unwrap();
+        let shared = test_symbol("shared", SymbolKind::Function, "s.py", 1);
+        let x = test_symbol("x", SymbolKind::Function, "x.py", 1);
+        let y = test_symbol("y", SymbolKind::Function, "y.py", 1);
+        db.insert_symbols(&[shared.clone(), x.clone(), y.clone()])
+            .unwrap();
+        db.insert_edges(&[
+            Edge {
+                source_id: x.id.clone(),
+                target_name: "shared".to_string(),
+                target_id: Some(shared.id.clone()),
+                kind: EdgeKind::Calls,
+                file_path: "x.py".to_string(),
+                line: 1,
+            },
+            Edge {
+                source_id: y.id.clone(),
+                target_name: "shared".to_string(),
+                target_id: Some(shared.id.clone()),
+                kind: EdgeKind::Calls,
+                file_path: "y.py".to_string(),
+                line: 1,
+            },
+            Edge {
+                source_id: y.id.clone(),
+                target_name: "x".to_string(),
+                target_id: Some(x.id.clone()),
+                kind: EdgeKind::Calls,
+                file_path: "y.py".to_string(),
+                line: 2,
+            },
+        ])
+        .unwrap();
+
+        let results = db.impact("shared", 3).unwrap();
+        // 3 distinct edges, each reported exactly once.
+        assert_eq!(results.len(), 3);
     }
 
     #[test]
@@ -3344,5 +3589,73 @@ mod tests {
     #[test]
     fn test_default_embedding_dim_constant() {
         assert_eq!(DEFAULT_EMBEDDING_DIM, 384);
+    }
+
+    #[test]
+    fn test_destructive_migration_creates_backup() {
+        // Build a legacy v2 database file: pre-hash-columns, with indexed data.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("legacy.db");
+
+        {
+            register_sqlite_vec();
+            let conn = Connection::open(&db_path).unwrap();
+            // Minimal legacy schema that the wipe code will operate on.
+            conn.execute_batch(
+                "CREATE TABLE symbols (
+                    id TEXT PRIMARY KEY, name TEXT, kind TEXT, file_path TEXT,
+                    start_line INTEGER, end_line INTEGER, start_byte INTEGER, end_byte INTEGER,
+                    parent_id TEXT, signature TEXT, visibility TEXT,
+                    is_async BOOLEAN, docstring TEXT, in_degree INTEGER DEFAULT 0
+                 );
+                 CREATE TABLE edges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT, target_name TEXT,
+                    target_id TEXT, kind TEXT, file_path TEXT, line INTEGER
+                 );
+                 CREATE TABLE files (path TEXT PRIMARY KEY, last_modified REAL, hash TEXT,
+                                     language TEXT, num_symbols INTEGER);
+                 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT);
+                 INSERT INTO symbols (id, name, kind, file_path) VALUES ('s1', 'foo', 'function', 'a.py');
+                 INSERT INTO metadata (key, value) VALUES ('schema_version', '2');",
+            )
+            .unwrap();
+        }
+
+        // Opening via the real entry point should back up the legacy file before wiping.
+        let _db = Database::open(&db_path, DEFAULT_EMBEDDING_DIM).unwrap();
+
+        let backups: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("legacy.db.pre-v")
+            })
+            .collect();
+        assert_eq!(
+            backups.len(),
+            1,
+            "expected exactly one pre-migration backup, found {}",
+            backups.len()
+        );
+    }
+
+    #[test]
+    fn test_no_backup_for_fresh_database() {
+        // A fresh DB should never produce a backup file.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("fresh.db");
+        let _db = Database::open(&db_path, DEFAULT_EMBEDDING_DIM).unwrap();
+
+        let backups: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".pre-v"))
+            .collect();
+        assert!(
+            backups.is_empty(),
+            "fresh DB should not create a backup file"
+        );
     }
 }
