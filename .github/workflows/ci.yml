@@ -23,7 +23,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check
-      - run: cargo check --features lsp
+      - run: cargo check --no-default-features
 
   fmt:
     name: Format
@@ -45,7 +45,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo clippy --all-targets --features lsp -- -D warnings
+      - run: cargo clippy --all-targets --no-default-features -- -D warnings
 
   test:
     name: Test
@@ -55,7 +55,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
-      - run: cargo test --features lsp
+      - run: cargo test --no-default-features
 
   coverage:
     name: Coverage

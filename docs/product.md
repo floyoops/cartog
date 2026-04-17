@@ -23,7 +23,7 @@ Code is a graph of relationships (calls, imports, inherits, type references). Pr
 
 Measured across 13 scenarios, 5 languages. Best gains on call chain tracing (88% token reduction) and caller lookup (95% reduction).
 
-> **Recall caveat:** The 97% figure requires cartog built with the `lsp` feature and a matching language server on `PATH` (`cargo install cartog --features lsp`). Without LSP, edge resolution falls to ~25–37% depending on language; with LSP it reaches 44–81%. See [README — Benchmark notes](../README.md#benchmark-notes) for methodology and per-language breakdown.
+> **Recall caveat:** The 97% figure requires a matching language server on `PATH`. The default build ships LSP support; without a server found (or with `--no-lsp`), edge resolution falls to ~25–37% depending on language; with LSP it reaches 44–81%. See [README — Benchmark notes](../README.md#benchmark-notes) for methodology and per-language breakdown.
 
 ## Target Users
 

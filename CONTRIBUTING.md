@@ -10,8 +10,8 @@
 Requires Rust MSRV 1.77.
 
 ```bash
-cargo build                    # default build
-cargo build --features lsp     # with optional LSP edge resolution
+cargo build                         # default build (includes LSP)
+cargo build --no-default-features   # minimal build without LSP
 ```
 
 ## Quality checks

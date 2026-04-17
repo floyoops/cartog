@@ -16,7 +16,7 @@ The snippets below prefer `--json` where available so the output is easy to pars
 ### Prerequisites
 
 ```bash
-cargo install cartog --features lsp
+cargo install cartog
 cartog index .
 ```
 

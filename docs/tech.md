@@ -58,7 +58,7 @@
 | Model cache | `~/.cache/cartog/models` | XDG-compliant shared cache avoids downloading ~1.2 GB of models per project. Precedence: `FASTEMBED_CACHE_DIR` > `XDG_CACHE_HOME/cartog/models` > `~/.cache/cartog/models` |
 | Output format | Human default + `--json` flag (global) | Readable for humans, parseable for scripts. Both `cartog --json stats` and `cartog stats --json` work |
 | Distribution | `cargo install` + pre-built binaries | GitHub Releases for 5 targets (Linux x86/ARM, macOS x86/ARM, Windows), crates.io publish |
-| LSP | Auto-detected (`lsp` feature) | Index-time refinement for edges unresolved by heuristics. Auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls), sends `textDocument/definition`, shuts down after. Silently skips when no server found. Disable with `--no-lsp`. Install: `cargo install cartog --features lsp` |
+| LSP | Auto-detected (default feature) | Index-time refinement for edges unresolved by heuristics. Auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls), sends `textDocument/definition`, shuts down after. Silently skips when no server found. Disable at runtime with `--no-lsp`; opt out at build time with `cargo install cartog --no-default-features` |
 | Workspace | Cargo workspace (9 crates) | Incremental compilation, explicit dependency boundaries, independent crate reuse. See [structure.md](structure.md) for layout and dependency graph |
 | Monorepo | Deferred | Index from CWD, user can `cd` into subproject |
 

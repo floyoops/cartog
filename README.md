@@ -51,10 +51,10 @@ Every code navigation tool makes you choose: fast but shallow (grep), or precise
 Measured across 13 scenarios, 5 languages ([benchmark suite](crates/cartog/benches/queries.rs)).
 
 <a id="benchmark-notes"></a>
-> **\*** 97 % recall is with the `lsp` feature compiled in and a matching
-> language server on PATH. Heuristic-only resolution (no LSP) lands around
-> 25–37 %, with specifics varying by language. Install via
-> `cargo install cartog --features lsp` to match the benchmark numbers.
+> **\*** 97 % recall requires a matching language server on PATH. The
+> default build ships LSP support; heuristic-only resolution (no server
+> found, or `--no-lsp`) lands around 25–37 %, with specifics varying by
+> language.
 
 ## What You Get
 
@@ -110,9 +110,9 @@ Cartog auto-detects language servers on PATH (rust-analyzer, pyright, typescript
 ### From crates.io
 
 ```bash
-cargo install cartog                           # core
-cargo install cartog --features lsp            # + LSP resolution (recommended)
-cargo install cartog --features ollama-embedding  # + Ollama support
+cargo install cartog                                  # default (includes LSP)
+cargo install cartog --no-default-features            # minimal, no LSP
+cargo install cartog --features ollama-embedding      # + Ollama support
 ```
 
 ### Pre-built binaries

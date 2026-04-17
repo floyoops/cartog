@@ -205,7 +205,7 @@ cartog index src/                 # Index specific directory
 cartog index . --force            # Re-index all files (ignore cache)
 ```
 
-When compiled with `--features lsp`, `cartog index .` auto-detects language servers on PATH and uses them to resolve additional edges. LSP results are **persisted in the database** — subsequent queries benefit without re-running LSP. Use `--no-lsp` for fast day-to-day indexing.
+By default, `cartog index .` auto-detects language servers on PATH and uses them to resolve additional edges. LSP results are **persisted in the database** — subsequent queries benefit without re-running LSP. Use `--no-lsp` for fast day-to-day indexing. LSP can be omitted entirely at build time with `--no-default-features`.
 
 ### Search (find symbols by partial name)
 ```bash
@@ -374,7 +374,7 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 
 ### LSP limitations
 
-- **Opt-in feature**: requires `cargo install cartog --features lsp`. Without the feature, `--no-lsp` is implied.
+- **Default feature**: shipped by default. Installs with `--no-default-features` omit LSP entirely (equivalent to `--no-lsp` at runtime).
 - **Auto-detected**: if language servers are on PATH, they are used automatically during `cartog index`. Use `--no-lsp` to skip.
 - **Startup latency**: language servers take 15-60s to load a project on first call. Day-to-day indexing should use `--no-lsp`.
 - **CLI vs MCP**: each `cartog index .` via Bash spawns and kills LSP servers (cold start). Use `cartog serve` (MCP mode) for sessions with multiple index calls — it keeps servers warm across tool calls.

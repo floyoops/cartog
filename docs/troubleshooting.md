@@ -15,12 +15,13 @@ than `opt-level = 0` but produces usable dev-mode parsers. A release build
 takes 2–4 min on a warm machine. Subsequent `cargo install` calls reuse the
 build cache.
 
-### I got a pre-built binary but `cartog rag setup` fails
+### LSP-based edge resolution isn't kicking in
 
-Pre-built binaries ship without the `lsp` feature on some platforms. If you
-want LSP-based edge resolution (required to hit the 97% recall number in the
-README), build from source with
-`cargo install cartog --features lsp`.
+LSP is enabled by default. If you installed with `--no-default-features`, the
+`cartog-lsp` dependency was omitted — reinstall with plain `cargo install
+cartog`. Otherwise, confirm a language server is on `PATH` (e.g.
+`rust-analyzer`, `pyright`, `typescript-language-server`, `gopls`) and that
+you haven't passed `--no-lsp` at runtime.
 
 ## First index
 

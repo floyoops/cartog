@@ -39,7 +39,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --features lsp --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       # Smoke-test the built binary (all runners are native — no cross-compilation)
       - name: Smoke test (unix)
