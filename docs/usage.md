@@ -97,11 +97,12 @@ document_prefix = "search_document: "
 provider = "none"
 ```
 
-**Compile-time feature flags** (for minimal binary size):
+**Compile-time feature flags**:
 
 ```bash
-cargo install cartog                                    # default: local ONNX provider
-cargo install cartog --features ollama-embedding         # + Ollama support
+cargo install cartog                                    # default: LSP + local ONNX provider
+cargo install cartog --no-default-features              # minimal: no LSP dependency
+cargo install cartog --features ollama-embedding        # + Ollama embedding provider
 ```
 
 ---
@@ -340,7 +341,7 @@ All 5 checks passed
 
 Exits with code 1 if any check is an error. Supports `--json` for structured output.
 
-### `cartog watch [path] [--debounce N] [--rag] [--rag-delay N]`
+### `cartog watch [path] [--debounce N] [--rag] [--rag-delay N] [--json]`
 
 Watch for file changes and auto-re-index. Keeps the code graph fresh during development.
 
@@ -350,11 +351,14 @@ cartog watch src/                     # watch subdirectory
 cartog watch --rag                    # also auto-embed for semantic search
 cartog watch --rag --rag-delay 60     # embed after 60s of inactivity
 cartog watch --debounce 10            # 10s debounce window
+cartog watch --json                   # NDJSON event stream on stdout
 ```
 
 The watcher runs an initial incremental index on startup, then re-indexes when supported source files change. Changes are debounced (default 5s) to avoid re-indexing on every keystroke and to absorb bulk file changes (e.g. `git pull`).
 
 When `--rag` is enabled, embedding generation is deferred until `--rag-delay` seconds (default 30) have elapsed without new file changes, batching all pending symbols in one pass.
+
+With `--json`, every lifecycle event is emitted as one NDJSON record on stdout (`started`, `reindex`, `reindex_failed`, `rag_embedded`, `rag_failed`, `shutdown`). Human-readable tracing still goes to stderr.
 
 Press Ctrl+C to stop. Pending RAG embeddings are flushed before exit.
 
@@ -369,6 +373,36 @@ cartog serve --watch --rag    # MCP server + watcher + auto RAG embedding
 ```
 
 When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
+
+### `cartog config`
+
+Print the resolved configuration (merged defaults, `.cartog.toml`, and env overrides).
+
+```bash
+cartog config            # human-readable
+cartog config --json     # JSON for scripts
+```
+
+Useful for verifying `[rag]` tuning, watch debounce, and provider selection without running a full command.
+
+### `cartog completions <shell>`
+
+Generate shell completion scripts for `bash`, `zsh`, `fish`, `powershell`, or `elvish`.
+
+```bash
+cartog completions zsh   > ~/.zfunc/_cartog
+cartog completions bash  > /usr/local/etc/bash_completion.d/cartog
+cartog completions fish  > ~/.config/fish/completions/cartog.fish
+```
+
+### `cartog manpage`
+
+Emit a `roff` man page on stdout. Intended for packagers and distro maintainers.
+
+```bash
+cartog manpage > /usr/local/share/man/man1/cartog.1
+man cartog
+```
 
 ### `cartog rag setup`
 
@@ -547,8 +581,8 @@ cartog serve --watch --rag    # auto-re-index + auto-embed
 All clients need `cartog` on your `PATH` first:
 
 ```bash
-cargo install cartog            # latest version
-cargo install cartog@0.8.1      # specific version
+cargo install cartog             # latest version
+cargo install cartog@0.12.2      # specific version
 ```
 
 #### Claude Code

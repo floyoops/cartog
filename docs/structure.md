@@ -55,7 +55,7 @@ cartog/
 │   │       ├── indexer.rs   # Embed symbols, store vectors in sqlite-vec
 │   │       ├── reranker.rs  # Cross-encoder re-ranking (BGE-reranker-base)
 │   │       └── search.rs    # FTS5 + vector KNN, RRF merge, optional re-ranking
-│   ├── cartog-lsp/          # LSP-based edge resolution (optional)
+│   ├── cartog-lsp/          # LSP-based edge resolution (default feature)
 │   │   └── src/
 │   │       ├── lib.rs       # lsp_resolve_edges(), column detection
 │   │       ├── client.rs    # JSON-RPC over stdio (Content-Length framing)
@@ -112,10 +112,13 @@ cartog/
 │   └── fixtures/
 │       └── auth/            # Shared Python fixtures (referenced by cartog-indexer tests)
 └── docs/
+    ├── README.md            # Docs index
     ├── product.md           # Product overview
     ├── tech.md              # Technology decisions
     ├── structure.md         # This file
     ├── usage.md             # CLI commands + MCP server setup per client
+    ├── editor-integration.md # Neovim / VS Code / Emacs / Zed snippets
+    ├── troubleshooting.md   # Common issues
     ├── spec-watch.md        # Feature spec: file watcher (implemented)
     ├── demo.tape            # VHS terminal recording script
     └── demo.gif             # Generated demo animation
@@ -132,7 +135,7 @@ cartog-core          (tier 0 — no internal deps)
 │
 ├── cartog-indexer   (tier 2 — db + languages + core)
 ├── cartog-rag       (tier 2 — db + core)
-├── cartog-lsp       (tier 2 — db + core, optional)
+├── cartog-lsp       (tier 2 — db + core, default feature)
 │
 ├── cartog-watch     (tier 3 — db + indexer + rag + core)
 ├── cartog-mcp       (tier 3 — db + indexer + rag + watch + core)
@@ -140,7 +143,7 @@ cartog-core          (tier 0 — no internal deps)
 └── cartog           (tier 4 — binary, depends on all)
 ```
 
-The `lsp` feature propagates: `cartog` → `cartog-mcp` → `cartog-indexer` → `cartog-lsp`.
+The `lsp` feature (on by default) propagates: `cartog` → `cartog-mcp` → `cartog-indexer` → `cartog-lsp`. Build with `--no-default-features` to drop the whole branch.
 
 ## Crate Responsibilities
 
@@ -151,7 +154,7 @@ Each crate has a `README.md` with detailed technical documentation. Summary:
 - **[cartog-languages](../crates/cartog-languages/README.md)**: `Extractor` trait + 8 code language extractors (Python, TS, TSX, JS, Rust, Go, Ruby, Java) + Markdown document extractor. Code extractors use declarative tree-sitter S-expression queries via `CachedQuery`; Markdown extractor uses heading-based chunking.
 - **[cartog-indexer](../crates/cartog-indexer/README.md)**: Directory walking, 3-tier change detection (git diff → SHA-256 → force), Merkle tree hashing for surgical symbol-level updates. Optionally delegates to `cartog-lsp` for unresolved edges.
 - **[cartog-rag](../crates/cartog-rag/README.md)**: Pluggable embedding providers (local ONNX, Ollama), hybrid search (FTS5 + vector KNN → RRF merge → cross-encoder reranking), model cache management. Indexes both code symbols and Markdown documents.
-- **[cartog-lsp](../crates/cartog-lsp/README.md)**: Optional LSP-based edge resolution. Spawns language servers, sends `textDocument/definition`, maps responses to cartog symbol IDs.
+- **[cartog-lsp](../crates/cartog-lsp/README.md)**: LSP-based edge resolution (default feature). Spawns language servers, sends `textDocument/definition`, maps responses to cartog symbol IDs. Omitted when built with `--no-default-features`.
 - **[cartog-watch](../crates/cartog-watch/README.md)**: Debounced file watcher (`notify-debouncer-mini`), incremental re-index on changes, deferred RAG embedding with configurable timer. See [spec-watch.md](spec-watch.md) for design details.
 - **[cartog-mcp](../crates/cartog-mcp/README.md)**: MCP server over stdio (`rmcp`). 12 tool handlers with JSON Schema params, path validation (canonicalization), `Arc<Mutex<Database>>` for shared state.
 - **[cartog](../crates/cartog/README.md)**: Binary crate (16 CLI commands via clap) + lib.rs facade re-exporting all crates as `cartog::db`, `cartog::types`, etc. Config resolution, logging setup, tokio runtime for MCP serve.
