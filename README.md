@@ -101,9 +101,9 @@ cartog serve --watch --rag       # with live re-indexing + semantic search
 
 Works with Claude Code, Cursor, Windsurf, Zed, OpenCode — any MCP client.
 
-### Optional LSP precision
+### LSP precision, built in
 
-Cartog auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph) and uses them to boost edge resolution from ~25% to **up to 81%**. Results persist in SQLite — pay the cost once.
+Cartog auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls) and uses them to boost edge resolution from ~25% to **up to 81%**. Enabled by default; results persist in SQLite — pay the cost once. Disable at runtime with `--no-lsp`, or omit at build time with `cargo install cartog --no-default-features`.
 
 ## Install
 

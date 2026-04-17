@@ -94,7 +94,7 @@ bash "/home/user/.claude/skills/cartog/scripts/ensure_indexed.sh"
 The setup script checks for newer cartog versions (cached, at most once per 24h).
 If an update is available it prints a notice like:
 ```
-New cartog version available: 0.7.0 (installed: 0.6.1). Update with: bash "/path/to/skill/scripts/install.sh" 0.7.0
+New cartog version available: X.Y.Z (installed: A.B.C). Update with: bash "/path/to/skill/scripts/install.sh" X.Y.Z
 ```
 When you see this notice, ask the user if they want to update before continuing. If they agree, run the suggested command, then re-run `bash "/path/to/skill/scripts/ensure_indexed.sh"`.
 
@@ -308,7 +308,7 @@ cartog serve --watch            # with background file watcher
 cartog serve --watch --rag      # watcher + deferred RAG embedding
 ```
 
-When an agent calls `cartog_index` via MCP, LSP servers are started once and **kept warm** for the session. Subsequent index calls reuse warm servers (~2s instead of 60s). Background watch re-indexing stays heuristic-only.
+When an agent calls `cartog_index` via MCP, LSP servers are started once and **kept warm** for the session. Subsequent index calls reuse warm servers (~2s instead of a cold 2-15s startup). Background watch re-indexing stays heuristic-only.
 
 ## Token Budget
 
@@ -376,7 +376,7 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 
 - **Default feature**: shipped by default. Installs with `--no-default-features` omit LSP entirely (equivalent to `--no-lsp` at runtime).
 - **Auto-detected**: if language servers are on PATH, they are used automatically during `cartog index`. Use `--no-lsp` to skip.
-- **Startup latency**: language servers take 15-60s to load a project on first call. Day-to-day indexing should use `--no-lsp`.
+- **Startup latency**: language servers typically reach ready in 2-15s on cold cache. The default ready-timeout is 20s — override via `CARTOG_LSP_READY_TIMEOUT_SECS` for very large projects. Day-to-day indexing should use `--no-lsp`.
 - **CLI vs MCP**: each `cartog index .` via Bash spawns and kills LSP servers (cold start). Use `cartog serve` (MCP mode) for sessions with multiple index calls — it keeps servers warm across tool calls.
 - **Supported servers**: rust-analyzer, pyright-langserver, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls. Install hints shown when servers are missing.
 - **External crate edges stay unresolved**: LSP resolves definitions within the project. Calls to std/external crates remain unresolved regardless.

@@ -73,9 +73,10 @@ docs(usage): add MCP Zed configuration example
 
 ## Feature flags
 
-| Flag | Description |
-|------|-------------|
-| `lsp` | Opt-in LSP-based edge resolution (requires `url` crate) |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `lsp` | on | LSP-based edge resolution. Disable at build time with `--no-default-features` (runtime equivalent: `--no-lsp`) |
+| `ollama-embedding` | off | Enables Ollama as an embedding provider for RAG |
 
 ## Single maintainer
 

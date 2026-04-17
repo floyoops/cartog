@@ -11,7 +11,7 @@ See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/
 ```bash
 cargo build              # debug build
 cargo build --release    # release build
-cargo test --workspace   # run all tests (380 tests across 9 crates)
+cargo test --workspace   # run all tests (~495 tests across 9 crates)
 cargo fmt --check        # check formatting
 cargo clippy --all-targets -- -D warnings  # lint
 ```
@@ -28,7 +28,7 @@ cargo check --features provider-ollama -p cartog-rag # verify Ollama feature
 ```bash
 make check            # all checks (Rust project + fixtures + skill)
 make check-rust       # cargo fmt + clippy + test
-make check-fixtures   # validate all 4 fixture codebases (py, go, rs, rb)
+make check-fixtures   # validate all fixture codebases (py, go, rs, rb, java)
 make check-skill      # skill tests (ensure_indexed.sh unit tests)
 make check-ts         # TypeScript fixtures (requires npx/tsc)
 make eval-skill       # LLM-as-judge skill evaluation (requires claude CLI)
@@ -58,7 +58,7 @@ crates/cartog/         (binary — CLI dispatch, config)
 ├── cartog-languages   (tree-sitter extractors, 8 languages)
 ├── cartog-indexer     (walk + extract + store, Merkle hashing)
 ├── cartog-rag         (embeddings, hybrid search, reranker)
-├── cartog-lsp         (optional LSP-based edge resolution)
+├── cartog-lsp         (LSP-based edge resolution — default feature)
 ├── cartog-watch       (debounced re-index + deferred RAG)
 └── cartog-mcp         (MCP server over stdio, 12 tools)
 ```
@@ -118,8 +118,8 @@ After implementation, mark checklist items complete — the spec stays as a desi
 
 ## Current State
 
-- **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java
-- **CLI**: 16 commands (13 top-level + 3 RAG subcommands) + MCP server (12 tools)
+- **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, Markdown
+- **CLI**: 18 top-level commands (`index`, `search`, `outline`, `refs`, `callees`, `impact`, `hierarchy`, `deps`, `stats`, `map`, `changes`, `config`, `doctor`, `watch`, `serve`, `completions`, `manpage`, plus `rag` with 3 subcommands) + MCP server (12 tools)
 - **Indexing**: incremental (git-based + SHA-256 + Merkle-tree symbol diffing), `--force` re-index. Stable symbol IDs (`file:kind:qualified_name`) survive line movements. Scoped edge resolution for changed files only
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
 - **Watch**: `cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding
@@ -132,5 +132,5 @@ After implementation, mark checklist items complete — the spec stays as a desi
 - **Embedding format versioning**: auto-detects embedding strategy changes, triggers re-embed on next `rag index`
 - **Schema versioning**: metadata-based migration system for DB schema evolution
 - **Pluggable embedding providers**: local ONNX (default) and Ollama, configured via `.cartog.toml`
-- **Feature flags**: `provider-local` (default), `provider-ollama`
+- **Feature flags**: binary `cartog` — `lsp` (default, on), `ollama-embedding` (off). Crate `cartog-rag` — `provider-local` (default), `provider-ollama`
 - **Pending**: Java extractor improvements

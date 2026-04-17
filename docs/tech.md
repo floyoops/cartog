@@ -9,7 +9,7 @@
 | Crate | Purpose | Notes |
 |-------|---------|-------|
 | `tree-sitter` 0.26 | Incremental parsing, CST traversal | Pinned — grammar crates lag by one minor |
-| `tree-sitter-{lang}` 0.23–0.25 | Per-language grammars (Python, TS/JS, Rust, Go, Ruby, Java) | Each ~1-2 MB of generated C |
+| `tree-sitter-{lang}` 0.23–0.25 | Per-language grammars (Python, TS/JS, Rust, Go, Ruby, Java, Markdown) | Each ~1-2 MB of generated C |
 | `rusqlite` (bundled) | SQLite storage, zero external deps | `bundled` compiles SQLite from C source — no system `libsqlite3-dev` required. Critical for cross-compilation to 5 targets |
 | `clap` (derive) | CLI argument parsing | `ValueEnum` derive for type-safe `--kind` filters with shell completion |
 | `serde` + `serde_json` | JSON serialization for `--json` output | `to_string_pretty` for readability in both terminal and agent contexts |
@@ -58,7 +58,9 @@
 | Model cache | `~/.cache/cartog/models` | XDG-compliant shared cache avoids downloading ~1.2 GB of models per project. Precedence: `FASTEMBED_CACHE_DIR` > `XDG_CACHE_HOME/cartog/models` > `~/.cache/cartog/models` |
 | Output format | Human default + `--json` flag (global) | Readable for humans, parseable for scripts. Both `cartog --json stats` and `cartog stats --json` work |
 | Distribution | `cargo install` + pre-built binaries | GitHub Releases for 5 targets (Linux x86/ARM, macOS x86/ARM, Windows), crates.io publish |
-| LSP | Auto-detected (default feature) | Index-time refinement for edges unresolved by heuristics. Auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls), sends `textDocument/definition`, shuts down after. Silently skips when no server found. Disable at runtime with `--no-lsp`; opt out at build time with `cargo install cartog --no-default-features` |
+| LSP | Auto-detected (default feature) | Index-time refinement for edges unresolved by heuristics. Auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls), sends `textDocument/definition`, shuts down after. Silently skips when no server found. Ready-timeout 20s (override via `CARTOG_LSP_READY_TIMEOUT_SECS`). Disable at runtime with `--no-lsp`; opt out at build time with `cargo install cartog --no-default-features` |
+| MCP response cap | 64 KB per tool result | Prevents oversized JSON from evicting agent context. Truncates at UTF-8 boundary with narrowing hint per tool. Override via `CARTOG_MCP_MAX_BYTES` |
+| RAG tuning | `[rag]` section in `.cartog.toml` | `retrieval_multiplier`, `retrieval_floor`, `rerank_max`, `rerank_min` control FTS5/vector candidate pool size and cross-encoder cost. See [usage.md](usage.md#configuration) |
 | Workspace | Cargo workspace (9 crates) | Incremental compilation, explicit dependency boundaries, independent crate reuse. See [structure.md](structure.md) for layout and dependency graph |
 | Monorepo | Deferred | Index from CWD, user can `cd` into subproject |
 
