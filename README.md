@@ -366,13 +366,15 @@ Your code never leaves your machine.
 
 ## Documentation
 
+Full index: [docs/README.md](docs/README.md). Highlights:
+
 - **[Documentation site](https://jrollin.github.io/cartog/)** — quick start, CLI reference, configuration, MCP setup
 - [Usage](docs/usage.md) — full CLI reference and integration guides
 - [Editor integration](docs/editor-integration.md) — Neovim, VS Code, Emacs recipes
 - [Troubleshooting](docs/troubleshooting.md) — common issues and fixes
-- [Product Overview](docs/product.md)
-- [Technology Stack](docs/tech.md)
-- [Project Structure](docs/structure.md)
+- [Product Overview](docs/product.md) — vision, target users, benchmark caveats
+- [Technology Stack](docs/tech.md) — architecture and RAG design
+- [Project Structure](docs/structure.md) — workspace layout
 
 ## License
 

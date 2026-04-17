@@ -1,5 +1,7 @@
 # Editor integration
 
+> See [usage.md](usage.md) for the full CLI reference and [README — Install](../README.md#install) for installation.
+
 Two ways to wire cartog into an editor:
 
 1. **CLI shell-out** — run `cartog refs`, `cartog outline`, etc. from a keymap and show results in a quickfix / picker. Works with any editor. No MCP client required.

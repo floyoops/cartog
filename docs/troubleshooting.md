@@ -4,6 +4,8 @@ A living list of issues that turn up on first-run or after upgrades.
 If something here is out of date or you hit a new problem,
 [open an issue](https://github.com/jrollin/cartog/issues).
 
+> Related docs: [usage.md](usage.md) for the full CLI reference, [spec-watch.md](spec-watch.md) for `cartog watch` internals, [editor-integration.md](editor-integration.md) for editor-specific setup.
+
 ## Installation
 
 ### `cargo install cartog` is slow the first time

@@ -1,5 +1,7 @@
 # cartog — Product Overview
 
+> This document covers strategic positioning, target users, and outcomes. For installation and commands, see the [README](../README.md). For the full CLI reference, see [usage.md](usage.md).
+
 **Tagline:** Map your codebase. Navigate by graph, not grep.
 
 ## Purpose
@@ -20,6 +22,8 @@ Code is a graph of relationships (calls, imports, inherits, type references). Pr
 | **Transitive analysis** | impossible | `impact --depth 3` |
 
 Measured across 13 scenarios, 5 languages. Best gains on call chain tracing (88% token reduction) and caller lookup (95% reduction).
+
+> **Recall caveat:** The 97% figure requires cartog built with the `lsp` feature and a matching language server on `PATH` (`cargo install cartog --features lsp`). Without LSP, edge resolution falls to ~25–37% depending on language; with LSP it reaches 44–81%. See [README — Benchmark notes](../README.md#benchmark-notes) for methodology and per-language breakdown.
 
 ## Target Users
 
