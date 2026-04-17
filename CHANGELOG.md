@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.12.2] - 2026-04-15
+## [0.13.0] - 2026-04-17
 
 ### Bug Fixes
 
@@ -58,6 +58,9 @@
 - **readme,site**: Rewrite README for broader dev audience, fix stale site content ([`9aa8a9e`](https://github.com/jrollin/cartog/commit/9aa8a9e89b54235fcfb860df990a9c6b8769cb7a))
 - Split plugin install into separate steps ([`d6279d8`](https://github.com/jrollin/cartog/commit/d6279d87f0ab4b3cf76ddeca193ad99594e92c88))
 - **structure**: Add agents/ and .claude-plugin/ to project tree ([`cf4f161`](https://github.com/jrollin/cartog/commit/cf4f161b9e64d848ccfea0ac7bf7e212c2cbc6c8))
+- Add editor-integration page (Neovim / VS Code / Emacs / Zed) (#30) ([`86b94de`](https://github.com/jrollin/cartog/commit/86b94de71ae72a97564d7caaeca264c1c88a6ec2))
+- Fix debounce default, add LSP recall caveat, add docs index ([`8a23aaa`](https://github.com/jrollin/cartog/commit/8a23aaaefa8d49c97fd376c53a385b044473f666))
+- Sync post-lsp-default-sweep across README, docs, site, skill ([`e20d523`](https://github.com/jrollin/cartog/commit/e20d523f302877919d095d8ceb1d6a5a5a7ca87e))
 
 ### Features
 
@@ -93,6 +96,14 @@
 - **release**: Enable lsp feature and add binary smoke test ([`62c7b76`](https://github.com/jrollin/cartog/commit/62c7b76f7980368cbf4cf7a611bb0a9f40b86a64))
 - **agent**: Add codebase-onboarding agent ([`6b4fc74`](https://github.com/jrollin/cartog/commit/6b4fc744e4b9c15c9fc5d3d0ba3ed7049df9254d))
 - **agent**: Add refactoring-scout agent ([`46bdb71`](https://github.com/jrollin/cartog/commit/46bdb7141113e11b36930762f60628b61e26733a))
+- **cli**: Cartog manpage subcommand + release artifact (#19) ([`199f0ee`](https://github.com/jrollin/cartog/commit/199f0ee94cc8d367a440f9b1f60e1cf24cbee213))
+- **rag**: User-tunable retrieval + rerank knobs via .cartog.toml (#20) ([`32beae8`](https://github.com/jrollin/cartog/commit/32beae86d603c9ae6a8f77dabd16e73a4e8bb2c7))
+- **mcp**: Cap tool-response size with overflow hint (#22) ([`694d123`](https://github.com/jrollin/cartog/commit/694d1233bca097fcf42ad39fa9d6c037379458db))
+- **db**: Typed DbError for the open + migration path (#23) ([`6ae11d6`](https://github.com/jrollin/cartog/commit/6ae11d67cb7085595b36911e04bbcd46ca1fb464))
+- **rag,cli**: Lazy reranker loading + [rag] section in cartog config (#25) ([`1208a9f`](https://github.com/jrollin/cartog/commit/1208a9fc3b476334678e7f01586d63bc49d6734c))
+- **cli**: Cartog --version prints build SHA + features (#26) ([`06986bb`](https://github.com/jrollin/cartog/commit/06986bb5f7a201a7fae085c193ce48d943ed02e6))
+- **watch**: Cartog watch --json streams NDJSON events (#27) ([`9feeb02`](https://github.com/jrollin/cartog/commit/9feeb028a26de73dbf6a2084c028532c636c98d5))
+- **lsp**: Enable lsp feature by default ([`ca06cd8`](https://github.com/jrollin/cartog/commit/ca06cd8e3728ab24fafb38938603bbe8635829f7))
 
 ### Miscellaneous
 
