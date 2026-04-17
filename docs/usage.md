@@ -1,5 +1,7 @@
 # cartog — Usage
 
+> For editor-specific setup (Neovim keymaps, VS Code tasks, Emacs compile-mode, Zed MCP), see [editor-integration.md](editor-integration.md). For common errors, see [troubleshooting.md](troubleshooting.md).
+
 ## Setup
 
 Requires Rust 1.77+ (`rustup update` if needed).
@@ -347,10 +349,10 @@ cartog watch                          # watch CWD, code graph only
 cartog watch src/                     # watch subdirectory
 cartog watch --rag                    # also auto-embed for semantic search
 cartog watch --rag --rag-delay 60     # embed after 60s of inactivity
-cartog watch --debounce 5             # 5s debounce window
+cartog watch --debounce 10            # 10s debounce window
 ```
 
-The watcher runs an initial incremental index on startup, then re-indexes when supported source files change. Changes are debounced (default 2s) to avoid re-indexing on every keystroke.
+The watcher runs an initial incremental index on startup, then re-indexes when supported source files change. Changes are debounced (default 5s) to avoid re-indexing on every keystroke and to absorb bulk file changes (e.g. `git pull`).
 
 When `--rag` is enabled, embedding generation is deferred until `--rag-delay` seconds (default 30) have elapsed without new file changes, batching all pending symbols in one pass.
 

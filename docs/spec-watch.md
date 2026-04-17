@@ -7,13 +7,13 @@ A long-running CLI command that watches filesystem events, debounces changes, an
 ## Architecture
 
 ```
-cartog watch [path] [--debounce 2s] [--rag] [--rag-delay 30s]
+cartog watch [path] [--debounce 5s] [--rag] [--rag-delay 30s]
      |
      v
 notify crate (kqueue macOS / inotify Linux / ReadDirectoryChangesW Windows)
      |
      v
-Debounce filter (2s default) ──> code graph index (incremental, ~1-3s)
+Debounce filter (5s default) ──> code graph index (incremental, ~1-3s)
      |                                    |
      |                            symbols_needing_embeddings > 0?
      |                                    |
@@ -26,7 +26,9 @@ Debounce filter (2s default) ──> code graph index (incremental, ~1-3s)
 
 ### Key Design Decisions
 
-1. **Debounced file watcher** (not git polling): Uses `notify` crate with a configurable debounce window (default 2s). Responds to actual file saves, not periodic checks. The existing `is_ignored()` filter + `detect_language()` already handle skipping irrelevant files.
+1. **Debounced file watcher** (not git polling): Uses `notify` crate with a configurable debounce window (default 5s). Responds to actual file saves, not periodic checks. The existing `is_ignored()` filter + `detect_language()` already handle skipping irrelevant files.
+
+   > **Note:** Original spec proposed a 2s default. Raised to 5s during implementation to absorb bulk file changes (e.g. `git pull`, branch switches) without triggering re-index storms.
 
 2. **Deferred RAG embedding batch**: After each code graph re-index, if there are symbols needing embeddings (`symbols_needing_embeddings().len() > 0`), a timer starts. Resets on each new index cycle. When the timer fires (default 30s of inactivity), embeddings are generated in bulk. This amortizes the ~200ms model load and batches embedding calls.
 
@@ -40,7 +42,7 @@ Debounce filter (2s default) ──> code graph index (incremental, ~1-3s)
 When a supported source file (Python, TypeScript/JavaScript, Rust, Go, Ruby, Java) is created, modified, or deleted within the watched directory, the system shall queue a re-index after the debounce window expires.
 
 ### FR-002: Debounce Window
-While file change events are arriving within the debounce window (default 2s, configurable via `--debounce`), the system shall reset the timer and not trigger re-indexing until the window elapses without new events.
+While file change events are arriving within the debounce window (default 5s, configurable via `--debounce`), the system shall reset the timer and not trigger re-indexing until the window elapses without new events.
 
 ### FR-003: Incremental Code Graph Re-index
 When the debounce window expires, the system shall run `indexer::index_directory(db, root, false)` (incremental mode) and log the result (files indexed, skipped, removed, symbols, edges).
@@ -89,7 +91,7 @@ Arguments:
   [PATH]  Directory to watch (defaults to ".")
 
 Options:
-      --debounce <DURATION>   Debounce window for file changes [default: 2s]
+      --debounce <DURATION>   Debounce window for file changes [default: 5s]
       --rag                   Enable automatic RAG embedding after index
       --rag-delay <DURATION>  Delay before batch embedding after last index [default: 30s]
       --json                  Output events as JSON (global flag)
@@ -104,7 +106,7 @@ Then the code graph is re-indexed within debounce window + index time
 And the log shows files indexed count > 0
 
 ### AC-002: Rapid saves are debounced
-Given `cartog watch --debounce 2s` is running
+Given `cartog watch --debounce 2` is running
 When I save a file 5 times in 1 second
 Then re-indexing occurs only once (after the 2s debounce)
 
