@@ -173,10 +173,16 @@ fn chunk_at_paragraphs(source: &str, start: usize, end: usize) -> Vec<(usize, us
 }
 
 /// Count the number of `\n` in `source[..byte_offset]`.
+///
+/// Operates on raw bytes, so `byte_offset` may land inside a multi-byte
+/// UTF-8 character without panicking. Callers such as `ce.saturating_sub(1)`
+/// can produce offsets that are not on a char boundary — for example when
+/// a section ends with a zero-width space (U+200B, 3 bytes).
 fn line_number_at(source: &str, byte_offset: usize) -> u32 {
-    source[..byte_offset.min(source.len())]
-        .bytes()
-        .filter(|&b| b == b'\n')
+    let end = byte_offset.min(source.len());
+    source.as_bytes()[..end]
+        .iter()
+        .filter(|&&b| b == b'\n')
         .count() as u32
         + 1
 }
@@ -504,5 +510,32 @@ mod tests {
         // Each break points past the second \n
         assert_eq!(&source[breaks[0]..breaks[0] + 5], "para2");
         assert_eq!(&source[breaks[1]..breaks[1] + 5], "para3");
+    }
+
+    #[test]
+    fn test_line_number_at_offset_inside_multibyte_char() {
+        // Layout: 'a' '\n' <ZWSP: E2 80 8B> 'b' — bytes 0..6, ZWSP at 2..5.
+        // Offsets 3 and 4 fall inside the ZWSP and must not panic. Callers
+        // such as `end_byte.saturating_sub(1)` can produce such offsets.
+        let source = "a\n\u{200B}b";
+        assert_eq!(source.len(), 6);
+        assert_eq!(line_number_at(source, 2), 2);
+        assert_eq!(line_number_at(source, 3), 2);
+        assert_eq!(line_number_at(source, 4), 2);
+        assert_eq!(line_number_at(source, 9999), 2);
+    }
+
+    #[test]
+    fn test_extract_with_zero_width_space_at_section_end() {
+        // Reproduces the Obsidian-vault panic. When the final section ends
+        // with a zero-width space (U+200B, 3 bytes), `end_byte.saturating_sub(1)`
+        // lands inside the ZWSP. That offset was previously fed to
+        // `line_number_at`, which sliced `source[..offset]` and panicked at
+        // Rust's char-boundary check.
+        let source = "# A\n\nfoo\u{200B}";
+        let mut ext = MarkdownExtractor::new();
+        let result = ext.extract(source, "note.md").unwrap();
+        let names: Vec<&str> = result.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["A"]);
     }
 }
