@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.13.0] - 2026-04-17
+## [0.13.1] - 2026-04-21
 
 ### Bug Fixes
 
@@ -40,6 +40,7 @@
 - **plugin**: Remove .mcp.json to avoid duplicate MCP server with plugin ([`1bee808`](https://github.com/jrollin/cartog/commit/1bee8087a71b2b692016b8cf19b4ae7675151cc8))
 - **plugin**: Use CLAUDE_PLUGIN_ROOT for hook script path ([`0f91692`](https://github.com/jrollin/cartog/commit/0f9169222f547ad99d9c64709edb6fb7e368da02))
 - **plugin**: Remove invalid agents field from manifest ([`a5a6655`](https://github.com/jrollin/cartog/commit/a5a66557cc3f34dfad4bd6d4eb32589bd6dad7be))
+- **languages**: Panic on multi-byte UTF-8 in markdown extractor ([`5d731d6`](https://github.com/jrollin/cartog/commit/5d731d60cf1cbce6307b4a60111cd8eeb0571d71))
 
 ### Documentation
 
