@@ -222,7 +222,18 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
         })
         .collect();
 
-    // ── Phase 3: sequential DB writes, preserving walk order ──
+    // ── Phase 3: sequential DB writes inside one transaction ──
+    //
+    // All writes from here through the `last_commit` metadata update participate
+    // in a single transaction. A panic, error, or hard process exit before
+    // `tx.commit()` rolls everything back — the DB never sees a partial Phase 3
+    // state (e.g. symbols updated but `files` row stale, or edges resolved
+    // against a half-rebuilt symbol set).
+    //
+    // Inside the transaction, we use the `*_in_tx` variants of the batch
+    // helpers — the regular versions issue their own `BEGIN` and would fail
+    // here.
+    let tx = db.begin_indexing_tx()?;
     for item in parsed {
         let (rel_path, lang, source, hash, modified, symbols, edges) = match item {
             ParseOutput::Skipped => {
@@ -252,7 +263,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
 
             dirty_files.insert(rel_path.clone());
 
-            db.delete_symbols(&diff.removed)?;
+            db.delete_symbols_in_tx(&diff.removed)?;
             result.symbols_removed += diff.removed.len() as u32;
 
             let mut changed: Vec<cartog_core::Symbol> = Vec::with_capacity(
@@ -261,14 +272,14 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
             changed.extend(diff.added.iter().map(|&i| symbols[i].clone()));
             changed.extend(diff.modified.iter().map(|&i| symbols[i].clone()));
             changed.extend(diff.children_changed.iter().map(|&i| symbols[i].clone()));
-            db.insert_symbols(&changed)?;
+            db.insert_symbols_in_tx(&changed)?;
 
             result.symbols_added += diff.added.len() as u32;
             result.symbols_modified += diff.modified.len() as u32;
             result.symbols_unchanged += diff.unchanged as u32;
 
             db.clear_edges_for_file(&rel_path)?;
-            db.insert_edges(&edges)?;
+            db.insert_edges_in_tx(&edges)?;
             result.edges_added += edges.len() as u32;
 
             let dirty_indices: Vec<usize> = diff
@@ -288,15 +299,15 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
                 })
                 .collect();
             if !contents.is_empty() {
-                db.insert_symbol_contents(&contents)?;
+                db.insert_symbol_contents_in_tx(&contents)?;
             }
         } else {
             // No stored hashes (first index or post-migration): full insert
             dirty_files.insert(rel_path.clone());
-            db.clear_file_data(&rel_path)?;
+            db.clear_file_data_in_tx(&rel_path)?;
 
-            db.insert_symbols(&symbols)?;
-            db.insert_edges(&edges)?;
+            db.insert_symbols_in_tx(&symbols)?;
+            db.insert_edges_in_tx(&edges)?;
 
             result.symbols_added += symbols.len() as u32;
             result.edges_added += edges.len() as u32;
@@ -311,7 +322,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
                 })
                 .collect();
             if !contents.is_empty() {
-                db.insert_symbol_contents(&contents)?;
+                db.insert_symbol_contents_in_tx(&contents)?;
             }
         }
 
@@ -336,25 +347,28 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
     for indexed_path in all_indexed {
         if !current_files.contains(&indexed_path) {
             dirty_files.insert(indexed_path.clone());
-            db.remove_file(&indexed_path)?;
+            db.remove_file_in_tx(&indexed_path)?;
             result.files_removed += 1;
         }
     }
 
     // Resolve edges — scoped to dirty files for incremental, global for force/first-index
     if force || dirty_files.len() == current_files.len() {
-        result.edges_resolved = db.resolve_edges()?;
+        result.edges_resolved = db.resolve_edges_in_tx()?;
         db.compute_in_degrees()?;
     } else if !dirty_files.is_empty() {
         // Invalidate edges from unchanged files that pointed to symbols in dirty files
         // (those symbol IDs may have changed even with stable IDs if a symbol was renamed/removed)
         db.invalidate_edges_targeting(&dirty_files)?;
-        result.edges_resolved = db.resolve_edges_scoped(&dirty_files)?;
+        result.edges_resolved = db.resolve_edges_scoped_in_tx(&dirty_files)?;
         db.compute_in_degrees_scoped(&dirty_files)?;
     }
 
     // LSP-based resolution for edges the heuristic couldn't resolve.
     // Auto-detected when `lsp` feature is compiled in; silently skipped otherwise.
+    // The LSP-side helpers (`unresolved_edges`, `find_symbol_at_location`,
+    // `update_edge_target`) all use single-statement execs that participate in
+    // the outer transaction — no extra plumbing needed.
     #[cfg(feature = "lsp")]
     if lsp {
         result.edges_lsp_resolved = cartog_lsp::lsp_resolve_edges(db, &root, None)?;
@@ -367,6 +381,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
         db.set_metadata("last_commit", &commit)?;
     }
 
+    tx.commit()?;
     Ok(result)
 }
 
