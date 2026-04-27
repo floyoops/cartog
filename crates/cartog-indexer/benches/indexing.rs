@@ -6,6 +6,13 @@
 //! environments without the native ONNX library installed.
 //!
 //! Run with: `cargo bench --bench indexing`
+//!
+//! **Keep in sync with `crates/cartog/benches/queries.rs::bench_indexing`.**
+//! When you adjust scenarios here (fixture path, page-cap, fixture file
+//! invalidated for the single-file edit case), apply the same change there
+//! so the two surfaces measure the same thing. Duplication is intentional —
+//! the cartog-binary bench depends on `cartog-rag` which depends on the
+//! ONNX native library; this crate has no such constraint.
 
 use std::path::Path;
 
@@ -33,8 +40,8 @@ fn bench_indexing(c: &mut Criterion) {
     c.bench_function("index_full_force", |b| {
         b.iter(|| {
             let db = Database::open_memory().unwrap();
-            index_directory(&db, &fixture, true, false).unwrap()
-        })
+            index_directory(&db, &fixture, true, false).unwrap();
+        });
     });
 
     // No-op re-index: every file's stored hash matches; everything is skipped
@@ -42,7 +49,9 @@ fn bench_indexing(c: &mut Criterion) {
     c.bench_function("index_incremental_noop", |b| {
         let db = Database::open_memory().unwrap();
         index_directory(&db, &fixture, true, false).unwrap();
-        b.iter(|| index_directory(&db, &fixture, false, false).unwrap())
+        b.iter(|| {
+            index_directory(&db, &fixture, false, false).unwrap();
+        });
     });
 
     // Single-file change: invalidate one file's stored hash so it re-parses
@@ -59,8 +68,8 @@ fn bench_indexing(c: &mut Criterion) {
                 num_symbols: 0,
             })
             .unwrap();
-            index_directory(&db, &fixture, false, false).unwrap()
-        })
+            index_directory(&db, &fixture, false, false).unwrap();
+        });
     });
 }
 

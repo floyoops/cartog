@@ -1476,4 +1476,102 @@ We use PostgreSQL with connection pooling via pgbouncer.
             "header should include section name"
         );
     }
+
+    /// End-to-end Phase 3 atomicity test.
+    ///
+    /// Drives `index_directory` against a real fixture, then forces the DB to
+    /// run out of pages mid-Phase-3 by capping `max_page_count`. The expected
+    /// outcome: the index call returns `Err`, AND every Phase-3 write that
+    /// happened before the failure has been rolled back. The seed state is
+    /// established before the cap, so it must survive the rollback.
+    ///
+    /// This complements the cartog-db primitive tests (which prove that
+    /// `begin_indexing_tx` rolls back correctly): this test proves that
+    /// `index_directory` actually opens, uses, and rolls back the
+    /// transaction through every code path the real pipeline exercises
+    /// (per-file Merkle diff, deletion sweep, edge resolution, in-degree
+    /// compute, last_commit metadata write).
+    #[test]
+    fn test_index_directory_rolls_back_on_disk_full() {
+        use cartog_core::SymbolKind;
+        use cartog_db::Database;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("project");
+        std::fs::create_dir(&dir).unwrap();
+
+        // Seed file: get into a known indexed state under a generous page budget.
+        std::fs::write(dir.join("seed.py"), "def keep_me():\n    return 1\n").unwrap();
+
+        let db = Database::open_memory().unwrap();
+        index_directory(&db, &dir, true, false).expect("seed index should succeed");
+
+        // Snapshot the seed state so we can assert it is preserved across the
+        // failed run.
+        let seed_outline = db.outline("seed.py").unwrap();
+        let seed_keep_me = seed_outline
+            .iter()
+            .find(|s| s.name == "keep_me")
+            .expect("seed symbol must be present after the first index");
+        let seed_keep_me_id = seed_keep_me.id.clone();
+
+        // Add a second file that the next `index_directory` call will try to
+        // ingest. Combined with a tight page cap, the new symbol/edge/content
+        // writes will hit `SQLITE_FULL` somewhere inside Phase 3.
+        std::fs::write(
+            dir.join("big.py"),
+            // Lots of small symbols: many independent INSERTs, so the page
+            // budget runs out partway through and the outer tx must roll back.
+            (0..200)
+                .map(|i| format!("def fn_{i}():\n    return {i}\n\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+
+        // Cap the DB at a page count that holds the seed comfortably but
+        // cannot fit the second file's worth of symbol/content rows.
+        // The exact value is empirical; on macOS APFS with the default 4 KiB
+        // page size, ~30 pages is enough to seed but not enough to ingest 200
+        // new functions through Phase 3.
+        db.set_max_page_count_for_tests(30).unwrap();
+
+        let result = index_directory(&db, &dir, false, false);
+        assert!(
+            result.is_err(),
+            "Phase 3 must fail when SQLite runs out of pages; got Ok({result:?})"
+        );
+
+        // Lift the cap so post-mortem queries can run.
+        db.set_max_page_count_for_tests(1_000_000).unwrap();
+
+        // Rollback assertions:
+        //
+        // 1. The seed symbol must still be there (a regression that wiped
+        //    pre-existing data is the worst flavor of the original bug).
+        // 2. None of the symbols from the failed file may have leaked through:
+        //    Phase 3 was wrapped in a single transaction, so partial writes
+        //    are rolled back atomically.
+        let seed_outline_after = db.outline("seed.py").unwrap();
+        assert!(
+            seed_outline_after.iter().any(|s| s.id == seed_keep_me_id),
+            "seed symbol must survive the rolled-back run"
+        );
+        let big_outline_after = db.outline("big.py").unwrap();
+        assert!(
+            big_outline_after.is_empty(),
+            "no symbols from the failed Phase 3 may persist; big.py outline: {:?}",
+            big_outline_after
+                .iter()
+                .map(|s| &s.name)
+                .collect::<Vec<_>>()
+        );
+
+        // The seed symbol is a function — a quick sanity check that the kind
+        // wasn't corrupted by partial writes either.
+        let kept = seed_outline_after
+            .iter()
+            .find(|s| s.id == seed_keep_me_id)
+            .unwrap();
+        assert_eq!(kept.kind, SymbolKind::Function);
+    }
 }

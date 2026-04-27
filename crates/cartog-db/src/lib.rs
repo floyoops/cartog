@@ -486,14 +486,57 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// Cap the number of pages this DB connection can hold.
+    ///
+    /// Intended for tests that need to force a `SQLITE_FULL` error on a
+    /// subsequent write (for example, to verify that a transaction rolls back
+    /// cleanly). Production code should never call this.
+    #[doc(hidden)]
+    pub fn set_max_page_count_for_tests(&self, pages: u32) -> Result<()> {
+        self.conn
+            .execute_batch(&format!("PRAGMA max_page_count = {pages}"))?;
+        Ok(())
+    }
+
     /// Open a single SQLite transaction that the caller is expected to wrap
     /// around a multi-step indexing pipeline.
     ///
     /// Drop without `commit()` rolls back, so a panic mid-pipeline leaves the
-    /// DB in its prior state. Inside the transaction, callers must use the
-    /// `*_in_tx` variants of the batch helpers (e.g. [`Self::insert_symbols_in_tx`])
-    /// — the non-`_in_tx` versions issue their own `BEGIN` and would error out
-    /// inside an active transaction.
+    /// DB in its prior state.
+    ///
+    /// # Calling conventions inside the transaction
+    ///
+    /// Helpers fall into two categories:
+    ///
+    /// 1. **Batched writers must use the `_in_tx` variant.** Their non-`_in_tx`
+    ///    wrapper issues its own `BEGIN` and would error out at runtime
+    ///    (`cannot start a transaction within a transaction`). Examples:
+    ///    [`Self::insert_symbols_in_tx`], [`Self::delete_symbols_in_tx`],
+    ///    [`Self::insert_edges_in_tx`], [`Self::insert_symbol_contents_in_tx`],
+    ///    [`Self::clear_file_data_in_tx`], [`Self::remove_file_in_tx`],
+    ///    [`Self::resolve_edges_in_tx`], [`Self::resolve_edges_scoped_in_tx`].
+    ///
+    /// 2. **Single-statement helpers can be called directly.** They issue one
+    ///    `self.conn.execute(...)` and participate transparently in the active
+    ///    transaction. Examples used by `cartog-indexer`'s Phase 3 today:
+    ///    [`Self::upsert_file`], [`Self::clear_edges_for_file`],
+    ///    [`Self::set_metadata`], [`Self::compute_in_degrees`],
+    ///    [`Self::compute_in_degrees_scoped`], [`Self::invalidate_edges_targeting`].
+    ///    These are tagged with `// tx-safe: single statement` so the contract
+    ///    survives drive-by edits.
+    ///
+    /// # Why `unchecked_transaction` rather than [`rusqlite::Connection::transaction`]
+    ///
+    /// `transaction()` requires `&mut Connection`, which would force every
+    /// caller of `Database` to hold a mutable borrow for the entire pipeline.
+    /// `unchecked_transaction()` works through `&Connection` and produces an
+    /// equivalent [`rusqlite::Transaction`] with the same `DropBehavior::Rollback`
+    /// default — only borrow-check ergonomics differ.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SQLite cannot begin a transaction — typically
+    /// because another transaction is already active on this connection.
     pub fn begin_indexing_tx(&self) -> Result<rusqlite::Transaction<'_>> {
         Ok(self.conn.unchecked_transaction()?)
     }
@@ -513,6 +556,8 @@ impl Database {
     }
 
     /// Store a metadata key-value pair (upserts on conflict).
+    ///
+    /// tx-safe: single statement — see [`Self::begin_indexing_tx`].
     pub fn set_metadata(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
@@ -524,6 +569,8 @@ impl Database {
     // ── Files ──
 
     /// Insert or update file metadata.
+    ///
+    /// tx-safe: single statement — see [`Self::begin_indexing_tx`].
     pub fn upsert_file(&self, file: &FileInfo) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO files (path, last_modified, hash, language, num_symbols)
@@ -560,6 +607,8 @@ impl Database {
     }
 
     /// Remove edges only for a file (used by Merkle diff which updates symbols surgically).
+    ///
+    /// tx-safe: single statement — see [`Self::begin_indexing_tx`].
     pub fn clear_edges_for_file(&self, path: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM edges WHERE file_path = ?1", params![path])?;
@@ -992,6 +1041,9 @@ impl Database {
     /// In-degree = number of resolved incoming edges (calls, imports, inherits, etc.).
     /// Higher in-degree means the symbol is referenced more across the codebase.
     /// Resets all in-degree values to 0 first, then batch-updates from the edges table.
+    ///
+    /// tx-safe: two unconditional statements participate in any active outer
+    /// transaction — see [`Self::begin_indexing_tx`].
     pub fn compute_in_degrees(&self) -> Result<u32> {
         self.conn.execute("UPDATE symbols SET in_degree = 0", [])?;
 
@@ -1020,6 +1072,8 @@ impl Database {
     /// When a file is re-indexed, its symbols may have been renamed/removed.
     /// Edges from *unchanged* files that previously resolved to those symbols
     /// must be cleared so they can be re-resolved against the new symbol set.
+    ///
+    /// tx-safe: single statement — see [`Self::begin_indexing_tx`].
     pub fn invalidate_edges_targeting(
         &self,
         dirty_files: &std::collections::HashSet<String>,
@@ -1076,6 +1130,11 @@ impl Database {
     }
 
     /// Recompute in-degree centrality only for symbols in/around dirty files.
+    ///
+    /// tx-safe: every internal statement participates in any active outer
+    /// transaction — see [`Self::begin_indexing_tx`]. Does NOT open one of
+    /// its own, unlike the batched `*_in_tx` helpers; outside an outer
+    /// transaction the per-file resets are not atomic with the recompute.
     pub fn compute_in_degrees_scoped(
         &self,
         dirty_files: &std::collections::HashSet<String>,
@@ -1941,8 +2000,18 @@ impl Database {
     }
 
     // ── LSP Resolution Helpers ──
+    //
+    // These three helpers (`unresolved_edges`, `find_symbol_at_location`,
+    // `update_edge_target`) are called from `cartog-lsp::lsp_resolve_edges`,
+    // which itself runs inside `index_directory`'s outer indexing transaction
+    // (see [`Self::begin_indexing_tx`]). They MUST remain transaction-free —
+    // any future addition of `unchecked_transaction()` here would re-introduce
+    // the Phase 3 atomicity bug at runtime ("cannot start a transaction
+    // within a transaction").
 
     /// Return all edges with `target_id IS NULL` (unresolved after heuristic pass).
+    ///
+    /// tx-safe: read-only single statement — see note above the section header.
     pub fn unresolved_edges(&self) -> Result<Vec<UnresolvedEdge>> {
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.target_name, e.file_path, e.line
@@ -1964,6 +2033,8 @@ impl Database {
     }
 
     /// Find the tightest-enclosing symbol at a given file + line.
+    ///
+    /// tx-safe: read-only single statement — see the LSP-section header note.
     pub fn find_symbol_at_location(&self, file_path: &str, line: u32) -> Result<Option<String>> {
         let id: Option<String> = self
             .conn
@@ -1980,6 +2051,11 @@ impl Database {
     }
 
     /// Update a single edge's target_id.
+    ///
+    /// tx-safe: single statement — see the LSP-section header note. If you
+    /// ever batch this internally with `unchecked_transaction()`, also update
+    /// `index_directory` so it does not call `lsp_resolve_edges` inside its
+    /// outer transaction.
     pub fn update_edge_target(&self, edge_id: i64, target_id: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE edges SET target_id = ?1 WHERE id = ?2",
