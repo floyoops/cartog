@@ -21,6 +21,11 @@ cartog-lsp = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+criterion = { workspace = true }
 
 [features]
 lsp = ["dep:cartog-lsp"]
+
+[[bench]]
+name = "indexing"
+harness = false

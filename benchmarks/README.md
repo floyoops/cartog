@@ -90,6 +90,14 @@ cargo bench --bench queries -- index_
 | `index_incremental_noop` | Re-index with no changes (all files skipped via hash) |
 | `index_incremental_one_file` | One file's hash invalidated, triggers Merkle diff + scoped resolution |
 
+The same three scenarios are also available as a standalone `cartog-indexer` bench, which builds without the ONNX runtime native dependency:
+
+```bash
+cargo bench -p cartog-indexer --bench indexing
+```
+
+Use this form when iterating on indexer code without a configured ONNX install. Numbers are within noise of the `cartog`-binary version.
+
 ## Benchmark any project
 
 `bench-project.sh` runs cartog vs grep on **any codebase** — no ground truth needed.
