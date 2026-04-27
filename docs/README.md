@@ -13,6 +13,7 @@ Start here: the root [README](../README.md) for install and quick start.
 
 - [tech.md](tech.md) — technology stack, architecture decisions, RAG design
 - [structure.md](structure.md) — workspace layout, crate responsibilities, conventions
+- [architecture/incremental-indexing.md](architecture/incremental-indexing.md) — layered change detection, Merkle invariants, failure modes
 
 ## Specs
 

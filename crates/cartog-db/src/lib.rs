@@ -486,6 +486,61 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// Cap the number of pages this DB connection can hold.
+    ///
+    /// Intended for tests that need to force a `SQLITE_FULL` error on a
+    /// subsequent write (for example, to verify that a transaction rolls back
+    /// cleanly). Production code should never call this.
+    #[doc(hidden)]
+    pub fn set_max_page_count_for_tests(&self, pages: u32) -> Result<()> {
+        self.conn
+            .execute_batch(&format!("PRAGMA max_page_count = {pages}"))?;
+        Ok(())
+    }
+
+    /// Open a single SQLite transaction that the caller is expected to wrap
+    /// around a multi-step indexing pipeline.
+    ///
+    /// Drop without `commit()` rolls back, so a panic mid-pipeline leaves the
+    /// DB in its prior state.
+    ///
+    /// # Calling conventions inside the transaction
+    ///
+    /// Helpers fall into two categories:
+    ///
+    /// 1. **Batched writers must use the `_in_tx` variant.** Their non-`_in_tx`
+    ///    wrapper issues its own `BEGIN` and would error out at runtime
+    ///    (`cannot start a transaction within a transaction`). Examples:
+    ///    [`Self::insert_symbols_in_tx`], [`Self::delete_symbols_in_tx`],
+    ///    [`Self::insert_edges_in_tx`], [`Self::insert_symbol_contents_in_tx`],
+    ///    [`Self::clear_file_data_in_tx`], [`Self::remove_file_in_tx`],
+    ///    [`Self::resolve_edges_in_tx`], [`Self::resolve_edges_scoped_in_tx`].
+    ///
+    /// 2. **Single-statement helpers can be called directly.** They issue one
+    ///    `self.conn.execute(...)` and participate transparently in the active
+    ///    transaction. Examples used by `cartog-indexer`'s Phase 3 today:
+    ///    [`Self::upsert_file`], [`Self::clear_edges_for_file`],
+    ///    [`Self::set_metadata`], [`Self::compute_in_degrees`],
+    ///    [`Self::compute_in_degrees_scoped`], [`Self::invalidate_edges_targeting`].
+    ///    These are tagged with `// tx-safe: single statement` so the contract
+    ///    survives drive-by edits.
+    ///
+    /// # Why `unchecked_transaction` rather than [`rusqlite::Connection::transaction`]
+    ///
+    /// `transaction()` requires `&mut Connection`, which would force every
+    /// caller of `Database` to hold a mutable borrow for the entire pipeline.
+    /// `unchecked_transaction()` works through `&Connection` and produces an
+    /// equivalent [`rusqlite::Transaction`] with the same `DropBehavior::Rollback`
+    /// default — only borrow-check ergonomics differ.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SQLite cannot begin a transaction — typically
+    /// because another transaction is already active on this connection.
+    pub fn begin_indexing_tx(&self) -> Result<rusqlite::Transaction<'_>> {
+        Ok(self.conn.unchecked_transaction()?)
+    }
+
     // ── Metadata ──
 
     /// Retrieve a metadata value by key.
@@ -501,6 +556,8 @@ impl Database {
     }
 
     /// Store a metadata key-value pair (upserts on conflict).
+    ///
+    /// tx-safe: single statement — see [`Self::begin_indexing_tx`].
     pub fn set_metadata(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
@@ -512,6 +569,8 @@ impl Database {
     // ── Files ──
 
     /// Insert or update file metadata.
+    ///
+    /// tx-safe: single statement — see [`Self::begin_indexing_tx`].
     pub fn upsert_file(&self, file: &FileInfo) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO files (path, last_modified, hash, language, num_symbols)
@@ -548,6 +607,8 @@ impl Database {
     }
 
     /// Remove edges only for a file (used by Merkle diff which updates symbols surgically).
+    ///
+    /// tx-safe: single statement — see [`Self::begin_indexing_tx`].
     pub fn clear_edges_for_file(&self, path: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM edges WHERE file_path = ?1", params![path])?;
@@ -557,18 +618,35 @@ impl Database {
     /// Remove all symbols, edges, and RAG data for a file (before re-indexing it).
     pub fn clear_file_data(&self, path: &str) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        self.clear_file_data_in_tx(path)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Like [`Self::clear_file_data`] but assumes the caller already holds an
+    /// open transaction. Used by `cartog-indexer` to wrap the entire Phase 3
+    /// pipeline atomically.
+    pub fn clear_file_data_in_tx(&self, path: &str) -> Result<()> {
         self.clear_rag_data_for_file(path)?;
         self.conn
             .execute("DELETE FROM edges WHERE file_path = ?1", params![path])?;
         self.conn
             .execute("DELETE FROM symbols WHERE file_path = ?1", params![path])?;
-        tx.commit()?;
         Ok(())
     }
 
     /// Remove a file and all its symbols and edges from the index.
     pub fn remove_file(&self, path: &str) -> Result<()> {
-        self.clear_file_data(path)?;
+        let tx = self.conn.unchecked_transaction()?;
+        self.remove_file_in_tx(path)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Like [`Self::remove_file`] but assumes the caller already holds an
+    /// open transaction.
+    pub fn remove_file_in_tx(&self, path: &str) -> Result<()> {
+        self.clear_file_data_in_tx(path)?;
         self.conn
             .execute("DELETE FROM files WHERE path = ?1", params![path])?;
         Ok(())
@@ -604,6 +682,14 @@ impl Database {
     /// Insert or replace multiple symbols in a single transaction.
     pub fn insert_symbols(&self, symbols: &[Symbol]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        self.insert_symbols_in_tx(symbols)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Like [`Self::insert_symbols`] but assumes the caller already holds an
+    /// open transaction.
+    pub fn insert_symbols_in_tx(&self, symbols: &[Symbol]) -> Result<()> {
         let mut stmt = self.conn.prepare_cached(SQL_INSERT_SYMBOL)?;
         for sym in symbols {
             stmt.execute(params![
@@ -624,7 +710,6 @@ impl Database {
                 sym.subtree_hash,
             ])?;
         }
-        tx.commit()?;
         Ok(())
     }
 
@@ -670,6 +755,17 @@ impl Database {
             return Ok(());
         }
         let tx = self.conn.unchecked_transaction()?;
+        self.delete_symbols_in_tx(ids)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Like [`Self::delete_symbols`] but assumes the caller already holds an
+    /// open transaction.
+    pub fn delete_symbols_in_tx(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
         let mut del_out = self
             .conn
             .prepare_cached("DELETE FROM edges WHERE source_id = ?1")?;
@@ -697,13 +793,6 @@ impl Database {
             del_content.execute(params![id])?;
             del_sym.execute(params![id])?;
         }
-        drop(del_out);
-        drop(null_in);
-        drop(del_vec);
-        drop(del_map);
-        drop(del_content);
-        drop(del_sym);
-        tx.commit()?;
         Ok(())
     }
 
@@ -754,6 +843,14 @@ impl Database {
     /// Insert multiple edges in a single transaction.
     pub fn insert_edges(&self, edges: &[Edge]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        self.insert_edges_in_tx(edges)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Like [`Self::insert_edges`] but assumes the caller already holds an
+    /// open transaction.
+    pub fn insert_edges_in_tx(&self, edges: &[Edge]) -> Result<()> {
         let mut stmt = self.conn.prepare_cached(SQL_INSERT_EDGE)?;
         for edge in edges {
             stmt.execute(params![
@@ -765,7 +862,6 @@ impl Database {
                 edge.line,
             ])?;
         }
-        tx.commit()?;
         Ok(())
     }
 
@@ -784,8 +880,16 @@ impl Database {
     /// 5. Unique project-wide match — exactly one symbol with that name globally
     /// 6. Class over constructor — when exactly 2 matches and one is a class, prefer class
     pub fn resolve_edges(&self) -> Result<u32> {
-        let mut total_resolved = 0u32;
+        let tx = self.conn.unchecked_transaction()?;
+        let total = self.resolve_edges_in_tx()?;
+        tx.commit()?;
+        Ok(total)
+    }
 
+    /// Like [`Self::resolve_edges`] but assumes the caller already holds an
+    /// open transaction.
+    pub fn resolve_edges_in_tx(&self) -> Result<u32> {
+        let mut total_resolved = 0u32;
         for _pass in 0..2 {
             let resolved = self.resolve_edges_pass()?;
             if resolved == 0 {
@@ -793,7 +897,6 @@ impl Database {
             }
             total_resolved += resolved;
         }
-
         Ok(total_resolved)
     }
 
@@ -813,10 +916,11 @@ impl Database {
     }
 
     /// 6-tier heuristic resolution for a batch of unresolved edges.
+    ///
+    /// Caller is responsible for transaction wrapping — see the public
+    /// [`Self::resolve_edges`] / [`Self::resolve_edges_scoped`] helpers.
     fn resolve_edge_batch(&self, unresolved: &[(i64, String, String, String)]) -> Result<u32> {
         let mut resolved = 0u32;
-
-        let tx = self.conn.unchecked_transaction()?;
 
         let mut same_file_stmt = self
             .conn
@@ -929,7 +1033,6 @@ impl Database {
             }
         }
 
-        tx.commit()?;
         Ok(resolved)
     }
 
@@ -938,6 +1041,9 @@ impl Database {
     /// In-degree = number of resolved incoming edges (calls, imports, inherits, etc.).
     /// Higher in-degree means the symbol is referenced more across the codebase.
     /// Resets all in-degree values to 0 first, then batch-updates from the edges table.
+    ///
+    /// tx-safe: two unconditional statements participate in any active outer
+    /// transaction — see [`Self::begin_indexing_tx`].
     pub fn compute_in_degrees(&self) -> Result<u32> {
         self.conn.execute("UPDATE symbols SET in_degree = 0", [])?;
 
@@ -966,6 +1072,8 @@ impl Database {
     /// When a file is re-indexed, its symbols may have been renamed/removed.
     /// Edges from *unchanged* files that previously resolved to those symbols
     /// must be cleared so they can be re-resolved against the new symbol set.
+    ///
+    /// tx-safe: single statement — see [`Self::begin_indexing_tx`].
     pub fn invalidate_edges_targeting(
         &self,
         dirty_files: &std::collections::HashSet<String>,
@@ -999,6 +1107,18 @@ impl Database {
         &self,
         dirty_files: &std::collections::HashSet<String>,
     ) -> Result<u32> {
+        let tx = self.conn.unchecked_transaction()?;
+        let total = self.resolve_edges_scoped_in_tx(dirty_files)?;
+        tx.commit()?;
+        Ok(total)
+    }
+
+    /// Like [`Self::resolve_edges_scoped`] but assumes the caller already
+    /// holds an open transaction.
+    pub fn resolve_edges_scoped_in_tx(
+        &self,
+        dirty_files: &std::collections::HashSet<String>,
+    ) -> Result<u32> {
         if dirty_files.is_empty() {
             return Ok(0);
         }
@@ -1006,10 +1126,15 @@ impl Database {
         // only edges from dirty files (freshly extracted) or targeting dirty files
         // (just invalidated) have target_id = NULL.
         // Reuse the same 2-pass resolution.
-        self.resolve_edges()
+        self.resolve_edges_in_tx()
     }
 
     /// Recompute in-degree centrality only for symbols in/around dirty files.
+    ///
+    /// tx-safe: every internal statement participates in any active outer
+    /// transaction — see [`Self::begin_indexing_tx`]. Does NOT open one of
+    /// its own, unlike the batched `*_in_tx` helpers; outside an outer
+    /// transaction the per-file resets are not atomic with the recompute.
     pub fn compute_in_degrees_scoped(
         &self,
         dirty_files: &std::collections::HashSet<String>,
@@ -1499,6 +1624,17 @@ impl Database {
     /// Tuples: `(symbol_id, symbol_name, content, header)`.
     pub fn insert_symbol_contents(&self, items: &[(String, String, String, String)]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        self.insert_symbol_contents_in_tx(items)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Like [`Self::insert_symbol_contents`] but assumes the caller already
+    /// holds an open transaction.
+    pub fn insert_symbol_contents_in_tx(
+        &self,
+        items: &[(String, String, String, String)],
+    ) -> Result<()> {
         let mut stmt = self.conn.prepare_cached(
             "INSERT OR REPLACE INTO symbol_content (symbol_id, content, header, normalized_name)
              VALUES (?1, ?2, ?3, ?4)",
@@ -1507,7 +1643,6 @@ impl Database {
             let normalized = normalize_symbol_name(name);
             stmt.execute(params![symbol_id, content, header, normalized])?;
         }
-        tx.commit()?;
         Ok(())
     }
 
@@ -1865,8 +2000,18 @@ impl Database {
     }
 
     // ── LSP Resolution Helpers ──
+    //
+    // These three helpers (`unresolved_edges`, `find_symbol_at_location`,
+    // `update_edge_target`) are called from `cartog-lsp::lsp_resolve_edges`,
+    // which itself runs inside `index_directory`'s outer indexing transaction
+    // (see [`Self::begin_indexing_tx`]). They MUST remain transaction-free —
+    // any future addition of `unchecked_transaction()` here would re-introduce
+    // the Phase 3 atomicity bug at runtime ("cannot start a transaction
+    // within a transaction").
 
     /// Return all edges with `target_id IS NULL` (unresolved after heuristic pass).
+    ///
+    /// tx-safe: read-only single statement — see note above the section header.
     pub fn unresolved_edges(&self) -> Result<Vec<UnresolvedEdge>> {
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.target_name, e.file_path, e.line
@@ -1888,6 +2033,8 @@ impl Database {
     }
 
     /// Find the tightest-enclosing symbol at a given file + line.
+    ///
+    /// tx-safe: read-only single statement — see the LSP-section header note.
     pub fn find_symbol_at_location(&self, file_path: &str, line: u32) -> Result<Option<String>> {
         let id: Option<String> = self
             .conn
@@ -1904,6 +2051,11 @@ impl Database {
     }
 
     /// Update a single edge's target_id.
+    ///
+    /// tx-safe: single statement — see the LSP-section header note. If you
+    /// ever batch this internally with `unchecked_transaction()`, also update
+    /// `index_directory` so it does not call `lsp_resolve_edges` inside its
+    /// outer transaction.
     pub fn update_edge_target(&self, edge_id: i64, target_id: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE edges SET target_id = ?1 WHERE id = ?2",
@@ -3748,5 +3900,163 @@ mod tests {
             DbError::Open { path, .. } => assert_eq!(path, bad_path),
             other => panic!("expected DbError::Open, got {other:?}"),
         }
+    }
+
+    // ── Phase 3 atomicity: indexing transaction primitive ──
+
+    /// Build a minimal valid Symbol for transactional tests.
+    fn tx_test_symbol(id: &str, file: &str) -> Symbol {
+        Symbol {
+            id: id.to_string(),
+            name: id.to_string(),
+            kind: SymbolKind::Function,
+            file_path: file.to_string(),
+            start_line: 1,
+            end_line: 1,
+            start_byte: 0,
+            end_byte: 0,
+            parent_id: None,
+            signature: None,
+            visibility: Visibility::Public,
+            is_async: false,
+            docstring: None,
+            in_degree: 0,
+            content_hash: Some("h".to_string()),
+            subtree_hash: Some("s".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_indexing_tx_commit_persists_writes() {
+        // Sanity: writes through *_in_tx variants under begin_indexing_tx
+        // must persist after commit().
+        let db = Database::open_memory().unwrap();
+        let sym = tx_test_symbol("a.py:function:foo", "a.py");
+
+        let tx = db.begin_indexing_tx().unwrap();
+        db.insert_symbols_in_tx(std::slice::from_ref(&sym)).unwrap();
+        tx.commit().unwrap();
+
+        let count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "committed write must persist");
+    }
+
+    #[test]
+    fn test_indexing_tx_rollback_drops_writes() {
+        // Phase 3 atomicity: writes through *_in_tx variants must roll back
+        // when the transaction is dropped without commit() — e.g. an `?`
+        // bubbled up an error mid-pipeline, or a panic unwound the stack.
+        let db = Database::open_memory().unwrap();
+        let sym = tx_test_symbol("a.py:function:foo", "a.py");
+
+        {
+            let _tx = db.begin_indexing_tx().unwrap();
+            db.insert_symbols_in_tx(std::slice::from_ref(&sym)).unwrap();
+            // _tx dropped here without commit() — must roll back.
+        }
+
+        let count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "writes must roll back when the indexing transaction is dropped without commit"
+        );
+    }
+
+    #[test]
+    fn test_indexing_tx_partial_failure_rolls_back_full_pipeline() {
+        // Phase 3 atomicity, end-to-end shape: simulate a multi-step pipeline
+        // where step N fails after steps 1..N-1 already wrote. Without an
+        // outer transaction, the prior writes would persist (the original
+        // bug). With begin_indexing_tx wrapping the sequence, dropping `tx`
+        // on the error path rolls every prior write back.
+        let db = Database::open_memory().unwrap();
+
+        // Seed one pre-existing symbol so we can verify it survives the
+        // rollback path (a regression here would also wipe pre-existing
+        // data, which is the worst flavor of the bug).
+        let pre = tx_test_symbol("pre.py:function:keep", "pre.py");
+        db.insert_symbols(std::slice::from_ref(&pre)).unwrap();
+
+        // Run a "Phase 3 lookalike" that fails mid-way. The early `bail!`
+        // means tx.commit() is unreachable; dropping `tx` on the error
+        // path is exactly what we want to exercise.
+        let result: Result<()> = (|| {
+            let _tx = db.begin_indexing_tx()?;
+            // Write a first batch.
+            let batch1 = vec![tx_test_symbol("a.py:function:foo", "a.py")];
+            db.insert_symbols_in_tx(&batch1)?;
+
+            // Simulate a downstream failure after a successful early write.
+            anyhow::bail!("simulated mid-pipeline failure");
+        })();
+        assert!(result.is_err(), "the pipeline must propagate its error");
+
+        // The seed survives, the partial write does not.
+        let names: Vec<String> = db
+            .conn
+            .prepare("SELECT id FROM symbols ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["pre.py:function:keep"],
+            "pre-existing rows must survive; the partial write must roll back"
+        );
+    }
+
+    #[test]
+    fn test_public_wrapper_still_self_commits() {
+        // The public, non-`_in_tx` API must remain usable on its own —
+        // existing callers (mcp server, watch, search, etc.) don't open
+        // transactions and must keep working unchanged.
+        let db = Database::open_memory().unwrap();
+        let sym = tx_test_symbol("a.py:function:foo", "a.py");
+
+        // No outer transaction; the wrapper opens and commits its own.
+        db.insert_symbols(std::slice::from_ref(&sym)).unwrap();
+
+        let count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "public wrapper must persist without an outer tx");
+    }
+
+    #[test]
+    fn test_partial_pipeline_without_outer_tx_persists_writes() {
+        // Discriminator test: documents the *old* behavior. Without an
+        // outer transaction, an error after a successful self-committing
+        // write leaves that write persisted. This is exactly the bug the
+        // outer transaction in `index_directory` fixes. If this assertion
+        // ever flips, it means someone changed the public wrapper's
+        // semantics — and `test_indexing_tx_partial_failure_rolls_back_full_pipeline`
+        // would no longer be discriminating between buggy and fixed states.
+        let db = Database::open_memory().unwrap();
+
+        let result: Result<()> = (|| {
+            // Each call commits independently.
+            let batch1 = vec![tx_test_symbol("a.py:function:foo", "a.py")];
+            db.insert_symbols(&batch1)?;
+            anyhow::bail!("simulated mid-pipeline failure");
+        })();
+        assert!(result.is_err());
+
+        let count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "without an outer transaction, an early write persists despite a later error"
+        );
     }
 }

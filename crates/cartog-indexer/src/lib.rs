@@ -222,7 +222,18 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
         })
         .collect();
 
-    // ── Phase 3: sequential DB writes, preserving walk order ──
+    // ── Phase 3: sequential DB writes inside one transaction ──
+    //
+    // All writes from here through the `last_commit` metadata update participate
+    // in a single transaction. A panic, error, or hard process exit before
+    // `tx.commit()` rolls everything back — the DB never sees a partial Phase 3
+    // state (e.g. symbols updated but `files` row stale, or edges resolved
+    // against a half-rebuilt symbol set).
+    //
+    // Inside the transaction, we use the `*_in_tx` variants of the batch
+    // helpers — the regular versions issue their own `BEGIN` and would fail
+    // here.
+    let tx = db.begin_indexing_tx()?;
     for item in parsed {
         let (rel_path, lang, source, hash, modified, symbols, edges) = match item {
             ParseOutput::Skipped => {
@@ -252,7 +263,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
 
             dirty_files.insert(rel_path.clone());
 
-            db.delete_symbols(&diff.removed)?;
+            db.delete_symbols_in_tx(&diff.removed)?;
             result.symbols_removed += diff.removed.len() as u32;
 
             let mut changed: Vec<cartog_core::Symbol> = Vec::with_capacity(
@@ -261,14 +272,14 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
             changed.extend(diff.added.iter().map(|&i| symbols[i].clone()));
             changed.extend(diff.modified.iter().map(|&i| symbols[i].clone()));
             changed.extend(diff.children_changed.iter().map(|&i| symbols[i].clone()));
-            db.insert_symbols(&changed)?;
+            db.insert_symbols_in_tx(&changed)?;
 
             result.symbols_added += diff.added.len() as u32;
             result.symbols_modified += diff.modified.len() as u32;
             result.symbols_unchanged += diff.unchanged as u32;
 
             db.clear_edges_for_file(&rel_path)?;
-            db.insert_edges(&edges)?;
+            db.insert_edges_in_tx(&edges)?;
             result.edges_added += edges.len() as u32;
 
             let dirty_indices: Vec<usize> = diff
@@ -288,15 +299,15 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
                 })
                 .collect();
             if !contents.is_empty() {
-                db.insert_symbol_contents(&contents)?;
+                db.insert_symbol_contents_in_tx(&contents)?;
             }
         } else {
             // No stored hashes (first index or post-migration): full insert
             dirty_files.insert(rel_path.clone());
-            db.clear_file_data(&rel_path)?;
+            db.clear_file_data_in_tx(&rel_path)?;
 
-            db.insert_symbols(&symbols)?;
-            db.insert_edges(&edges)?;
+            db.insert_symbols_in_tx(&symbols)?;
+            db.insert_edges_in_tx(&edges)?;
 
             result.symbols_added += symbols.len() as u32;
             result.edges_added += edges.len() as u32;
@@ -311,7 +322,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
                 })
                 .collect();
             if !contents.is_empty() {
-                db.insert_symbol_contents(&contents)?;
+                db.insert_symbol_contents_in_tx(&contents)?;
             }
         }
 
@@ -336,25 +347,28 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
     for indexed_path in all_indexed {
         if !current_files.contains(&indexed_path) {
             dirty_files.insert(indexed_path.clone());
-            db.remove_file(&indexed_path)?;
+            db.remove_file_in_tx(&indexed_path)?;
             result.files_removed += 1;
         }
     }
 
     // Resolve edges — scoped to dirty files for incremental, global for force/first-index
     if force || dirty_files.len() == current_files.len() {
-        result.edges_resolved = db.resolve_edges()?;
+        result.edges_resolved = db.resolve_edges_in_tx()?;
         db.compute_in_degrees()?;
     } else if !dirty_files.is_empty() {
         // Invalidate edges from unchanged files that pointed to symbols in dirty files
         // (those symbol IDs may have changed even with stable IDs if a symbol was renamed/removed)
         db.invalidate_edges_targeting(&dirty_files)?;
-        result.edges_resolved = db.resolve_edges_scoped(&dirty_files)?;
+        result.edges_resolved = db.resolve_edges_scoped_in_tx(&dirty_files)?;
         db.compute_in_degrees_scoped(&dirty_files)?;
     }
 
     // LSP-based resolution for edges the heuristic couldn't resolve.
     // Auto-detected when `lsp` feature is compiled in; silently skipped otherwise.
+    // The LSP-side helpers (`unresolved_edges`, `find_symbol_at_location`,
+    // `update_edge_target`) all use single-statement execs that participate in
+    // the outer transaction — no extra plumbing needed.
     #[cfg(feature = "lsp")]
     if lsp {
         result.edges_lsp_resolved = cartog_lsp::lsp_resolve_edges(db, &root, None)?;
@@ -367,6 +381,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
         db.set_metadata("last_commit", &commit)?;
     }
 
+    tx.commit()?;
     Ok(result)
 }
 
@@ -1460,5 +1475,103 @@ We use PostgreSQL with connection pooling via pgbouncer.
             header.contains("Authentication"),
             "header should include section name"
         );
+    }
+
+    /// End-to-end Phase 3 atomicity test.
+    ///
+    /// Drives `index_directory` against a real fixture, then forces the DB to
+    /// run out of pages mid-Phase-3 by capping `max_page_count`. The expected
+    /// outcome: the index call returns `Err`, AND every Phase-3 write that
+    /// happened before the failure has been rolled back. The seed state is
+    /// established before the cap, so it must survive the rollback.
+    ///
+    /// This complements the cartog-db primitive tests (which prove that
+    /// `begin_indexing_tx` rolls back correctly): this test proves that
+    /// `index_directory` actually opens, uses, and rolls back the
+    /// transaction through every code path the real pipeline exercises
+    /// (per-file Merkle diff, deletion sweep, edge resolution, in-degree
+    /// compute, last_commit metadata write).
+    #[test]
+    fn test_index_directory_rolls_back_on_disk_full() {
+        use cartog_core::SymbolKind;
+        use cartog_db::Database;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("project");
+        std::fs::create_dir(&dir).unwrap();
+
+        // Seed file: get into a known indexed state under a generous page budget.
+        std::fs::write(dir.join("seed.py"), "def keep_me():\n    return 1\n").unwrap();
+
+        let db = Database::open_memory().unwrap();
+        index_directory(&db, &dir, true, false).expect("seed index should succeed");
+
+        // Snapshot the seed state so we can assert it is preserved across the
+        // failed run.
+        let seed_outline = db.outline("seed.py").unwrap();
+        let seed_keep_me = seed_outline
+            .iter()
+            .find(|s| s.name == "keep_me")
+            .expect("seed symbol must be present after the first index");
+        let seed_keep_me_id = seed_keep_me.id.clone();
+
+        // Add a second file that the next `index_directory` call will try to
+        // ingest. Combined with a tight page cap, the new symbol/edge/content
+        // writes will hit `SQLITE_FULL` somewhere inside Phase 3.
+        std::fs::write(
+            dir.join("big.py"),
+            // Lots of small symbols: many independent INSERTs, so the page
+            // budget runs out partway through and the outer tx must roll back.
+            (0..200)
+                .map(|i| format!("def fn_{i}():\n    return {i}\n\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+
+        // Cap the DB at a page count that holds the seed comfortably but
+        // cannot fit the second file's worth of symbol/content rows.
+        // The exact value is empirical; on macOS APFS with the default 4 KiB
+        // page size, ~30 pages is enough to seed but not enough to ingest 200
+        // new functions through Phase 3.
+        db.set_max_page_count_for_tests(30).unwrap();
+
+        let result = index_directory(&db, &dir, false, false);
+        assert!(
+            result.is_err(),
+            "Phase 3 must fail when SQLite runs out of pages; got Ok({result:?})"
+        );
+
+        // Lift the cap so post-mortem queries can run.
+        db.set_max_page_count_for_tests(1_000_000).unwrap();
+
+        // Rollback assertions:
+        //
+        // 1. The seed symbol must still be there (a regression that wiped
+        //    pre-existing data is the worst flavor of the original bug).
+        // 2. None of the symbols from the failed file may have leaked through:
+        //    Phase 3 was wrapped in a single transaction, so partial writes
+        //    are rolled back atomically.
+        let seed_outline_after = db.outline("seed.py").unwrap();
+        assert!(
+            seed_outline_after.iter().any(|s| s.id == seed_keep_me_id),
+            "seed symbol must survive the rolled-back run"
+        );
+        let big_outline_after = db.outline("big.py").unwrap();
+        assert!(
+            big_outline_after.is_empty(),
+            "no symbols from the failed Phase 3 may persist; big.py outline: {:?}",
+            big_outline_after
+                .iter()
+                .map(|s| &s.name)
+                .collect::<Vec<_>>()
+        );
+
+        // The seed symbol is a function — a quick sanity check that the kind
+        // wasn't corrupted by partial writes either.
+        let kept = seed_outline_after
+            .iter()
+            .find(|s| s.id == seed_keep_me_id)
+            .unwrap();
+        assert_eq!(kept.kind, SymbolKind::Function);
     }
 }

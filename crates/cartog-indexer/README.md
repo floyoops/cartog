@@ -6,6 +6,8 @@ Code indexing and change detection for cartog.
 
 Walks a directory tree, detects which files changed, extracts symbols and edges via `cartog-languages`, and writes the results to `cartog-db`. Indexes both code files and Markdown documents (`.md`). Uses a multi-tier change detection strategy and Merkle tree hashing for surgical symbol-level updates.
 
+> Architecture overview: [docs/architecture/incremental-indexing.md](../../docs/architecture/incremental-indexing.md). This README focuses on the crate's public API and module layout.
+
 ## How it works
 
 ### Change detection (3 tiers)
