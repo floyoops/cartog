@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.13.1] - 2026-04-21
+## [0.13.2] - 2026-04-28
 
 ### Bug Fixes
 
@@ -41,6 +41,8 @@
 - **plugin**: Use CLAUDE_PLUGIN_ROOT for hook script path ([`0f91692`](https://github.com/jrollin/cartog/commit/0f9169222f547ad99d9c64709edb6fb7e368da02))
 - **plugin**: Remove invalid agents field from manifest ([`a5a6655`](https://github.com/jrollin/cartog/commit/a5a66557cc3f34dfad4bd6d4eb32589bd6dad7be))
 - **languages**: Panic on multi-byte UTF-8 in markdown extractor ([`5d731d6`](https://github.com/jrollin/cartog/commit/5d731d60cf1cbce6307b4a60111cd8eeb0571d71))
+- **db**: Wrap index_directory Phase 3 in a single transaction ([`e7d854b`](https://github.com/jrollin/cartog/commit/e7d854ba87fb9dc40a00a2411e85c88487eccaf1))
+- **db**: Tighten transaction contract docs + e2e rollback test ([`7cf281d`](https://github.com/jrollin/cartog/commit/7cf281da8f0180f5748c85754cccb430759a1fad))
 
 ### Documentation
 
@@ -62,6 +64,7 @@
 - Add editor-integration page (Neovim / VS Code / Emacs / Zed) (#30) ([`86b94de`](https://github.com/jrollin/cartog/commit/86b94de71ae72a97564d7caaeca264c1c88a6ec2))
 - Fix debounce default, add LSP recall caveat, add docs index ([`8a23aaa`](https://github.com/jrollin/cartog/commit/8a23aaaefa8d49c97fd376c53a385b044473f666))
 - Sync post-lsp-default-sweep across README, docs, site, skill ([`e20d523`](https://github.com/jrollin/cartog/commit/e20d523f302877919d095d8ceb1d6a5a5a7ca87e))
+- **architecture**: Add layered incremental-indexing design doc ([`0494056`](https://github.com/jrollin/cartog/commit/0494056396b2a3997f2c42c6f4b47fb39bcf6f03))
 
 ### Features
 
@@ -117,6 +120,7 @@
 - **plugin**: Remove marketplace.json and add metadata to plugin.json ([`3fc95e5`](https://github.com/jrollin/cartog/commit/3fc95e50bdd816d43c8dc02281e832dbf21c78ad))
 - **github**: Add community health files ([`6c247c2`](https://github.com/jrollin/cartog/commit/6c247c282db4b2f5094580425c2fcb2032576e03))
 - **ci**: Add codecov.yml with 1% threshold tolerance ([`7d4af4a`](https://github.com/jrollin/cartog/commit/7d4af4a75f0682a66291c31066a07a692c27220c))
+- **security**: Bump rustls-webpki to 0.103.13 (RUSTSEC-2026-0104) ([`c4e0f0c`](https://github.com/jrollin/cartog/commit/c4e0f0cf448068ee8ac63dfd7a770a08861c4995))
 
 ### Refactor
 
