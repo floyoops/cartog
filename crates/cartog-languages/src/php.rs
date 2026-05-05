@@ -290,6 +290,9 @@ fn extract_top_level(
             "trait_declaration" => {
                 extract_trait(child, source, file_path, ctx, None, None, symbols, edges);
             }
+            "enum_declaration" => {
+                extract_enum(child, source, file_path, ctx, None, None, symbols, edges);
+            }
             "function_definition" => {
                 extract_function(child, source, file_path, ctx, None, None, symbols, edges);
             }
@@ -494,6 +497,69 @@ fn extract_trait(
     if let Some(body) = node.child_by_field_name("body") {
         extract_class_body(
             body, source, file_path, ctx, &sym_id, &trait_qname, symbols, edges,
+        );
+    }
+}
+
+// ── Enum declarations ──
+
+/// Extracts an enum declaration node into an `Enum` symbol along with implementation edges and methods.
+fn extract_enum(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    ctx: &FileContext,
+    parent_id: Option<&str>,
+    parent_qname: Option<&str>,
+    symbols: &mut Vec<Symbol>,
+    edges: &mut Vec<Edge>,
+) {
+    let name = match node.child_by_field_name("name") {
+        Some(n) => node_text(n, source).to_string(),
+        None => return,
+    };
+
+    let start_line = node.start_position().row as u32 + 1;
+    let end_line = node.end_position().row as u32 + 1;
+    let docstring = extract_doc_comment(node, source);
+
+    let sym_id = symbol_id(file_path, "enum", &name, parent_qname);
+    let enum_qname = match parent_qname {
+        Some(pq) => format!("{pq}.{name}"),
+        None => name.clone(),
+    };
+
+    let sym = Symbol::new(
+        name,
+        SymbolKind::Enum,
+        file_path,
+        start_line,
+        end_line,
+        node.start_byte() as u32,
+        node.end_byte() as u32,
+        parent_qname,
+    )
+    .with_parent(parent_id)
+    .with_docstring(docstring);
+    symbols.push(sym);
+
+    for child in node.named_children(&mut node.walk()) {
+        if child.kind() == "class_interface_clause" {
+            for (target, line) in collect_type_names(child, source) {
+                edges.push(Edge::new(
+                    &sym_id,
+                    ctx.resolve(target),
+                    EdgeKind::Implements,
+                    file_path,
+                    line,
+                ));
+            }
+        }
+    }
+
+    if let Some(body) = node.child_by_field_name("body") {
+        extract_class_body(
+            body, source, file_path, ctx, &sym_id, &enum_qname, symbols, edges,
         );
     }
 }
@@ -1279,6 +1345,101 @@ class MyHandler {
     fn test_get_extractor_php() {
         use crate::get_extractor;
         assert!(get_extractor("php").is_some());
+    }
+
+    // ── Enum declarations ──
+
+    #[test]
+    fn test_pure_enum_extracted() {
+        let result = extract(
+            r#"<?php
+enum Suit { case Hearts; case Spades; }
+"#,
+        );
+        assert!(result
+            .symbols
+            .iter()
+            .any(|s| s.name == "Suit" && s.kind == SymbolKind::Enum));
+    }
+
+    #[test]
+    fn test_backed_enum_extracted() {
+        let result = extract(
+            r#"<?php
+enum Status: string { case Active = 'active'; case Inactive = 'inactive'; }
+"#,
+        );
+        assert!(result
+            .symbols
+            .iter()
+            .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
+    }
+
+    #[test]
+    fn test_enum_not_classified_as_class() {
+        let result = extract(
+            r#"<?php
+enum PurchaseOrderStatus: string { case Draft = 'draft'; case Confirmed = 'confirmed'; }
+"#,
+        );
+        assert!(!result
+            .symbols
+            .iter()
+            .any(|s| s.name == "PurchaseOrderStatus" && s.kind == SymbolKind::Class));
+        assert!(result
+            .symbols
+            .iter()
+            .any(|s| s.name == "PurchaseOrderStatus" && s.kind == SymbolKind::Enum));
+    }
+
+    #[test]
+    fn test_enum_implements_edge() {
+        let result = extract(
+            r#"<?php
+use App\Contracts\HasLabel;
+enum Color: string implements HasLabel { case Red = 'red'; }
+"#,
+        );
+        assert!(result
+            .edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Implements && e.target_name == "App\\Contracts\\HasLabel"));
+    }
+
+    #[test]
+    fn test_enum_with_method_extracted() {
+        let result = extract(
+            r#"<?php
+enum Status: string {
+    case Active = 'active';
+
+    public function label(): string {
+        return match($this) {
+            Status::Active => 'Active',
+        };
+    }
+}
+"#,
+        );
+        assert!(result
+            .symbols
+            .iter()
+            .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
+        assert!(result.symbols.iter().any(|s| s.name == "label" && s.kind == SymbolKind::Method));
+    }
+
+    #[test]
+    fn test_enum_in_namespace_extracted() {
+        let result = extract(
+            r#"<?php
+namespace App\Domain\PurchaseOrder;
+enum PurchaseOrderStatus: string { case Draft = 'draft'; }
+"#,
+        );
+        assert!(result
+            .symbols
+            .iter()
+            .any(|s| s.name == "PurchaseOrderStatus" && s.kind == SymbolKind::Enum));
     }
 
     // ── Variable type inference ──
