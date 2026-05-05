@@ -291,7 +291,7 @@ fn extract_top_level(
                 extract_trait(child, source, file_path, ctx, None, None, symbols, edges);
             }
             "function_definition" => {
-                extract_function(child, source, file_path, None, None, symbols, edges);
+                extract_function(child, source, file_path, ctx, None, None, symbols, edges);
             }
             "namespace_definition" => {
                 // brace-style namespace body
@@ -584,8 +584,13 @@ fn extract_method(
         }
     }
 
+    let mut scope = node
+        .child_by_field_name("parameters")
+        .map(|p| build_param_scope(p, source, ctx))
+        .unwrap_or_default();
+
     if let Some(body) = node.child_by_field_name("body") {
-        walk_for_calls(body, source, file_path, &sym_id, edges);
+        walk_for_calls(body, source, file_path, ctx, &sym_id, &mut scope, edges);
     }
 }
 
@@ -641,6 +646,40 @@ fn extract_constructor_injection_edges(
     }
 }
 
+/// Builds a variable-to-FQCN scope map from a parameter list using type hints.
+///
+/// Only simple named types are inferred (not unions or optionals). PHP scalar types
+/// (`string`, `int`, …) and pseudo-types (`self`, `static`, `parent`) are skipped.
+fn build_param_scope(params: Node, source: &str, ctx: &FileContext) -> HashMap<String, String> {
+    let mut scope = HashMap::new();
+    for param in params.named_children(&mut params.walk()) {
+        if !matches!(param.kind(), "simple_parameter" | "property_promotion_parameter") {
+            continue;
+        }
+        let Some(type_node) = param.child_by_field_name("type") else { continue };
+        if type_node.kind() != "named_type" {
+            continue;
+        }
+        let Some(name_node) = type_node.named_children(&mut type_node.walk()).next() else {
+            continue;
+        };
+        let type_name = node_text(name_node, source);
+        if matches!(
+            type_name,
+            "self" | "static" | "parent" | "string" | "int" | "float" | "bool"
+                | "array" | "callable" | "iterable" | "void" | "null" | "never"
+                | "mixed" | "object" | "false" | "true"
+        ) {
+            continue;
+        }
+        if let Some(var_node) = param.child_by_field_name("name") {
+            let var_name = node_text(var_node, source).to_string();
+            scope.insert(var_name, ctx.resolve(type_name));
+        }
+    }
+    scope
+}
+
 // ── Top-level functions ──
 
 /// Extracts a top-level function definition into a `Function` symbol and emits call edges from its body.
@@ -648,6 +687,7 @@ fn extract_function(
     node: Node,
     source: &str,
     file_path: &str,
+    ctx: &FileContext,
     parent_id: Option<&str>,
     parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
@@ -681,19 +721,29 @@ fn extract_function(
     .with_docstring(docstring);
     symbols.push(sym);
 
+    let mut scope = node
+        .child_by_field_name("parameters")
+        .map(|p| build_param_scope(p, source, ctx))
+        .unwrap_or_default();
+
     if let Some(body) = node.child_by_field_name("body") {
-        walk_for_calls(body, source, file_path, &sym_id, edges);
+        walk_for_calls(body, source, file_path, ctx, &sym_id, &mut scope, edges);
     }
 }
 
 // ── Call graph traversal ──
 
 /// Walks `node`'s subtree and emits `Calls`/`References` edges for every call and object-creation expression found.
+///
+/// `scope` is pre-seeded with typed parameters and updated inline as `$x = new Foo()` assignments
+/// are encountered, enabling qualified call targets like `"Foo.method"` instead of `"method"`.
 fn walk_for_calls(
     node: Node,
     source: &str,
     file_path: &str,
+    ctx: &FileContext,
     context_id: &str,
+    scope: &mut HashMap<String, String>,
     edges: &mut Vec<Edge>,
 ) {
     let mut cursor = node.walk();
@@ -702,6 +752,28 @@ fn walk_for_calls(
         let current = cursor.node();
 
         match current.kind() {
+            "assignment_expression" => {
+                // Infer $x = new Foo() → scope["$x"] = FQCN(Foo)
+                // Collect named children (skips the literal "=" token) into a Vec
+                // to avoid borrow conflicts with the outer cursor.
+                let named: Vec<_> = {
+                    let mut w = current.walk();
+                    current.named_children(&mut w).collect()
+                };
+                if named.len() == 2 && named[1].kind() == "object_creation_expression" {
+                    let mut oce_walk = named[1].walk();
+                    let class_node = named[1]
+                        .named_children(&mut oce_walk)
+                        .find(|n| matches!(n.kind(), "name" | "qualified_name"));
+                    if let Some(class_node) = class_node {
+                        let var_name = node_text(named[0], source);
+                        let class_name = node_text(class_node, source);
+                        if var_name.starts_with('$') && !class_name.is_empty() {
+                            scope.insert(var_name.to_string(), ctx.resolve(class_name));
+                        }
+                    }
+                }
+            }
             "function_call_expression" => {
                 if let Some(fn_node) = current.child_by_field_name("function") {
                     let callee = node_text(fn_node, source);
@@ -717,12 +789,20 @@ fn walk_for_calls(
                 }
             }
             "member_call_expression" => {
-                if let Some(name_node) = current.child_by_field_name("name") {
+                if let (Some(obj_node), Some(name_node)) = (
+                    current.child_by_field_name("object"),
+                    current.child_by_field_name("name"),
+                ) {
                     let method_name = node_text(name_node, source);
                     if !method_name.is_empty() {
+                        let obj_text = node_text(obj_node, source);
+                        let target = scope
+                            .get(obj_text)
+                            .map(|fqcn| format!("{}.{}", fqcn, method_name))
+                            .unwrap_or_else(|| method_name.to_string());
                         edges.push(Edge::new(
                             context_id,
-                            method_name,
+                            target,
                             EdgeKind::Calls,
                             file_path,
                             current.start_position().row as u32 + 1,
@@ -745,12 +825,16 @@ fn walk_for_calls(
                 }
             }
             "object_creation_expression" => {
-                if let Some(class_node) = current.child_by_field_name("class_name") {
+                let mut oce_walk = current.walk();
+                let class_node = current
+                    .named_children(&mut oce_walk)
+                    .find(|n| matches!(n.kind(), "name" | "qualified_name"));
+                if let Some(class_node) = class_node {
                     let class_name = node_text(class_node, source);
                     if !class_name.is_empty() {
                         edges.push(Edge::new(
                             context_id,
-                            class_name,
+                            ctx.resolve(class_name),
                             EdgeKind::References,
                             file_path,
                             current.start_position().row as u32 + 1,
@@ -1195,5 +1279,93 @@ class MyHandler {
     fn test_get_extractor_php() {
         use crate::get_extractor;
         assert!(get_extractor("php").is_some());
+    }
+
+    // ── Variable type inference ──
+
+    #[test]
+    fn test_infers_type_from_new_expression() {
+        let result = extract(
+            r#"<?php
+use App\Repository\UserRepository;
+
+class Service {
+    public function handle(): void {
+        $repo = new UserRepository();
+        $repo->save($entity);
+    }
+}
+"#,
+        );
+        assert!(
+            result.edges.iter().any(|e| {
+                e.kind == EdgeKind::Calls
+                    && e.target_name == "App\\Repository\\UserRepository.save"
+            }),
+            "expected qualified Calls edge; got: {:?}",
+            result.edges.iter().filter(|e| e.kind == EdgeKind::Calls).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_infers_type_from_typed_parameter() {
+        let result = extract(
+            r#"<?php
+use App\Repository\UserRepository;
+
+function handle(UserRepository $repo): void {
+    $repo->save($entity);
+}
+"#,
+        );
+        assert!(result.edges.iter().any(|e| {
+            e.kind == EdgeKind::Calls
+                && e.target_name == "App\\Repository\\UserRepository.save"
+        }));
+    }
+
+    #[test]
+    fn test_unresolved_variable_falls_back_to_short_name() {
+        let result = extract(
+            r#"<?php
+class Service {
+    public function handle(): void {
+        $unknown->doSomething();
+    }
+}
+"#,
+        );
+        // No type known → unqualified edge preserved
+        assert!(result.edges.iter().any(|e| {
+            e.kind == EdgeKind::Calls && e.target_name == "doSomething"
+        }));
+        assert!(!result.edges.iter().any(|e| e.target_name.contains('.')));
+    }
+
+    #[test]
+    fn test_multiple_vars_inferred_independently() {
+        let result = extract(
+            r#"<?php
+use App\Repo\PostRepo;
+use App\Repo\TagRepo;
+
+class Publisher {
+    public function run(): void {
+        $posts = new PostRepo();
+        $tags  = new TagRepo();
+        $posts->findAll();
+        $tags->findAll();
+    }
+}
+"#,
+        );
+        let calls: Vec<&str> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Calls)
+            .map(|e| e.target_name.as_str())
+            .collect();
+        assert!(calls.contains(&"App\\Repo\\PostRepo.findAll"));
+        assert!(calls.contains(&"App\\Repo\\TagRepo.findAll"));
     }
 }
