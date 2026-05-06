@@ -54,9 +54,7 @@ fn is_false(b: &bool) -> bool {
 /// sandboxed environment with neither `$HOME` nor `%USERPROFILE%`).
 pub fn default_state_dir() -> Option<PathBuf> {
     let proj = ProjectDirs::from("io", "cartog", "cartog")?;
-    // On Linux, `state_dir()` returns `$XDG_STATE_HOME/cartog`. macOS and
-    // Windows do not distinguish state from data-local, so fall back to
-    // `data_local_dir()` there.
+    // state_dir is Linux-only; macOS/Windows fall back to data_local_dir.
     Some(
         proj.state_dir()
             .map(Path::to_path_buf)
@@ -79,9 +77,11 @@ impl State {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
             Err(e) => {
-                eprintln!(
-                    "cartog: warning: failed to read state file {}: {e}",
-                    path.display()
+                // tracing, not eprintln: avoid every-command stderr noise.
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to read cartog state file; using defaults"
                 );
                 return Self::default();
             }
@@ -89,9 +89,10 @@ impl State {
         match toml::from_str::<State>(&text) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!(
-                    "cartog: warning: state file {} is malformed, ignoring: {e}",
-                    path.display()
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "cartog state file is malformed; using defaults"
                 );
                 Self::default()
             }
@@ -111,8 +112,7 @@ impl State {
                 format!("failed to serialise state: {e}"),
             )
         })?;
-        // Sibling temp file in the same directory guarantees the rename is
-        // an atomic in-filesystem move, not a cross-device copy.
+        // Sibling tmp keeps the rename within one filesystem (no EXDEV).
         let tmp = match path.file_name() {
             Some(name) => path.with_file_name(format!(".{}.tmp", name.to_string_lossy())),
             None => {

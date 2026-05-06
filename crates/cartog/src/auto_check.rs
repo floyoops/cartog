@@ -67,16 +67,13 @@ pub fn should_check(input: &ShouldCheckInput<'_>) -> bool {
     if matches!(input.mode, CheckMode::Always) {
         return true;
     }
-    // Daily: only fire when no check has happened in the past 24h.
     match input.last_check.and_then(parse_rfc3339_secs) {
         Some(last_secs) => match input.now.duration_since(SystemTime::UNIX_EPOCH) {
             Ok(now_secs) => {
                 now_secs.saturating_sub(Duration::from_secs(last_secs)) >= DAILY_INTERVAL
             }
-            // Pre-epoch clock — treat as "no record", check anyway.
             Err(_) => true,
         },
-        // No prior record (or unparseable) — first run, definitely check.
         None => true,
     }
 }
@@ -172,6 +169,75 @@ fn days_since_epoch(year: u64, month: u64, day: u64) -> Option<u64> {
 
 fn is_leap(year: u32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+// ── post-command epilogue glue ────────────────────────────────────────
+
+/// Inputs needed to decide whether to fire the daily auto-check at the
+/// end of `main`. All ambient signals (env vars, TTY, state file path)
+/// are passed in explicitly so the binary can read them once and tests
+/// can exercise the glue without fighting global state.
+#[derive(Debug)]
+pub struct MaybeSpawnInput<'a> {
+    pub command_kind: CommandKind,
+    pub stdout_is_tty: bool,
+    /// Raw value of `CARTOG_NO_UPDATE_CHECK` (any non-empty value disables).
+    pub disabled_env: Option<&'a str>,
+    /// Raw value of `CARTOG_UPDATE_CHECK` (`never`/`daily`/`always`).
+    pub mode_env: Option<&'a str>,
+    /// Resolved `state.toml` path, or `None` if no state directory could
+    /// be determined (sandboxed env). Without a state path the worker has
+    /// nowhere to persist the result, so the spawn is suppressed —
+    /// otherwise every invocation would re-fire the check (no `last_check`
+    /// record to gate on) and hammer the GitHub API.
+    pub state_path: Option<&'a std::path::Path>,
+    /// API URL for the latest-release endpoint. Tests inject a localhost
+    /// stub here; production passes the real GitHub URL.
+    pub api_url: &'a str,
+    pub current_version: &'a str,
+    /// Wall-clock time used for the 24-hour interval gate only. The
+    /// timestamp eventually written into `state.toml` by the worker is
+    /// captured at write time, not from this field.
+    pub now: SystemTime,
+}
+
+/// Post-command epilogue: consult the gating predicate and, if all signals
+/// agree, spawn the detached background check. Returns `true` iff a
+/// thread was spawned.
+///
+/// Cheap gates (env, mode, command kind, TTY) short-circuit before the
+/// `state.toml` read so quick commands on non-TTY stdout pay zero I/O.
+pub fn maybe_spawn(input: MaybeSpawnInput<'_>) -> bool {
+    let disabled = parse_disabled_env(input.disabled_env);
+    let mode = parse_check_mode(input.mode_env);
+    if disabled
+        || matches!(mode, CheckMode::Never)
+        || matches!(input.command_kind, CommandKind::LongLived)
+        || !input.stdout_is_tty
+    {
+        return false;
+    }
+    let Some(state_path) = input.state_path else {
+        return false;
+    };
+    let last_check = State::load_from(state_path).last_update_check;
+    let predicate_input = ShouldCheckInput {
+        command_kind: input.command_kind,
+        stdout_is_tty: input.stdout_is_tty,
+        disabled_env: disabled,
+        mode,
+        last_check: last_check.as_deref(),
+        now: input.now,
+    };
+    if !should_check(&predicate_input) {
+        return false;
+    }
+    spawn_check(
+        input.api_url.to_string(),
+        Some(state_path.to_path_buf()),
+        input.current_version.to_string(),
+    );
+    true
 }
 
 // ── background fetch + state write ────────────────────────────────────

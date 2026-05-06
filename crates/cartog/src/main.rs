@@ -1,13 +1,50 @@
 mod cli;
 mod commands;
 mod config;
+use cartog::auto_check::{self, CommandKind, MaybeSpawnInput};
 use cartog::state;
 
 use anyhow::Result;
 use cartog_mcp as mcp;
 use clap::Parser;
+use std::io::IsTerminal;
+use std::time::SystemTime;
 
 use cli::{Cli, Command, RagCommand, SelfCommand};
+
+/// Public-default GitHub latest-release endpoint for the daily background
+/// check. Override via `CARTOG_GITHUB_API_URL` (used by integration tests).
+const DEFAULT_GITHUB_LATEST_URL: &str =
+    "https://api.github.com/repos/jrollin/cartog/releases/latest";
+
+/// Long-lived commands (`serve`, `watch`) skip the auto-check — they run
+/// for hours and the user never sees a hint printed at the *start* anyway.
+fn classify_command(cmd: &Command) -> CommandKind {
+    match cmd {
+        Command::Serve { .. } | Command::Watch { .. } => CommandKind::LongLived,
+        _ => CommandKind::Quick,
+    }
+}
+
+fn run_auto_check_epilogue(command_kind: CommandKind) {
+    let api_url = std::env::var("CARTOG_GITHUB_API_URL")
+        .unwrap_or_else(|_| DEFAULT_GITHUB_LATEST_URL.to_string());
+    let state_path = state::default_state_file();
+    let disabled_env = std::env::var("CARTOG_NO_UPDATE_CHECK").ok();
+    let mode_env = std::env::var("CARTOG_UPDATE_CHECK").ok();
+    let stdout_is_tty = std::io::stdout().is_terminal();
+
+    auto_check::maybe_spawn(MaybeSpawnInput {
+        command_kind,
+        stdout_is_tty,
+        disabled_env: disabled_env.as_deref(),
+        mode_env: mode_env.as_deref(),
+        state_path: state_path.as_deref(),
+        api_url: &api_url,
+        current_version: env!("CARGO_PKG_VERSION"),
+        now: SystemTime::now(),
+    });
+}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -59,7 +96,10 @@ fn main() -> Result<()> {
     // Token budget only applies to human-readable output
     let token_budget = if cli.json { None } else { cli.tokens };
 
-    match cli.command {
+    // Classify before the match consumes cli.command.
+    let command_kind = classify_command(&cli.command);
+
+    let result = match cli.command {
         Command::Index {
             path,
             force,
@@ -181,5 +221,9 @@ fn main() -> Result<()> {
             SelfCommand::Version { json } => commands::cmd_self_version(json),
             SelfCommand::Rollback => commands::cmd_self_rollback(),
         },
-    }
+    };
+
+    run_auto_check_epilogue(command_kind);
+
+    result
 }

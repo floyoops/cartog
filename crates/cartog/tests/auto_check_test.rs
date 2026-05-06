@@ -1,17 +1,12 @@
-//! Integration smoke tests for the auto-check predicate.
-//!
-//! The bulk of `should_check` coverage lives as unit tests in the module
-//! itself. This file just confirms the predicate is reachable through the
-//! cartog library facade and exercises a couple of representative cases —
-//! enough that the verify command (`--test auto_check_test should_check`)
-//! has something to run.
+//! Integration smoke tests for the auto-check predicate and background spawn.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::{Duration, Instant, SystemTime};
 
 use cartog::auto_check::{
-    run_check_once, should_check, spawn_check, CheckMode, CommandKind, ShouldCheckInput,
+    maybe_spawn, run_check_once, should_check, spawn_check, CheckMode, CommandKind,
+    MaybeSpawnInput, ShouldCheckInput,
 };
 use cartog::state::State;
 
@@ -47,9 +42,7 @@ fn should_check_serve_command_blocked_via_lib_facade() {
 
 // ── spawn_check / run_check_once ──────────────────────────────────────
 
-/// Stand up a localhost HTTP server that serves a single canned 200 OK
-/// response and exits. Same shape as the helper in `self_update_test.rs`,
-/// duplicated here to keep the integration test crates independent.
+/// Localhost HTTP server serving one canned 200 OK then exiting.
 fn spawn_canned_github_response(json_body: String) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
     let port = listener.local_addr().unwrap().port();
@@ -159,6 +152,133 @@ fn spawn_check_run_once_skips_state_save_when_path_is_none() {
     let url = spawn_canned_github_response(r#"{"tag_name":"v999.0.0"}"#.to_string());
     // Should still succeed; just skips the state write.
     run_check_once(&url, None, env!("CARGO_PKG_VERSION")).expect("check with no state path");
+}
+
+// ── main_epilogue (maybe_spawn) ───────────────────────────────────────
+
+fn epilogue_input<'a>(state_path: &'a std::path::Path, api_url: &'a str) -> MaybeSpawnInput<'a> {
+    MaybeSpawnInput {
+        command_kind: CommandKind::Quick,
+        stdout_is_tty: true,
+        disabled_env: None,
+        mode_env: None,
+        state_path: Some(state_path),
+        api_url,
+        current_version: env!("CARGO_PKG_VERSION"),
+        now: now(),
+    }
+}
+
+#[test]
+fn main_epilogue_spawns_check_when_signals_allow() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = dir.path().join("state.toml");
+    let url = spawn_canned_github_response(r#"{"tag_name":"v999.0.0"}"#.to_string());
+
+    let spawned = maybe_spawn(epilogue_input(&state_path, &url));
+
+    assert!(spawned, "all signals agree: a check thread must be spawned");
+    assert!(
+        wait_for(|| state_path.exists(), Duration::from_secs(2)),
+        "background thread should have produced state.toml"
+    );
+}
+
+#[test]
+fn main_epilogue_skips_for_long_lived_command() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = dir.path().join("state.toml");
+    let mut input = epilogue_input(&state_path, "http://127.0.0.1:1/");
+    input.command_kind = CommandKind::LongLived;
+
+    let spawned = maybe_spawn(input);
+
+    assert!(!spawned, "serve/watch must never auto-check");
+    assert!(
+        !state_path.exists(),
+        "no state file should be written when no spawn happens"
+    );
+}
+
+#[test]
+fn main_epilogue_skips_when_disabled_env_set() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = dir.path().join("state.toml");
+    let mut input = epilogue_input(&state_path, "http://127.0.0.1:1/");
+    input.disabled_env = Some("1");
+
+    let spawned = maybe_spawn(input);
+
+    assert!(!spawned, "CARTOG_NO_UPDATE_CHECK=1 must suppress the spawn");
+    assert!(!state_path.exists());
+}
+
+#[test]
+fn main_epilogue_skips_when_stdout_is_not_tty() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = dir.path().join("state.toml");
+    let mut input = epilogue_input(&state_path, "http://127.0.0.1:1/");
+    input.stdout_is_tty = false;
+
+    let spawned = maybe_spawn(input);
+
+    assert!(
+        !spawned,
+        "non-TTY stdout must suppress the spawn (CI, pipes)"
+    );
+    assert!(!state_path.exists());
+}
+
+#[test]
+fn main_epilogue_skips_when_mode_is_never() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = dir.path().join("state.toml");
+    let mut input = epilogue_input(&state_path, "http://127.0.0.1:1/");
+    input.mode_env = Some("never");
+
+    let spawned = maybe_spawn(input);
+
+    assert!(
+        !spawned,
+        "CARTOG_UPDATE_CHECK=never must suppress the spawn"
+    );
+    assert!(!state_path.exists());
+}
+
+#[test]
+fn main_epilogue_skips_when_state_path_unavailable() {
+    let mut input = epilogue_input(
+        std::path::Path::new("/dev/null/unused"),
+        "http://127.0.0.1:1/",
+    );
+    input.state_path = None;
+
+    let spawned = maybe_spawn(input);
+
+    assert!(!spawned, "no state path → no spawn (nothing to persist)");
+}
+
+#[test]
+fn main_epilogue_skips_when_recent_check_within_24h() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = dir.path().join("state.toml");
+    // last_update_check = 1h before `now` (2024-01-01T00:00:00Z fixed in helper).
+    State {
+        last_update_check: Some("2023-12-31T23:00:00Z".to_string()),
+        ..Default::default()
+    }
+    .save_to(&state_path)
+    .expect("seed state");
+    let original = std::fs::read_to_string(&state_path).expect("read seeded state");
+
+    let spawned = maybe_spawn(epilogue_input(&state_path, "http://127.0.0.1:1/"));
+
+    assert!(
+        !spawned,
+        "daily mode must respect the 24h interval — no spawn so soon"
+    );
+    let after = std::fs::read_to_string(&state_path).expect("re-read state");
+    assert_eq!(after, original, "no spawn must not mutate state");
 }
 
 #[test]
