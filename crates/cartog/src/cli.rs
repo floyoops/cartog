@@ -243,6 +243,10 @@ pub enum Command {
     #[command(subcommand)]
     Rag(RagCommand),
 
+    /// Manage the cartog installation: upgrade, inspect, roll back
+    #[command(name = "self", subcommand)]
+    Self_(SelfCommand),
+
     /// Generate shell completions for bash, zsh, fish, elvish, or powershell.
     ///
     /// Example: `cartog completions bash > ~/.local/share/bash-completion/completions/cartog`
@@ -288,4 +292,33 @@ pub enum RagCommand {
         #[arg(long, default_value = "10")]
         limit: u32,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SelfCommand {
+    /// Upgrade cartog in place (or check for an update with --check)
+    Update {
+        /// Report whether an update is available without modifying anything.
+        /// Exit codes: 0 up to date, 1 update available, 2 network/parse error.
+        #[arg(long)]
+        check: bool,
+
+        /// Suppress all output; the exit code is the sole signal.
+        #[arg(long)]
+        quiet: bool,
+
+        /// Emit machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show installed version, target triple, install source, and last check time
+    Version {
+        /// Emit machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Restore the previous binary saved at `<bin>.old`
+    Rollback,
 }

@@ -1415,6 +1415,25 @@ pub fn cmd_watch(
     watch::run_watch(config, &db_path_str)
 }
 
+// ── self-update subcommand handlers ───────────────────────────────────
+//
+// These are stubs wired into the dispatch in `main.rs` and filled in by
+// later self-update tasks. Keeping them here (rather than in a sibling
+// module) lets the CLI compile end-to-end while the real implementations
+// land incrementally.
+
+pub fn cmd_self_update(_check: bool, _quiet: bool, _json: bool) -> Result<()> {
+    anyhow::bail!("cartog self update: not yet implemented")
+}
+
+pub fn cmd_self_version(_json: bool) -> Result<()> {
+    anyhow::bail!("cartog self version: not yet implemented")
+}
+
+pub fn cmd_self_rollback() -> Result<()> {
+    anyhow::bail!("cartog self rollback: not yet implemented")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,7 +1,7 @@
 //! Persistent CLI state — last update check, last known latest version, etc.
 //!
 //! State lives in an XDG-compliant per-platform directory resolved via the
-//! `directories` crate (see TD-3 in `docs/features/self-update/design.md`):
+//! `directories` crate:
 //!
 //! - Linux:   `$XDG_STATE_HOME/cartog/state.toml` (typically `~/.local/state/cartog/`)
 //! - macOS:   `~/Library/Application Support/cartog/state.toml`
@@ -55,7 +55,7 @@ pub fn default_path() -> Option<PathBuf> {
     let proj = ProjectDirs::from("io", "cartog", "cartog")?;
     // On Linux, `state_dir()` returns `$XDG_STATE_HOME/cartog`. macOS and
     // Windows do not distinguish state from data-local, so fall back to
-    // `data_local_dir()` there (matches TD-3).
+    // `data_local_dir()` there.
     let dir = proj
         .state_dir()
         .map(Path::to_path_buf)
@@ -171,7 +171,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("state.toml");
         // A future schema version may add fields; old binaries must keep
-        // working (TD-3 forward-compatibility).
+        // working — forward-compatibility.
         std::fs::write(
             &path,
             "last_known_latest = \"0.15.0\"\nfuture_field = \"hello\"\n",

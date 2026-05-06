@@ -1,7 +1,6 @@
 mod cli;
 mod commands;
 mod config;
-// Wired into commands by T-5/T-10 (`self version`, auto-check).
 #[allow(dead_code)]
 mod state;
 
@@ -9,7 +8,7 @@ use anyhow::Result;
 use cartog_mcp as mcp;
 use clap::Parser;
 
-use cli::{Cli, Command, RagCommand};
+use cli::{Cli, Command, RagCommand, SelfCommand};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -173,5 +172,12 @@ fn main() -> Result<()> {
                 .render(&mut std::io::stdout())
                 .map_err(Into::into)
         }
+        Command::Self_(sub) => match sub {
+            SelfCommand::Update { check, quiet, json } => {
+                commands::cmd_self_update(check, quiet, json)
+            }
+            SelfCommand::Version { json } => commands::cmd_self_version(json),
+            SelfCommand::Rollback => commands::cmd_self_rollback(),
+        },
     }
 }
