@@ -30,6 +30,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 self_update = { workspace = true }
 directories = { workspace = true }
+reqwest = { workspace = true }
 
 [features]
 default = ["lsp"]

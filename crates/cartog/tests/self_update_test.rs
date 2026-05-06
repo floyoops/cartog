@@ -3,8 +3,11 @@
 //! Each test invokes the real binary built by cargo (`CARGO_BIN_EXE_cartog`)
 //! as a subprocess. Tests that touch the on-disk state file run in a
 //! temporary $HOME / $XDG_STATE_HOME so they cannot pollute the developer's
-//! actual cartog state.
+//! actual cartog state. Network calls are redirected to a localhost
+//! TcpListener via `CARTOG_GITHUB_API_URL`.
 
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -153,5 +156,219 @@ fn self_version_reports_existing_check_timestamp() {
         parsed["last_update_check"].as_str(),
         Some("2026-01-15T10:00:00Z"),
         "did not pick up seeded timestamp at {state_file:?} from {stdout}"
+    );
+}
+
+// ── self update --check ───────────────────────────────────────────────
+
+/// Spawn a one-shot HTTP server bound to localhost that serves a single
+/// canned 200 OK response, then exits. Returns the URL the server is
+/// listening on. Used to mock the GitHub releases endpoint without taking
+/// a dep on a real HTTP mocking crate.
+fn spawn_canned_github_response(json_body: String) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            // Drain the request bytes — we don't care what was asked, only
+            // that the client got a parseable response.
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let body_bytes = json_body.as_bytes();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body_bytes.len(),
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body_bytes);
+            let _ = stream.flush();
+        }
+    });
+    format!("http://127.0.0.1:{port}/")
+}
+
+fn spawn_500_github_response() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let _ = stream
+                .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = stream.flush();
+        }
+    });
+    format!("http://127.0.0.1:{port}/")
+}
+
+fn run_self_update_check(args: &[&str], api_url: &str) -> std::process::Output {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    Command::new(cartog_bin())
+        .arg("self")
+        .arg("update")
+        .arg("--check")
+        .args(args)
+        .env("HOME", dir.path())
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("XDG_DATA_HOME", dir.path().join("data"))
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("CARTOG_GITHUB_API_URL", api_url)
+        .env_remove("CARGO_HOME")
+        .output()
+        .expect("failed to spawn cartog")
+}
+
+#[test]
+fn self_update_check_reports_outdated_with_exit_code_1() {
+    // Pretend GitHub is on a much newer version than the running binary.
+    let url = spawn_canned_github_response(r#"{"tag_name":"v999.0.0"}"#.to_string());
+    let out = run_self_update_check(&[], &url);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "expected exit 1 (outdated); stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains("update available") && stdout.contains("999.0.0"),
+        "unexpected stdout: {stdout}"
+    );
+}
+
+#[test]
+fn self_update_check_reports_up_to_date_with_exit_code_0() {
+    // Pretend GitHub is on a strictly older version than the running binary.
+    let url = spawn_canned_github_response(r#"{"tag_name":"v0.0.1"}"#.to_string());
+    let out = run_self_update_check(&[], &url);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "expected exit 0 (up to date); stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("up to date"), "unexpected stdout: {stdout}");
+}
+
+#[test]
+fn self_update_check_quiet_suppresses_output() {
+    let url = spawn_canned_github_response(r#"{"tag_name":"v999.0.0"}"#.to_string());
+    let out = run_self_update_check(&["--quiet"], &url);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        out.stdout.is_empty(),
+        "stdout should be empty in --quiet mode, got {:?}",
+        String::from_utf8_lossy(&out.stdout),
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "stderr should be empty in --quiet mode, got {:?}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+#[test]
+fn self_update_check_json_emits_required_keys() {
+    let url = spawn_canned_github_response(r#"{"tag_name":"v999.0.0"}"#.to_string());
+    let out = run_self_update_check(&["--json"], &url);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON {stdout:?}: {e}"));
+    let obj = parsed.as_object().expect("JSON object");
+    assert_eq!(
+        obj.get("current").and_then(|v| v.as_str()),
+        Some(env!("CARGO_PKG_VERSION")),
+    );
+    assert_eq!(obj.get("latest").and_then(|v| v.as_str()), Some("999.0.0"),);
+    assert_eq!(obj.get("outdated").and_then(|v| v.as_bool()), Some(true));
+}
+
+#[test]
+fn self_update_check_network_error_exits_2() {
+    // 500 from GitHub — surfaced as a network/parse failure, exit 2.
+    let url = spawn_500_github_response();
+    let out = run_self_update_check(&[], &url);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "expected exit 2 (network/parse error); stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+#[test]
+fn self_update_check_json_failure_uses_unified_schema() {
+    // On failure, the JSON payload must keep the same top-level keys as on
+    // success (current, latest, outdated) plus an `error` field. `latest`
+    // and `outdated` are null so consumers can detect failure without
+    // switching schemas.
+    let url = spawn_500_github_response();
+    let out = run_self_update_check(&["--json"], &url);
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON {stdout:?}: {e}"));
+    let obj = parsed.as_object().expect("JSON object");
+    assert_eq!(
+        obj.get("current").and_then(|v| v.as_str()),
+        Some(env!("CARGO_PKG_VERSION")),
+    );
+    assert!(
+        obj.get("error").and_then(|v| v.as_str()).is_some(),
+        "error field missing or non-string in {stdout}"
+    );
+    // `latest` / `outdated` are intentionally absent (skipped) on failure.
+    assert!(
+        !obj.contains_key("latest") || obj["latest"].is_null(),
+        "latest must be null/absent on failure: {stdout}",
+    );
+    assert!(
+        !obj.contains_key("outdated") || obj["outdated"].is_null(),
+        "outdated must be null/absent on failure: {stdout}",
+    );
+}
+
+#[test]
+fn self_update_check_does_not_write_state_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let url = spawn_canned_github_response(r#"{"tag_name":"v999.0.0"}"#.to_string());
+    let _ = Command::new(cartog_bin())
+        .arg("self")
+        .arg("update")
+        .arg("--check")
+        .arg("--quiet")
+        .env("HOME", dir.path())
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("XDG_DATA_HOME", dir.path().join("data"))
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("CARTOG_GITHUB_API_URL", &url)
+        .env_remove("CARGO_HOME")
+        .output()
+        .unwrap();
+
+    // Walk the entire temp dir; --check must not have created a state.toml.
+    fn has_state_file(dir: &std::path::Path) -> bool {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return false,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.file_name().and_then(|n| n.to_str()) == Some("state.toml") {
+                return true;
+            }
+            if path.is_dir() && has_state_file(&path) {
+                return true;
+            }
+        }
+        false
+    }
+    assert!(
+        !has_state_file(dir.path()),
+        "--check must not write state.toml anywhere under HOME",
     );
 }

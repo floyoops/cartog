@@ -224,6 +224,7 @@ dependencies = [
  "clap_mangen",
  "criterion",
  "directories",
+ "reqwest",
  "self_update",
  "serde",
  "serde_json",
