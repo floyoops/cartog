@@ -7,6 +7,7 @@
 //! delegate to the pure helpers.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Result;
 use serde::Serialize;
@@ -568,11 +569,24 @@ fn perform_upgrade(
         .to_dest(&current_bin)
         .map_err(|e| UpgradeError::Filesystem(format!("atomic swap failed: {e}")))?;
 
-    if let Err(e) = smoke_test(&current_bin) {
-        let _ = std::fs::rename(&backup_path, &current_bin);
-        return Err(UpgradeError::Filesystem(format!(
-            "new binary failed smoke test ({e}); previous binary restored"
-        )));
+    if let Err(smoke_err) = smoke_test(&current_bin) {
+        match std::fs::rename(&backup_path, &current_bin) {
+            Ok(()) => {
+                return Err(UpgradeError::Filesystem(format!(
+                    "new binary failed smoke test ({smoke_err}); previous binary restored"
+                )));
+            }
+            Err(restore_err) => {
+                // The new binary is broken AND we could not restore the old one.
+                // The user must intervene manually. Be explicit about both failures.
+                return Err(UpgradeError::Filesystem(format!(
+                    "new binary failed smoke test ({smoke_err}) AND restore of {} -> {} \
+                     also failed ({restore_err}); manually rename the .old back",
+                    backup_path.display(),
+                    current_bin.display(),
+                )));
+            }
+        }
     }
 
     if let Some(state_path) = state::default_state_file() {
@@ -721,12 +735,39 @@ fn http_get_text(url: &str) -> Result<String> {
     Ok(response.text()?)
 }
 
+/// Hard ceiling on how long we wait for the new binary's `--version` to
+/// exit. A corrupt-but-not-crashing binary that hangs on startup would
+/// otherwise hang `cartog self update` indefinitely with the swap
+/// already done; the timeout lets the restore branch fire.
+const SMOKE_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn smoke_test(bin: &Path) -> Result<()> {
-    let output = std::process::Command::new(bin).arg("--version").output()?;
-    if !output.status.success() {
-        anyhow::bail!("{bin:?} --version exited with {:?}", output.status.code());
+    let mut child = std::process::Command::new(bin)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+
+    let deadline = std::time::Instant::now() + SMOKE_TEST_TIMEOUT;
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                if !status.success() {
+                    anyhow::bail!("{bin:?} --version exited with {:?}", status.code());
+                }
+                return Ok(());
+            }
+            None => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    anyhow::bail!("{bin:?} --version did not exit within {SMOKE_TEST_TIMEOUT:?}");
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
     }
-    Ok(())
 }
 
 /// Best-effort RFC3339 timestamp. We avoid pulling in `chrono` /`time` for
@@ -892,5 +933,64 @@ deadbeef *cartog-x86_64-unknown-linux-gnu.tar.gz
         } else {
             assert_eq!(bin_name_in_archive(), "cartog");
         }
+    }
+
+    /// Write an executable shell script and return its path.
+    #[cfg(unix)]
+    fn write_exec_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn smoke_test_passes_on_zero_exit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bin = write_exec_script(dir.path(), "ok", "#!/bin/sh\nexit 0\n");
+        smoke_test(&bin).expect("zero-exit binary must pass");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn smoke_test_fails_on_non_zero_exit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bin = write_exec_script(dir.path(), "fail", "#!/bin/sh\nexit 7\n");
+        let err = smoke_test(&bin).expect_err("non-zero exit must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("exited with"), "got: {msg}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn smoke_test_kills_a_hung_binary_after_timeout() {
+        // Override the timeout via the SMOKE_TEST_TIMEOUT constant is not
+        // possible without exposing a seam; instead, the deadline branch
+        // is reachable as long as the script sleeps longer than the
+        // 5-second ceiling. To keep this fast, we use a script that
+        // sleeps for 30s — the watchdog kills it within the 5s budget.
+        // A regression that drops the timeout would hang this test for
+        // 30 seconds; the test runner's per-test budget is the safety
+        // net. Marked #[ignore] would mask the bug; better to fail loud.
+        let dir = tempfile::TempDir::new().unwrap();
+        let bin = write_exec_script(dir.path(), "hang", "#!/bin/sh\nsleep 30\n");
+        let start = std::time::Instant::now();
+        let err = smoke_test(&bin).expect_err("hanging binary must time out");
+        let elapsed = start.elapsed();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("did not exit"),
+            "expected timeout message, got: {msg}"
+        );
+        // Deadline is 5s; allow generous slack for slow CI but verify we
+        // didn't actually wait the full 30s.
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "smoke_test should have killed the child within ~5s, took {elapsed:?}"
+        );
     }
 }

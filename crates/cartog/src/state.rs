@@ -113,8 +113,16 @@ impl State {
             )
         })?;
         // Sibling tmp keeps the rename within one filesystem (no EXDEV).
+        // Per-PID disambiguation: two cartog processes saving concurrently
+        // (e.g. an auto-check thread and a `self update`) must not race on
+        // the same tmp filename — the loser's rename would clobber the
+        // winner's data.
         let tmp = match path.file_name() {
-            Some(name) => path.with_file_name(format!(".{}.tmp", name.to_string_lossy())),
+            Some(name) => path.with_file_name(format!(
+                ".{}.{}.tmp",
+                name.to_string_lossy(),
+                std::process::id(),
+            )),
             None => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
