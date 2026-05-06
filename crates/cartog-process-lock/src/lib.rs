@@ -198,7 +198,13 @@ fn read_pid(path: &Path) -> Option<u32> {
 /// `target`. The caller picks `tmp` so concurrent writers can stage to
 /// distinct files (see `ProcessLock::acquire`).
 fn write_atomic(tmp: &Path, target: &Path, bytes: &[u8]) -> io::Result<()> {
-    fs::write(tmp, bytes)?;
+    // fsync before rename so a crash between the data write and the
+    // rename does not leave a zero-byte file on disk after recovery.
+    let f = fs::File::create(tmp)?;
+    use std::io::Write;
+    (&f).write_all(bytes)?;
+    f.sync_all()?;
+    drop(f);
     fs::rename(tmp, target)
 }
 

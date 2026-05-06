@@ -45,6 +45,9 @@ criterion = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 
+[target.'cfg(unix)'.dev-dependencies]
+libc = { workspace = true }
+
 [[bench]]
 name = "queries"
 harness = false

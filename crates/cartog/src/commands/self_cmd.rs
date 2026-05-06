@@ -13,6 +13,7 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::state::{self, State};
+use cartog::time_fmt::rfc3339_now;
 
 /// Compile-time channel as written by `build.rs`. One of:
 /// - `"release-tarball"` — built by the GitHub release workflow.
@@ -545,6 +546,9 @@ fn perform_upgrade(
             current_bin.display(),
         ))
     })?;
+    // SIGKILL/SIGINT during a prior upgrade can orphan staging dirs (TempDir
+    // Drop never runs). Sweep entries older than 1h before creating a new one.
+    sweep_stale_staging_dirs(install_dir);
     let staging = tempfile::Builder::new()
         .prefix(".cartog-update-")
         .tempdir_in(install_dir)
@@ -741,6 +745,44 @@ fn http_get_text(url: &str) -> Result<String> {
 /// already done; the timeout lets the restore branch fire.
 const SMOKE_TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Stale staging directory cutoff. A previous upgrade killed by SIGINT
+/// or SIGKILL leaves `.cartog-update-<rand>/` behind; anything older
+/// than this is safely abandoned.
+const STAGING_SWEEP_AGE: Duration = Duration::from_secs(3600);
+
+/// Best-effort sweep of `.cartog-update-*` directories left behind by a
+/// previous interrupted upgrade. Errors are swallowed — this runs as a
+/// hygiene step before the real upgrade, never the operation the user
+/// asked for.
+fn sweep_stale_staging_dirs(install_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(install_dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !name_str.starts_with(".cartog-update-") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_dir() {
+            continue;
+        }
+        let modified_age = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok());
+        if let Some(age) = modified_age {
+            if age >= STAGING_SWEEP_AGE {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+}
+
 fn smoke_test(bin: &Path) -> Result<()> {
     let mut child = std::process::Command::new(bin)
         .arg("--version")
@@ -768,57 +810,6 @@ fn smoke_test(bin: &Path) -> Result<()> {
             }
         }
     }
-}
-
-/// Best-effort RFC3339 timestamp. We avoid pulling in `chrono` /`time` for
-/// one timestamp — `SystemTime::UNIX_EPOCH` gives us seconds-since-epoch
-/// which we format manually.
-fn rfc3339_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // Hand-rolled to avoid a chrono / time dep for one call site.
-    let (year, month, day, hour, minute, second) = utc_breakdown(secs);
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
-}
-
-/// Convert a Unix timestamp (seconds since 1970-01-01 UTC) to broken-down
-/// `(year, month, day, hour, minute, second)`. Handles leap years.
-fn utc_breakdown(secs: u64) -> (u32, u32, u32, u32, u32, u32) {
-    let day_secs = 86_400u64;
-    let mut days = secs / day_secs;
-    let rem = secs % day_secs;
-    let hour = (rem / 3600) as u32;
-    let minute = ((rem % 3600) / 60) as u32;
-    let second = (rem % 60) as u32;
-
-    let mut year: u32 = 1970;
-    loop {
-        let dy = if is_leap(year) { 366 } else { 365 };
-        if days < dy {
-            break;
-        }
-        days -= dy;
-        year += 1;
-    }
-    let months = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut month = 1u32;
-    for (idx, &dm) in months.iter().enumerate() {
-        let dm = if idx == 1 && is_leap(year) { 29 } else { dm };
-        if days < dm {
-            break;
-        }
-        days -= dm;
-        month += 1;
-    }
-    let day = (days + 1) as u32;
-    (year, month, day, hour, minute, second)
-}
-
-fn is_leap(year: u32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
 #[cfg(test)]
@@ -875,41 +866,7 @@ deadbeef *cartog-x86_64-unknown-linux-gnu.tar.gz
         );
     }
 
-    #[test]
-    fn is_leap_handles_century_rule() {
-        assert!(is_leap(2000), "year divisible by 400 is leap");
-        assert!(
-            !is_leap(1900),
-            "year divisible by 100 but not 400 is not leap"
-        );
-        assert!(is_leap(2024), "year divisible by 4 and not 100 is leap");
-        assert!(!is_leap(2023), "non-multiple of 4 is not leap");
-    }
-
-    #[test]
-    fn utc_breakdown_known_timestamps() {
-        // Unix epoch: 1970-01-01T00:00:00Z
-        assert_eq!(utc_breakdown(0), (1970, 1, 1, 0, 0, 0));
-        // 2026-01-01T00:00:00Z = 1767225600 seconds since epoch.
-        assert_eq!(utc_breakdown(1_767_225_600), (2026, 1, 1, 0, 0, 0));
-        // 2024-02-29T12:34:56Z (leap day) = 1709210096.
-        assert_eq!(utc_breakdown(1_709_210_096), (2024, 2, 29, 12, 34, 56));
-        // 2000-03-01T00:00:00Z = 951868800 (sanity-check the 400-year leap).
-        assert_eq!(utc_breakdown(951_868_800), (2000, 3, 1, 0, 0, 0));
-    }
-
-    #[test]
-    fn rfc3339_now_has_canonical_shape() {
-        let s = rfc3339_now();
-        // YYYY-MM-DDTHH:MM:SSZ — exactly 20 chars.
-        assert_eq!(s.len(), 20, "unexpected length: {s:?}");
-        assert!(s.ends_with('Z'), "must end with Z, got {s:?}");
-        assert_eq!(&s[4..5], "-");
-        assert_eq!(&s[7..8], "-");
-        assert_eq!(&s[10..11], "T");
-        assert_eq!(&s[13..14], ":");
-        assert_eq!(&s[16..17], ":");
-    }
+    // is_leap / utc_breakdown / rfc3339_now tests live in `time_fmt::tests`.
 
     #[test]
     fn backup_path_appends_dot_old() {
@@ -992,5 +949,50 @@ deadbeef *cartog-x86_64-unknown-linux-gnu.tar.gz
             elapsed < Duration::from_secs(15),
             "smoke_test should have killed the child within ~5s, took {elapsed:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sweep_removes_old_staging_dirs_and_keeps_fresh() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let stale = dir.path().join(".cartog-update-stale");
+        let fresh = dir.path().join(".cartog-update-fresh");
+        let unrelated = dir.path().join("not-a-staging-dir");
+        std::fs::create_dir(&stale).unwrap();
+        std::fs::create_dir(&fresh).unwrap();
+        std::fs::create_dir(&unrelated).unwrap();
+
+        // Backdate the stale dir's mtime via utimes(2) — filetime is not in
+        // deps and `tempfile` doesn't expose mtime mutation.
+        let two_hours_ago = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            - 2 * 3600;
+        let path_c = std::ffi::CString::new(stale.as_os_str().as_encoded_bytes()).unwrap();
+        let times = [
+            libc::timeval {
+                tv_sec: two_hours_ago,
+                tv_usec: 0,
+            },
+            libc::timeval {
+                tv_sec: two_hours_ago,
+                tv_usec: 0,
+            },
+        ];
+        // SAFETY: utimes is POSIX; both args are valid pointers and `times`
+        // points to a 2-element array as required.
+        let rc = unsafe { libc::utimes(path_c.as_ptr(), times.as_ptr()) };
+        assert_eq!(rc, 0, "utimes failed");
+        let m = std::fs::metadata(&stale).unwrap();
+        assert!(m.mtime() < two_hours_ago + 60);
+
+        sweep_stale_staging_dirs(dir.path());
+
+        assert!(!stale.exists(), "stale staging dir must be swept");
+        assert!(fresh.exists(), "fresh staging dir must survive");
+        assert!(unrelated.exists(), "non-cartog dirs must not be touched");
     }
 }

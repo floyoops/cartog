@@ -848,3 +848,79 @@ fn concurrent_process_abort_names_the_running_peer() {
         "abort message should name the slot and pid, got: {combined}"
     );
 }
+
+/// HTTP server that advertises a Content-Length, sends only a fraction
+/// of that many bytes, then closes the connection. Reqwest treats
+/// premature EOF as an error, so the upgrade should surface a network
+/// failure rather than silently truncate.
+fn spawn_partial_download_server(latest: &str, declared_len: usize, sent_len: usize) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
+    let port = listener.local_addr().unwrap().port();
+    let latest = latest.to_string();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..n]);
+            let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+            if path.contains("/releases/latest") {
+                let body = format!(r#"{{"tag_name":"v{latest}"}}"#);
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(body.as_bytes());
+            } else if path.contains("/cartog-") {
+                // Lie about Content-Length; send fewer bytes; close.
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {declared_len}\r\nConnection: close\r\n\r\n",
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let truncated = vec![0u8; sent_len];
+                let _ = stream.write_all(&truncated);
+            } else {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+            let _ = stream.flush();
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+#[cfg(unix)]
+#[test]
+fn truncated_archive_download_aborts_with_network_error() {
+    // Declared 10000 bytes, sent 100 — reqwest's reader hits EOF before
+    // Content-Length, returns an error. The upgrade should map this to
+    // exit code 2 (network/parse), NOT proceed with a 100-byte archive
+    // and rely on the SHA check (which would also catch it, but exit 4
+    // would lie about the true cause).
+    let dir = tempfile::TempDir::new().unwrap();
+    let api_base = spawn_partial_download_server("99.0.0", 10_000, 100);
+    let api_url = format!("{api_base}/releases/latest");
+
+    let out = Command::new(cartog_bin())
+        .arg("self")
+        .arg("update")
+        .env("HOME", dir.path())
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("XDG_DATA_HOME", dir.path().join("data"))
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("CARTOG_GITHUB_API_URL", &api_url)
+        .env("CARTOG_GITHUB_DOWNLOAD_BASE", &api_base)
+        .env("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")
+        .env_remove("CARGO_HOME")
+        .output()
+        .expect("spawn cartog");
+
+    let code = out.status.code();
+    assert!(
+        matches!(code, Some(2) | Some(4)),
+        "truncated download must surface as network (2) or checksum (4) failure, got {code:?}; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}

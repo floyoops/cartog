@@ -130,7 +130,14 @@ impl State {
                 ));
             }
         };
-        std::fs::write(&tmp, serialized)?;
+        // fsync before rename: under power loss, the rename can land but
+        // the file's data block may not have been flushed, leaving the
+        // target with zero bytes or garbage on next boot.
+        let f = std::fs::File::create(&tmp)?;
+        use std::io::Write;
+        (&f).write_all(serialized.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
         std::fs::rename(&tmp, path)?;
         Ok(())
     }
@@ -177,6 +184,18 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("state.toml");
         std::fs::write(&path, "{{ not toml at all").unwrap();
+        let state = State::load_from(&path);
+        assert_eq!(state, State::default());
+    }
+
+    #[test]
+    fn binary_state_file_returns_default_without_panicking() {
+        // Disk corruption or a wrong-format file (e.g. SQLite snapshot
+        // mistakenly written here) must not crash cartog. read_to_string
+        // returns Err on non-UTF8 bytes; we should fall back to default.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("state.toml");
+        std::fs::write(&path, [0xff, 0xfe, 0x00, 0x80, 0xc3, 0x28]).unwrap();
         let state = State::load_from(&path);
         assert_eq!(state, State::default());
     }

@@ -225,6 +225,7 @@ dependencies = [
  "clap_mangen",
  "criterion",
  "directories",
+ "libc",
  "reqwest",
  "self_update",
  "serde",

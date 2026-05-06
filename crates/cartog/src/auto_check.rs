@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use crate::state::State;
+use crate::time_fmt::{parse_rfc3339_secs, rfc3339_now};
 
 /// Kind of command currently running. Long-lived commands (`serve`,
 /// `watch`) deliberately skip the auto-check — they are typically started
@@ -91,84 +92,6 @@ pub fn parse_check_mode(raw: Option<&str>) -> CheckMode {
 /// `CARTOG_NO_UPDATE_CHECK` kill switch: any non-empty value disables.
 pub fn parse_disabled_env(raw: Option<&str>) -> bool {
     matches!(raw, Some(v) if !v.is_empty())
-}
-
-/// Parse a `YYYY-MM-DDTHH:MM:SSZ` timestamp into seconds since Unix epoch.
-/// Returns `None` for any deviation from that exact shape — we own the
-/// writer (`rfc3339_now` in `commands::self_cmd`) so a stricter parser
-/// is fine here.
-fn parse_rfc3339_secs(s: &str) -> Option<u64> {
-    let bytes = s.as_bytes();
-    if bytes.len() != 20 || bytes[19] != b'Z' {
-        return None;
-    }
-    let read = |i: usize, n: usize| -> Option<u64> {
-        let slice = std::str::from_utf8(&bytes[i..i + n]).ok()?;
-        slice.parse::<u64>().ok()
-    };
-    if bytes[4] != b'-'
-        || bytes[7] != b'-'
-        || bytes[10] != b'T'
-        || bytes[13] != b':'
-        || bytes[16] != b':'
-    {
-        return None;
-    }
-    let year = read(0, 4)?;
-    let month = read(5, 2)?;
-    let day = read(8, 2)?;
-    let hour = read(11, 2)?;
-    let minute = read(14, 2)?;
-    let second = read(17, 2)?;
-    if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        // We own the writer (`rfc3339_now`) and it never emits 60, so
-        // rejecting 60 keeps the arithmetic exact (no over-count).
-        || second > 59
-    {
-        return None;
-    }
-    Some(days_since_epoch(year, month, day)? * 86_400 + hour * 3600 + minute * 60 + second)
-}
-
-/// Compute days from 1970-01-01 to (year, month, day). Returns `None` for
-/// invalid month/day combinations (e.g. 2023-02-30).
-fn days_since_epoch(year: u64, month: u64, day: u64) -> Option<u64> {
-    if year < 1970 {
-        return None;
-    }
-    let mut days: u64 = 0;
-    for y in 1970..year {
-        days += if is_leap(y as u32) { 366 } else { 365 };
-    }
-    let months = [31u64, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    for (idx, &dm) in months.iter().enumerate() {
-        let m = (idx + 1) as u64;
-        if m >= month {
-            break;
-        }
-        let dm = if idx == 1 && is_leap(year as u32) {
-            29
-        } else {
-            dm
-        };
-        days += dm;
-    }
-    let dim = if month == 2 && is_leap(year as u32) {
-        29
-    } else {
-        months[(month - 1) as usize]
-    };
-    if day > dim {
-        return None;
-    }
-    Some(days + day - 1)
-}
-
-fn is_leap(year: u32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
 // ── post-command epilogue glue ────────────────────────────────────────
@@ -276,7 +199,7 @@ pub fn run_check_once(
     let outdated = compare_stable_versions(current_version, &latest) == std::cmp::Ordering::Less;
     if let Some(path) = state_path {
         let mut state = State::load_from(path);
-        state.last_update_check = Some(now_rfc3339());
+        state.last_update_check = Some(rfc3339_now());
         state.last_known_latest = Some(latest);
         state.last_known_outdated = outdated;
         state
@@ -373,47 +296,6 @@ fn compare_stable_versions(a: &str, b: &str) -> std::cmp::Ordering {
         ]
     };
     parse(a).cmp(&parse(b))
-}
-
-/// RFC3339 timestamp for `now`, formatted as `YYYY-MM-DDTHH:MM:SSZ` to
-/// match the parser. Hand-rolled to avoid a `chrono` / `time` dep for
-/// one call site.
-fn now_rfc3339() -> String {
-    let secs = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let day_secs = 86_400u64;
-    let mut days = secs / day_secs;
-    let rem = secs % day_secs;
-    let hour = rem / 3600;
-    let minute = (rem % 3600) / 60;
-    let second = rem % 60;
-    let mut year: u64 = 1970;
-    loop {
-        let dy: u64 = if is_leap(year as u32) { 366 } else { 365 };
-        if days < dy {
-            break;
-        }
-        days -= dy;
-        year += 1;
-    }
-    let months = [31u64, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut month = 1u64;
-    for (idx, &dm) in months.iter().enumerate() {
-        let dm = if idx == 1 && is_leap(year as u32) {
-            29
-        } else {
-            dm
-        };
-        if days < dm {
-            break;
-        }
-        days -= dm;
-        month += 1;
-    }
-    let day = days + 1;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 #[cfg(test)]
@@ -556,39 +438,5 @@ mod tests {
         assert!(!parse_disabled_env(Some("")));
     }
 
-    // ── parse_rfc3339_secs ──
-
-    #[test]
-    fn parse_rfc3339_known_timestamps() {
-        assert_eq!(parse_rfc3339_secs("1970-01-01T00:00:00Z"), Some(0));
-        // 2024-01-01T00:00:00Z = 1704067200
-        assert_eq!(
-            parse_rfc3339_secs("2024-01-01T00:00:00Z"),
-            Some(1_704_067_200)
-        );
-        // 2024-02-29T12:34:56Z (leap day) = 1709210096
-        assert_eq!(
-            parse_rfc3339_secs("2024-02-29T12:34:56Z"),
-            Some(1_709_210_096)
-        );
-    }
-
-    #[test]
-    fn parse_rfc3339_rejects_malformed() {
-        assert_eq!(parse_rfc3339_secs(""), None);
-        assert_eq!(parse_rfc3339_secs("2024-01-01"), None); // too short
-        assert_eq!(parse_rfc3339_secs("2024-01-01T00:00:00"), None); // no Z
-        assert_eq!(parse_rfc3339_secs("2024-13-01T00:00:00Z"), None); // bad month
-        assert_eq!(parse_rfc3339_secs("2023-02-29T00:00:00Z"), None); // not a leap year
-        assert_eq!(parse_rfc3339_secs("2024-01-01T25:00:00Z"), None); // bad hour
-        assert_eq!(parse_rfc3339_secs("not-a-date-just-text"), None);
-    }
-
-    #[test]
-    fn parse_rfc3339_rejects_leap_second_marker() {
-        // We own the writer (rfc3339_now) which never emits :60. Accepting
-        // 60 here would silently over-count by 1 second, so the parser
-        // rejects it outright.
-        assert_eq!(parse_rfc3339_secs("2024-06-30T23:59:60Z"), None);
-    }
+    // parse_rfc3339_secs tests live in `time_fmt::tests`.
 }
