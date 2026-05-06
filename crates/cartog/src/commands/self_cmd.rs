@@ -79,9 +79,7 @@ fn looks_like_cargo_install(binary_path: &Path, cargo_home: Option<&Path>) -> bo
             return true;
         }
     }
-    // Fallback: detect a `.cargo/bin/<name>` segment anywhere in the path.
-    // This catches the standard `~/.cargo/bin` install location even when
-    // CARGO_HOME isn't set in the running shell (common on macOS).
+    // Catches `~/.cargo/bin` even when CARGO_HOME is unset (common on macOS).
     let mut prev: Option<&std::ffi::OsStr> = None;
     for component in binary_path.components() {
         let cur = component.as_os_str();
@@ -304,8 +302,7 @@ fn fetch_latest_version(url: &str) -> Result<String> {
     let response = client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        // Pin the GitHub REST API version so a future default change does
-        // not silently alter response shape (recommended by GitHub docs).
+        // Pin REST API version per GitHub docs — guards against silent schema drift.
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()?;
     let status = response.status();
@@ -427,9 +424,6 @@ mod exit {
 
 /// Drive the upgrade path and return the desired exit code.
 fn run_upgrade(quiet: bool, json: bool) -> i32 {
-    // 1. Refuse for cargo-installed binaries — `self update` cannot safely
-    //    overwrite a cargo-managed file (it lives in $CARGO_HOME/bin and the
-    //    user expects `cargo install` to be the only writer).
     let source = effective_install_source();
     if source == "cargo" {
         emit_upgrade_message(
@@ -441,9 +435,6 @@ fn run_upgrade(quiet: bool, json: bool) -> i32 {
         return exit::CARGO_INSTALL_REFUSED;
     }
 
-    // 2. Refuse if a peer cartog process is still running. We rely on
-    //    `state::default_state_dir` to find the same lock dir long-lived
-    //    commands use; a missing dir means no peers to worry about.
     if let Some(dir) = state::default_state_dir() {
         let active = cartog_process_lock::find_active_locks(&dir);
         if let Some(peer) = active.first() {
@@ -544,10 +535,7 @@ fn perform_upgrade(
         )));
     }
 
-    // Stage the new binary in a sibling directory of `current_bin` so the
-    // final atomic rename stays within the same filesystem. Using
-    // tempfile::tempdir() (which defaults to $TMPDIR / /tmp) would risk an
-    // EXDEV failure when /tmp is on a separate mount.
+    // Stage in install_dir (same FS) — default $TMPDIR could trigger EXDEV on rename.
     let current_bin = std::env::current_exe()
         .map_err(|e| UpgradeError::Filesystem(format!("cannot resolve current exe: {e}")))?;
     let install_dir = current_bin.parent().ok_or_else(|| {
@@ -580,8 +568,6 @@ fn perform_upgrade(
         .to_dest(&current_bin)
         .map_err(|e| UpgradeError::Filesystem(format!("atomic swap failed: {e}")))?;
 
-    // Smoke-test the new binary. A failure here restores `.old` so the
-    // user never ends up with a broken cartog on their PATH.
     if let Err(e) = smoke_test(&current_bin) {
         let _ = std::fs::rename(&backup_path, &current_bin);
         return Err(UpgradeError::Filesystem(format!(
@@ -589,9 +575,6 @@ fn perform_upgrade(
         )));
     }
 
-    // Persist success state. A write failure is not user-visible (the
-    // upgrade already succeeded) but worth surfacing under tracing so
-    // future "last_update_check" staleness is debuggable.
     if let Some(state_path) = state::default_state_file() {
         let mut state = State::load_from(&state_path);
         state.last_known_latest = Some(latest.to_string());
@@ -755,8 +738,7 @@ fn rfc3339_now() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // Convert seconds to a UTC `YYYY-MM-DDTHH:MM:SSZ` string. We do the
-    // calendar arithmetic by hand to stay dependency-free.
+    // Hand-rolled to avoid a chrono / time dep for one call site.
     let (year, month, day, hour, minute, second) = utc_breakdown(secs);
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }

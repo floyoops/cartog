@@ -1,14 +1,5 @@
-//! Cross-process integration tests for the PID-file lock.
-//!
-//! Unit tests inside `process_lock.rs` cover the single-process happy paths.
-//! These tests spawn a real child process so we can observe a *live* PID
-//! belonging to a process other than the test runner itself, then kill it
-//! and assert the next call cleans the stale file up.
-//!
-//! Gated to unix only: spawning `cmd /C timeout` on Windows leaves the
-//! `timeout.exe` grandchild orphaned when we kill the cmd parent, which
-//! would leak processes. Windows coverage stays in the unit tests inside
-//! `process_lock.rs`.
+//! Cross-process integration tests for the PID-file lock (unix-only — Windows
+//! `cmd /C timeout` orphans the `timeout.exe` grandchild on parent kill).
 
 #![cfg(unix)]
 
@@ -16,9 +7,6 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-/// Spawn a long-lived child process (sleeps for a while) and write its PID
-/// to `<state_dir>/<slot>.pid`. Returns the live `Child` so the caller can
-/// kill it later.
 fn spawn_pid_holder(state_dir: &Path, slot: &str) -> Child {
     std::fs::create_dir_all(state_dir).unwrap();
     let child = sleeping_child();
@@ -38,9 +26,6 @@ fn sleeping_child() -> Child {
         .expect("spawn sleep")
 }
 
-/// Wait briefly for `pred` to become true, then return its outcome. Used to
-/// give the OS a chance to reap a killed process before we re-check
-/// liveness.
 fn wait_until<F: FnMut() -> bool>(mut pred: F, timeout: Duration) -> bool {
     let start = std::time::Instant::now();
     loop {
@@ -91,12 +76,7 @@ fn process_lock_test_cleans_stale_after_child_exits() {
     );
 }
 
-// ── glue: pull `process_lock` in via the cartog library facade ────────
-//
-// The module is exposed on `lib.rs` (with `#[doc(hidden)]`) precisely so
-// integration tests can reach it; this little shim just lets us write
-// `cartog_lib::is_alive` instead of the longer `cartog::process_lock::…`
-// inside the test bodies.
+// Shorter alias for cartog::process_lock in test bodies.
 mod cartog_lib {
     pub use cartog::process_lock::{find_active_locks, is_alive};
 }

@@ -1,10 +1,4 @@
-//! Integration tests for `cartog self`.
-//!
-//! Each test invokes the real binary built by cargo (`CARGO_BIN_EXE_cartog`)
-//! as a subprocess. Tests that touch the on-disk state file run in a
-//! temporary $HOME / $XDG_STATE_HOME so they cannot pollute the developer's
-//! actual cartog state. Network calls are redirected to a localhost
-//! TcpListener via `CARTOG_GITHUB_API_URL`.
+//! Integration tests for `cartog self` — isolated HOME/XDG, mocked network.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -15,9 +9,6 @@ fn cartog_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_cartog"))
 }
 
-/// Spawn `cartog self version` (optionally with `--json`) in an isolated
-/// HOME / XDG_STATE_HOME so the read of `state.toml` cannot escape into the
-/// developer's real config directory.
 fn run_self_version(args: &[&str], state_dir: &std::path::Path) -> std::process::Output {
     Command::new(cartog_bin())
         .arg("self")
@@ -161,17 +152,12 @@ fn self_version_reports_existing_check_timestamp() {
 
 // ── self update --check ───────────────────────────────────────────────
 
-/// Spawn a one-shot HTTP server bound to localhost that serves a single
-/// canned 200 OK response, then exits. Returns the URL the server is
-/// listening on. Used to mock the GitHub releases endpoint without taking
-/// a dep on a real HTTP mocking crate.
+/// Localhost HTTP server serving one canned 200 OK then exiting.
 fn spawn_canned_github_response(json_body: String) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {
-            // Drain the request bytes — we don't care what was asked, only
-            // that the client got a parseable response.
             let mut buf = [0u8; 1024];
             let _ = stream.read(&mut buf);
             let body_bytes = json_body.as_bytes();

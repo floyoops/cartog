@@ -1,8 +1,4 @@
-//! Build script: emit compile-time env vars used by `cartog --version --verbose`.
-//!
-//! - `CARTOG_BUILD_SHA`: short git SHA, or "unknown" outside a git checkout.
-//! - `CARTOG_BUILD_FEATURES`: comma-separated list of enabled Cargo features,
-//!   or "none" when the crate is built with no extras.
+//! Emit compile-time env vars surfaced by `cartog --version` and `cartog self version`.
 
 use std::env;
 use std::process::Command;
@@ -19,15 +15,10 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=CARTOG_BUILD_SHA={sha}");
 
-    // Cargo sets CARGO_FEATURE_<UPPERCASE_NAME>=1 for each enabled feature.
-    // Collect them into a sorted, comma-joined string.
     let mut features: Vec<String> = env::vars()
         .filter_map(|(k, _)| {
-            k.strip_prefix("CARGO_FEATURE_").map(|rest| {
-                // Cargo uppercases and replaces `-` with `_`; restore the
-                // canonical form used in Cargo.toml.
-                rest.to_ascii_lowercase().replace('_', "-")
-            })
+            k.strip_prefix("CARGO_FEATURE_")
+                .map(|rest| rest.to_ascii_lowercase().replace('_', "-"))
         })
         .collect();
     features.sort();
@@ -38,10 +29,8 @@ fn main() {
     };
     println!("cargo:rustc-env=CARTOG_BUILD_FEATURES={features_str}");
 
-    // Distribution channel baked at build time. The release workflow sets
-    // `CARTOG_RELEASE_BUILD=1` for tarball builds; everything else is `dev`.
     // Cargo-installed binaries are detected at runtime by inspecting the
-    // binary path.
+    // binary path; only release-tarball vs dev is decidable at build time.
     let install_source = if env::var_os("CARTOG_RELEASE_BUILD").is_some() {
         "release-tarball"
     } else {
@@ -50,15 +39,11 @@ fn main() {
     println!("cargo:rustc-env=CARTOG_INSTALL_SOURCE={install_source}");
     println!("cargo:rerun-if-env-changed=CARTOG_RELEASE_BUILD");
 
-    // Target triple as seen by rustc; surfaced via `cartog self version`.
     let target = env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
     println!("cargo:rustc-env=CARTOG_TARGET_TRIPLE={target}");
 
-    // Re-run when git HEAD moves. Resolve the path via git itself so we
-    // handle git worktrees (where .git is a file, not a dir) and
-    // unusual layouts correctly. When git isn't available (e.g.
-    // `cargo install` from crates.io with no .git/), fall back to a
-    // rerun-if-env-changed so cargo can still cache deterministically.
+    // Resolve via git so worktrees (.git as a file) work; fall back gracefully
+    // when not in a checkout (e.g. `cargo install` from crates.io).
     let head_path = Command::new("git")
         .args(["rev-parse", "--git-path", "HEAD"])
         .output()
@@ -69,8 +54,6 @@ fn main() {
         .filter(|s| !s.is_empty());
     match head_path {
         Some(p) => println!("cargo:rerun-if-changed={p}"),
-        // Keep the build script deterministic when we're not in a git
-        // checkout: let the user force a rebuild via CARTOG_BUILD_SHA.
         None => println!("cargo:rerun-if-env-changed=CARTOG_BUILD_SHA"),
     }
 }

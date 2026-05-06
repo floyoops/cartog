@@ -869,22 +869,17 @@ impl ServerHandler for CartogServer {
     }
 }
 
-/// Slot name used by `cartog serve` for its PID file.
 pub const SERVE_LOCK_SLOT: &str = "serve";
 
-/// Options that don't fit cleanly as positional arguments to [`run_server`].
-/// Open struct so future flags don't keep widening the function signature.
 #[derive(Default)]
 pub struct ServerOptions {
-    /// If `Some`, the server writes `<dir>/serve.pid` at startup and removes
-    /// it on graceful exit. Consulted by `cartog self update` to detect a
-    /// running peer. `None` skips PID-file management.
+    /// Directory for the server's PID file (written on startup, removed on
+    /// graceful exit). `None` disables PID-file tracking. Consulted by
+    /// `cartog self update` to detect a running peer.
     pub pid_lock_dir: Option<PathBuf>,
 }
 
-/// Acquire the serve PID lock from `opts`. Factored out so tests can exercise
-/// the lock contract without spinning up a real MCP transport. Returns
-/// `Ok(None)` when no lock dir is configured.
+/// Acquire the serve PID lock; returns `Ok(None)` when no lock dir is configured.
 pub fn acquire_serve_lock(
     opts: &ServerOptions,
 ) -> anyhow::Result<Option<cartog_process_lock::ProcessLock>> {
@@ -911,9 +906,7 @@ pub async fn run_server(
 ) -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
 
-    // Acquire the PID lock before doing anything externally observable so a
-    // permission/IO failure aborts cleanly. `_lock` lives for the duration
-    // of the server; RAII drop removes the file on graceful exit.
+    // Acquire first so a lock failure aborts before opening DB / watcher.
     let _lock = acquire_serve_lock(&opts)?;
 
     // Optionally spawn a background file watcher

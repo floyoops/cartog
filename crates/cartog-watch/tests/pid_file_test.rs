@@ -1,8 +1,4 @@
-//! Verifies that `cartog watch` writes a PID file when one is requested
-//! and cleans it up on shutdown.
-//!
-//! Driven through `spawn_watch` so the test exercises the same code path
-//! the CLI takes, with a real (in-memory) database.
+//! Verifies the PID-file lifecycle in `cartog watch`.
 
 use std::time::{Duration, Instant};
 
@@ -27,7 +23,6 @@ fn pid_file_written_on_start_and_removed_on_stop() {
     let mut config = WatchConfig::new(workspace.path().to_path_buf());
     config.pid_lock_dir = Some(lock_dir.path().to_path_buf());
 
-    // `:memory:` keeps the test hermetic — no on-disk DB to clean up.
     let handle = spawn_watch(config, ":memory:").expect("spawn watch");
 
     let pid_path = lock_dir.path().join(format!("{WATCH_LOCK_SLOT}.pid"));
@@ -56,18 +51,12 @@ fn pid_file_written_on_start_and_removed_on_stop() {
 
 #[test]
 fn pid_file_run_watch_propagates_acquire_failure() {
-    // Pointing pid_lock_dir at an existing *file* (not directory) makes
-    // ProcessLock::acquire's create_dir_all fail. run_watch is the
-    // foreground entry point used by `cartog watch`; lock-acquire errors
-    // there must surface to the caller (not get silently swallowed) so
-    // the user sees a real abort rather than a half-started watcher.
+    // pid_lock_dir pointed at an existing file makes create_dir_all fail.
     let workspace = tempfile::TempDir::new().unwrap();
     let blocker = tempfile::NamedTempFile::new().unwrap();
     let mut config = WatchConfig::new(workspace.path().to_path_buf());
     config.pid_lock_dir = Some(blocker.path().to_path_buf());
 
-    // run_watch blocks on the watch loop on success; on a lock-acquire
-    // failure it returns synchronously before reaching the loop.
     let err =
         run_watch(config, ":memory:").expect_err("run_watch should fail when lock dir is unusable");
     let msg = format!("{err:#}");

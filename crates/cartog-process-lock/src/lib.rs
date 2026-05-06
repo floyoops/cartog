@@ -96,8 +96,7 @@ pub fn find_active_locks(state_dir: &Path) -> Vec<ActiveLock> {
         let pid = match read_pid(&path) {
             Some(p) => p,
             None => {
-                // Malformed file: not actionable. Remove it so the slot is
-                // reusable on the next startup.
+                // Side effect: clean malformed files so the slot is reusable.
                 let _ = fs::remove_file(&path);
                 continue;
             }
@@ -114,16 +113,11 @@ pub fn find_active_locks(state_dir: &Path) -> Vec<ActiveLock> {
 /// Cross-platform "is this PID currently a running process?" check.
 #[cfg(unix)]
 pub fn is_alive(pid: u32) -> bool {
-    // PID 0 is the calling-process group on POSIX; treating it as a real
-    // process would always report "alive" via kill(0, 0). We never write
-    // PID 0 to a pid file (std::process::id() never returns 0), so a 0
-    // here means a malformed file slipped past read_pid — fail safe.
+    // kill(0, 0) signals our own process group — would always report alive. Reject.
     if pid == 0 {
         return false;
     }
-    // PIDs above i32::MAX would wrap to negative when cast to pid_t and
-    // change kill's semantics to "process group". Linux's pid_max never
-    // approaches this, but guarding is free.
+    // PID > i32::MAX casts negative to pid_t, flipping kill semantics.
     if pid > i32::MAX as u32 {
         return false;
     }
@@ -192,9 +186,7 @@ fn validate_slot(slot: &str) -> io::Result<()> {
 fn read_pid(path: &Path) -> Option<u32> {
     let text = fs::read_to_string(path).ok()?;
     let pid = text.trim().parse::<u32>().ok()?;
-    // PID 0 is meaningless here (it's a kill(2) sentinel for "current
-    // process group"). std::process::id() never returns 0, so a 0 in the
-    // file means corruption — drop it.
+    // PID 0 in the file means corruption — std::process::id() never returns 0.
     if pid == 0 {
         None
     } else {
