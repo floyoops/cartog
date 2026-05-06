@@ -57,7 +57,7 @@ jobs:
 
           # All expected subcommands are present
           HELP=$($BIN --help)
-          for cmd in index outline search refs callees impact hierarchy deps stats doctor config map changes watch serve rag; do
+          for cmd in index outline search refs callees impact hierarchy deps stats doctor config map changes watch serve rag self; do
             echo "$HELP" | grep -q "$cmd" || { echo "FAIL: missing subcommand '$cmd'"; exit 1; }
           done
 
@@ -66,6 +66,15 @@ jobs:
           for cmd in setup index search; do
             echo "$RAG_HELP" | grep -q "$cmd" || { echo "FAIL: missing rag subcommand '$cmd'"; exit 1; }
           done
+
+          # self subcommands (update / version / rollback) — proves
+          # CARTOG_RELEASE_BUILD baked the right install_source.
+          SELF_HELP=$($BIN self --help)
+          for cmd in update version rollback; do
+            echo "$SELF_HELP" | grep -q "$cmd" || { echo "FAIL: missing self subcommand '$cmd'"; exit 1; }
+          done
+          $BIN self version | grep -q "release-tarball" \
+            || { echo "FAIL: install_source should be release-tarball"; $BIN self version; exit 1; }
 
           echo "Smoke test passed"
 
@@ -81,7 +90,7 @@ jobs:
           echo "$VERSION" | grep -q "cartog"
 
           HELP=$($BIN --help)
-          for cmd in index outline search refs callees impact hierarchy deps stats doctor config map changes watch serve rag; do
+          for cmd in index outline search refs callees impact hierarchy deps stats doctor config map changes watch serve rag self; do
             echo "$HELP" | grep -q "$cmd" || { echo "FAIL: missing subcommand '$cmd'"; exit 1; }
           done
 
@@ -89,6 +98,13 @@ jobs:
           for cmd in setup index search; do
             echo "$RAG_HELP" | grep -q "$cmd" || { echo "FAIL: missing rag subcommand '$cmd'"; exit 1; }
           done
+
+          SELF_HELP=$($BIN self --help)
+          for cmd in update version rollback; do
+            echo "$SELF_HELP" | grep -q "$cmd" || { echo "FAIL: missing self subcommand '$cmd'"; exit 1; }
+          done
+          $BIN self version | grep -q "release-tarball" \
+            || { echo "FAIL: install_source should be release-tarball"; $BIN self version; exit 1; }
 
           echo "Smoke test passed"
 
