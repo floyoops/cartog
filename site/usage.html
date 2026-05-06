@@ -60,6 +60,7 @@
           <a href="#cmd-changes">cartog changes</a>
           <a href="#cmd-watch">cartog watch</a>
           <a href="#cmd-serve">cartog serve</a>
+          <a href="#cmd-self">cartog self</a>
         </div>
         <div class="sidebar-group">
           <div class="sidebar-label">Configuration</div>
@@ -332,6 +333,14 @@ cartog watch --debounce 5         <span class="comment"># 5s debounce window</sp
       <pre>cartog serve                  <span class="comment"># MCP server only</span>
 cartog serve --watch          <span class="comment"># + background file watcher</span>
 cartog serve --watch --rag    <span class="comment"># + watcher + auto RAG</span></pre>
+
+      <h2 id="cmd-self"><code>cartog self &lt;update|version|rollback&gt;</code></h2>
+      <p>Manage the installed cartog binary in place: upgrade, inspect, or roll back. <code>cargo install cartog</code> users get an exit-3 refusal pointing at <code>cargo install cartog --force</code>; release-tarball installs swap atomically with SHA256 verification and a <code>&lt;bin&gt;.old</code> rollback slot.</p>
+      <pre>cartog self update             <span class="comment"># upgrade to the latest stable</span>
+cartog self update --check     <span class="comment"># exit 1 if outdated, 0 if current</span>
+cartog self version            <span class="comment"># target + install source + last check</span>
+cartog self rollback           <span class="comment"># restore the previous binary</span></pre>
+      <p>Auto-check runs at most once per 24h on interactive sessions; suppressed under <code>CARTOG_NO_UPDATE_CHECK=1</code>, non-TTY stdout, and inside <code>cartog serve</code>/<code>watch</code>. See <a href="https://github.com/jrollin/cartog/blob/main/docs/updates.md">docs/updates.md</a> for the full exit-code matrix and state file location.</p>
 
       <!-- ── Semantic Search ───────────────────── -->
 
