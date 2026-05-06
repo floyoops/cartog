@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.13.2] - 2026-04-28
+## [0.14.0] - 2026-05-06
 
 ### Bug Fixes
 
@@ -43,6 +43,10 @@
 - **languages**: Panic on multi-byte UTF-8 in markdown extractor ([`5d731d6`](https://github.com/jrollin/cartog/commit/5d731d60cf1cbce6307b4a60111cd8eeb0571d71))
 - **db**: Wrap index_directory Phase 3 in a single transaction ([`e7d854b`](https://github.com/jrollin/cartog/commit/e7d854ba87fb9dc40a00a2411e85c88487eccaf1))
 - **db**: Tighten transaction contract docs + e2e rollback test ([`7cf281d`](https://github.com/jrollin/cartog/commit/7cf281da8f0180f5748c85754cccb430759a1fad))
+- **plugin**: Use semver compare in update check, not string equality ([`7cea701`](https://github.com/jrollin/cartog/commit/7cea70192de0dd4c664e56514d16556fdd866143))
+- **self-update**: Harden upgrade flow against post-swap edge cases ([`81eac1f`](https://github.com/jrollin/cartog/commit/81eac1fa685c4ff18f3ba19e3564e3f43fab028e))
+- **release**: Publish cartog-process-lock to crates.io ([`76a2ba1`](https://github.com/jrollin/cartog/commit/76a2ba1e87572290b49a74e48390cc5d20dc650b))
+- **test**: Work around Linux ETXTBSY in smoke_test unit tests ([`3596c58`](https://github.com/jrollin/cartog/commit/3596c58eba0286095b9df106b59cf3a329796c73))
 
 ### Documentation
 
@@ -65,6 +69,10 @@
 - Fix debounce default, add LSP recall caveat, add docs index ([`8a23aaa`](https://github.com/jrollin/cartog/commit/8a23aaaefa8d49c97fd376c53a385b044473f666))
 - Sync post-lsp-default-sweep across README, docs, site, skill ([`e20d523`](https://github.com/jrollin/cartog/commit/e20d523f302877919d095d8ceb1d6a5a5a7ca87e))
 - **architecture**: Add layered incremental-indexing design doc ([`0494056`](https://github.com/jrollin/cartog/commit/0494056396b2a3997f2c42c6f4b47fb39bcf6f03))
+- **release**: Point publish step env back to job-level NOTE ([`63ff2c7`](https://github.com/jrollin/cartog/commit/63ff2c76f3f2e0735e3d2819d3dda8e25db2a73b))
+- **self-update**: Add user guide for cartog self commands ([`1894b39`](https://github.com/jrollin/cartog/commit/1894b39b7e9d2de42f1665cebd846c9c56d2b59c))
+- **self-update**: Align all docs with the new feature surface ([`5dbe968`](https://github.com/jrollin/cartog/commit/5dbe96869d1a71fe4655c31e01ae97056b4d0500))
+- **site**: Add `cartog self` to landing page and CLI reference ([`2a65664`](https://github.com/jrollin/cartog/commit/2a656647064241c0d53318653893fc9873e55965))
 
 ### Features
 
@@ -108,6 +116,19 @@
 - **cli**: Cartog --version prints build SHA + features (#26) ([`06986bb`](https://github.com/jrollin/cartog/commit/06986bb5f7a201a7fae085c193ce48d943ed02e6))
 - **watch**: Cartog watch --json streams NDJSON events (#27) ([`9feeb02`](https://github.com/jrollin/cartog/commit/9feeb028a26de73dbf6a2084c028532c636c98d5))
 - **lsp**: Enable lsp feature by default ([`ca06cd8`](https://github.com/jrollin/cartog/commit/ca06cd8e3728ab24fafb38938603bbe8635829f7))
+- **self-update**: Bake install source + add state module ([`97dcdda`](https://github.com/jrollin/cartog/commit/97dcddac02950726f32f4e8a257c96309bb86d50))
+- **self-update**: Add `cartog self` subcommand surface ([`e1c7c87`](https://github.com/jrollin/cartog/commit/e1c7c87da1e5e925f026037889617cc09c253766))
+- **self-update**: Implement `cartog self version` ([`f3028d2`](https://github.com/jrollin/cartog/commit/f3028d24a4715f2405c359df1624cae8df736f30))
+- **self-update**: Implement `cartog self update --check` ([`df6f3bb`](https://github.com/jrollin/cartog/commit/df6f3bbcc3aa215ada589e7a98ff82513aefeeec))
+- **self-update**: Add PID-file lock module ([`e255c07`](https://github.com/jrollin/cartog/commit/e255c074114cfbec360d9f662879917c95f7e2c7))
+- **self-update**: Wire PID files into `cartog serve` and `cartog watch` ([`dabe92c`](https://github.com/jrollin/cartog/commit/dabe92cfa591ee6c8d271e349eff3d407ef882c6))
+- **self-update**: Implement `cartog self update` upgrade flow ([`710e8ef`](https://github.com/jrollin/cartog/commit/710e8ef0271f416128907d41a32a19cf3d5393d3))
+- **self-update**: Implement `cartog self rollback` ([`1f43dbc`](https://github.com/jrollin/cartog/commit/1f43dbcd6c1b746ee3ea66f243d13445bc6f6064))
+- **self-update**: Add `should_check` predicate for auto-check ([`4bc810c`](https://github.com/jrollin/cartog/commit/4bc810cc2b75e29d53351e7456ad1cda93c9069b))
+- **self-update**: Add detached background check thread ([`b14c3b4`](https://github.com/jrollin/cartog/commit/b14c3b417898a3f806866aed18ccc40da4c16f15))
+- **self-update**: Hook auto-check into post-command epilogue ([`50ec48b`](https://github.com/jrollin/cartog/commit/50ec48b6620645bdc79f983e21ecf61fd11ad39a))
+- **release**: Emit SHA256SUMS and bake CARTOG_RELEASE_BUILD ([`44d2a8d`](https://github.com/jrollin/cartog/commit/44d2a8dde04f6fb119800fc718a0b04813400edc))
+- **plugin**: SessionStart hook delegates version check to cartog binary ([`3917ee0`](https://github.com/jrollin/cartog/commit/3917ee00a04f03194836f7270f457ba3f8a8b43e))
 
 ### Miscellaneous
 
@@ -129,11 +150,18 @@
 - Deduplicate Ollama constants and harden config parsing ([`425a5f5`](https://github.com/jrollin/cartog/commit/425a5f581819ee8f8af8c67b699e13dd59e878d2))
 - Harden types and document constraints ([`1703fd8`](https://github.com/jrollin/cartog/commit/1703fd8af21867cd47afe58876fe61dd458eda3e))
 - **skill**: Improve SKILL.md structure and eval judge tolerance ([`c2c687e`](https://github.com/jrollin/cartog/commit/c2c687e9656db592f2a4b30d2eedc22d253eba1c))
+- **self-update**: Trim narration comments across feature files ([`27f644f`](https://github.com/jrollin/cartog/commit/27f644ffdb005092f58e38bc0ff0dcefd2c1cfbc))
+- **release**: Harden SHA256SUMS step and document publish env ([`5fea138`](https://github.com/jrollin/cartog/commit/5fea1383d6db380dde0e8a91952682e8ea2c0411))
+- **self-update**: Apply audit medium/low fixes ([`6dfe440`](https://github.com/jrollin/cartog/commit/6dfe4407a6404321b7056e6ad8b1ecf38f139147))
+- **test**: Tighten wait_for_exec_ready review fixes ([`cb8c01e`](https://github.com/jrollin/cartog/commit/cb8c01eda83858905ca1fb75b99b453b67978acd))
+- **self-update**: Apply CodeRabbit findings (valid subset) ([`f33910b`](https://github.com/jrollin/cartog/commit/f33910b2df5124d2abbd170477415fed55231aec))
 
 ### Testing
 
 - **doctor**: Improve coverage with report and formatting tests ([`d76ee30`](https://github.com/jrollin/cartog/commit/d76ee30c2011d96728ebb42f7e7c9b74105a956f))
 - **agents**: Add behavioral eval framework with golden examples ([`05056fe`](https://github.com/jrollin/cartog/commit/05056fe27771cb7348e412963d13472a7483d429))
+- **self-update**: Pinpoint coverage for spec rules in Phase 7 ([`3b93053`](https://github.com/jrollin/cartog/commit/3b930538bac1d56e7977582e63d72f300e287af6))
+- **self-update**: Unit-test pure helpers for in-process coverage ([`63d1b9d`](https://github.com/jrollin/cartog/commit/63d1b9d1cbb279846da32c763b2a8f28aa152aa1))
 
 ## [0.3.1] - 2026-02-26
 
