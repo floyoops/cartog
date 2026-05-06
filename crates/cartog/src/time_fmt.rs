@@ -124,6 +124,7 @@ fn days_since_epoch(year: u64, month: u64, day: u64) -> Option<u64> {
     Some(days + day - 1)
 }
 
+/// Proleptic Gregorian leap-year rule: divisible by 4, except century years not divisible by 400.
 pub fn is_leap(year: u32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }

@@ -306,18 +306,10 @@ pub enum SelfCommand {
         /// Suppress all output; the exit code is the sole signal.
         #[arg(long)]
         quiet: bool,
-
-        /// Emit machine-readable JSON output.
-        #[arg(long)]
-        json: bool,
     },
 
     /// Show installed version, target triple, install source, and last check time
-    Version {
-        /// Emit machine-readable JSON output.
-        #[arg(long)]
-        json: bool,
-    },
+    Version,
 
     /// Restore the previous binary saved at `<bin>.old`
     Rollback,

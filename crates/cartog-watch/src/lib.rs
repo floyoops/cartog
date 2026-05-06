@@ -144,6 +144,10 @@ impl Drop for WatchHandle {
 ///
 /// Returns a `WatchHandle` that can be used to stop the watcher.
 /// The watcher opens its own `Database` connection (SQLite WAL allows concurrent readers).
+///
+/// Errors from `watch_loop` (including PID-lock acquire failures) are
+/// logged inside the thread; the caller still receives `Ok(WatchHandle)`.
+/// Use [`run_watch`] when lock failures must propagate synchronously.
 pub fn spawn_watch(config: WatchConfig, db_path: &str) -> Result<WatchHandle> {
     let root = config
         .root

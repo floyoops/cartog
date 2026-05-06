@@ -322,7 +322,7 @@ fn self_update_check_json_failure_uses_unified_schema() {
 fn self_update_check_does_not_write_state_file() {
     let dir = tempfile::TempDir::new().unwrap();
     let url = spawn_canned_github_response(r#"{"tag_name":"v999.0.0"}"#.to_string());
-    let _ = Command::new(cartog_bin())
+    let output = Command::new(cartog_bin())
         .arg("self")
         .arg("update")
         .arg("--check")
@@ -335,6 +335,16 @@ fn self_update_check_does_not_write_state_file() {
         .env_remove("CARGO_HOME")
         .output()
         .unwrap();
+
+    // v999.0.0 > running version → exit 1. Asserting this proves --check
+    // actually ran the network path; a crash before that would also leave
+    // no state.toml and falsely pass the next assertion.
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected outdated exit (1); stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
 
     // Walk the entire temp dir; --check must not have created a state.toml.
     fn has_state_file(dir: &std::path::Path) -> bool {

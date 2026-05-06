@@ -131,11 +131,10 @@ impl State {
             }
         };
         // fsync before rename: under power loss, the rename can land but
-        // the file's data block may not have been flushed, leaving the
-        // target with zero bytes or garbage on next boot.
-        let f = std::fs::File::create(&tmp)?;
+        // the file's data block may not have been flushed.
         use std::io::Write;
-        (&f).write_all(serialized.as_bytes())?;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(serialized.as_bytes())?;
         f.sync_all()?;
         drop(f);
         std::fs::rename(&tmp, path)?;

@@ -215,10 +215,10 @@ fn main() -> Result<()> {
                 .map_err(Into::into)
         }
         Command::Self_(sub) => match sub {
-            SelfCommand::Update { check, quiet, json } => {
-                commands::cmd_self_update(check, quiet, json)
+            SelfCommand::Update { check, quiet } => {
+                commands::cmd_self_update(check, quiet, cli.json)
             }
-            SelfCommand::Version { json } => commands::cmd_self_version(json),
+            SelfCommand::Version => commands::cmd_self_version(cli.json),
             SelfCommand::Rollback => commands::cmd_self_rollback(),
         },
     };
