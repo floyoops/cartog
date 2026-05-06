@@ -14,6 +14,8 @@ cargo build --release
 cargo install --path .
 ```
 
+To upgrade an existing install in place, `cartog self update`. See [updates.md](updates.md) for the full `cartog self` command surface, env vars, and rollback.
+
 ## Configuration
 
 cartog resolves the database path using the following priority (highest wins):

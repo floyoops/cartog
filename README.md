@@ -137,6 +137,19 @@ sudo mv cartog /usr/local/bin/
 # Windows (x86_64) — download .zip from releases page
 ```
 
+### Upgrade
+
+Once cartog is on your `PATH`:
+
+```bash
+cartog self update           # upgrade in place to the latest stable
+cartog self update --check   # report whether an update exists; exit 1 if outdated
+cartog self version          # show installed version + last-check timestamp
+cartog self rollback         # restore the previous binary
+```
+
+Cargo-installed binaries upgrade with `cargo install cartog --force`. See [docs/updates.md](docs/updates.md) for env vars, exit codes, and the state file location.
+
 ### Claude Code plugin
 
 Run these two commands **one at a time** in Claude Code:
