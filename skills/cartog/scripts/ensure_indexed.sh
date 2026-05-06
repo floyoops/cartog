@@ -48,15 +48,30 @@ fi
 VERSION_CACHE="${HOME}/.cache/cartog/latest_version"
 VERSION_TTL=86400  # 24 hours
 
-# Phase 0: Check for newer cartog version (non-blocking, never installs).
-# Delegates to `cartog self update --check` per BR-9 — the hook only ever
-# *reports*; bootstrap and upgrades are user-initiated via install.sh /
-# `cartog self update`. A local 24h cache short-circuits the network call
-# on subsequent invocations within the same day.
+# Phase 0: non-blocking version check; never installs.
 check_update() {
     if ! command -v cartog >/dev/null 2>&1; then
-        echo "cartog not found on PATH. Install with: bash $SCRIPT_DIR/install.sh"
-        return 0
+        cat >&2 <<EOF
+cartog binary not found on PATH.
+
+Install one of these ways, then re-run this skill:
+
+  1. Skill bootstrap (auto-detects platform, downloads pre-built binary):
+       bash $SCRIPT_DIR/install.sh
+
+  2. Cargo (requires Rust >= 1.70):
+       cargo install cartog
+
+  3. Pre-built binary (manual):
+       https://github.com/jrollin/cartog/releases/latest
+
+After install, ensure the binary is on PATH (e.g. \$HOME/.cargo/bin):
+       export PATH="\$HOME/.cargo/bin:\$PATH"
+
+Verify:
+       cartog --version
+EOF
+        exit 1
     fi
 
     local installed
