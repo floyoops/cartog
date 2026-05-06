@@ -197,6 +197,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Publish all crates in dependency order
         env:
+          # Do not add CARTOG_RELEASE_BUILD here — see job-level NOTE above.
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           crates=(
