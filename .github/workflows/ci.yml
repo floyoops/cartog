@@ -5,10 +5,14 @@ on:
     branches: [main]
     paths-ignore:
       - "site/**"
+      - "skills/**"
+      - ".claude-plugin/**"
   pull_request:
     branches: [main]
     paths-ignore:
       - "site/**"
+      - "skills/**"
+      - ".claude-plugin/**"
 
 env:
   CARGO_TERM_COLOR: always

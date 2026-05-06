@@ -1,0 +1,30 @@
+name: Skill Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "skills/**"
+      - ".claude-plugin/**"
+      - ".github/workflows/skill-tests.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "skills/**"
+      - ".claude-plugin/**"
+      - ".github/workflows/skill-tests.yml"
+
+jobs:
+  ensure-indexed:
+    name: ensure_indexed.sh unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: bash skills/cartog/tests/test_ensure_indexed.sh
+
+  install-script:
+    name: install.sh unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: bash skills/cartog/tests/test_install.sh

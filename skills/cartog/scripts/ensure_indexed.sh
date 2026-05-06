@@ -5,7 +5,9 @@ set -euo pipefail
 # Run this at the start of a coding session.
 #
 # Four phases:
-#   0. Version check (cached, non-blocking — notifies if a newer release exists)
+#   0. Ensure cartog matches plugin.json version: missing → install.sh;
+#      outdated and >=0.14.0 → `cartog self update`; outdated and <0.14.0 → install.sh.
+#      Any failure exits 1 with the underlying error surfaced.
 #   1. Code graph index (blocking, fast — incremental, < 1s for unchanged codebases)
 #   2. Model download (blocking, one-time — enables cross-encoder reranker on FTS5 results)
 #   3. RAG embedding (background — vector search becomes available when done)
@@ -13,7 +15,7 @@ set -euo pipefail
 # After phase 2, `cartog rag search` already works (FTS5 + reranker).
 # Phase 3 adds vector/semantic matching in the background without blocking the agent.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || SCRIPT_DIR="."
 LOCK_DIR="${CARTOG_LOCK_DIR:-/tmp/cartog-rag-index.lock}"
 
 # Resolve the database path using the same priority as the Rust binary:
@@ -45,78 +47,88 @@ else
         DB_FILE=".cartog.db"
     fi
 fi
-VERSION_CACHE="${HOME}/.cache/cartog/latest_version"
-VERSION_TTL=86400  # 24 hours
+# Plugin tag is kept in sync with the binary version at release time.
+# Reading it locally avoids any network call for the version check.
+PLUGIN_JSON="${CARTOG_PLUGIN_JSON:-${SCRIPT_DIR}/../../../.claude-plugin/plugin.json}"
+PLUGIN_VERSION="$( { sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PLUGIN_JSON" 2>/dev/null || true; } | head -n 1)"
 
-# Phase 0: non-blocking version check; never installs.
-check_update() {
+# Phase 0: ensure cartog is installed and (when known) synced to the plugin's pinned version.
+# Target version:
+#   PLUGIN_VERSION present → sync exactly to it (this is what release tags ship).
+#   PLUGIN_VERSION missing → "latest" (best-effort self update; legacy binaries reinstall).
+# Branches:
+#   Missing binary               → install.sh
+#   installed != target:
+#     installed >= 0.14.0        → `cartog self update` (CLI added in 0.14.0)
+#     installed <  0.14.0        → install.sh (no self update CLI, bootstrap fallback)
+# Either failure exits 1 with the underlying error surfaced.
+ensure_cartog() {
     if ! command -v cartog >/dev/null 2>&1; then
-        cat >&2 <<EOF
-cartog binary not found on PATH.
-
-Install one of these ways, then re-run this skill:
-
-  1. Skill bootstrap (auto-detects platform, downloads pre-built binary):
-       bash $SCRIPT_DIR/install.sh
-
-  2. Cargo (requires Rust >= 1.70):
-       cargo install cartog
-
-  3. Pre-built binary (manual):
-       https://github.com/jrollin/cartog/releases/latest
-
-After install, ensure the binary is on PATH (e.g. \$HOME/.cargo/bin):
-       export PATH="\$HOME/.cargo/bin:\$PATH"
-
-Verify:
-       cartog --version
-EOF
-        exit 1
+        echo "cartog binary not found on PATH. Installing via $SCRIPT_DIR/install.sh..." >&2
+        # Pass PLUGIN_VERSION so a fresh install pins to the version this skill
+        # was tested against — avoids version drift on the very next session.
+        if ! bash "$SCRIPT_DIR/install.sh" ${PLUGIN_VERSION:+"$PLUGIN_VERSION"} >&2; then
+            echo "cartog install failed. See output above." >&2
+            exit 1
+        fi
+        # install.sh may drop the binary in $HOME/.cargo/bin without it being on PATH yet.
+        if ! command -v cartog >/dev/null 2>&1; then
+            export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+        fi
+        if ! command -v cartog >/dev/null 2>&1; then
+            echo "cartog still not on PATH after install. Add ${CARGO_HOME:-\$HOME/.cargo}/bin to PATH and retry." >&2
+            exit 1
+        fi
     fi
 
     local installed
     installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')"
     [ -n "$installed" ] || return 0
 
-    local now latest=""
-    now=$(date +%s)
+    # If we know the plugin's pinned version, treat in-sync as a no-op.
+    # Without it, fall through to "self update to latest" (legacy → install.sh).
+    if [ -n "$PLUGIN_VERSION" ] && [ "$installed" = "$PLUGIN_VERSION" ]; then
+        return 0
+    fi
 
-    # Fresh cache (≤24h) — reuse the cached `latest` without hitting the
-    # network. Still compare against `installed` so the outdated hint
-    # surfaces on every session within the TTL window.
-    if [ -f "$VERSION_CACHE" ]; then
-        local cached_version cached_ts
-        cached_version="$(cut -d' ' -f1 "$VERSION_CACHE" 2>/dev/null)" || true
-        cached_ts="$(cut -d' ' -f2 "$VERSION_CACHE" 2>/dev/null)" || true
-        if [ -n "$cached_ts" ] && [ $(( now - cached_ts )) -le "$VERSION_TTL" ]; then
-            latest="$cached_version"
+    # `cartog self update` always installs the latest release; install.sh accepts
+    # a pinned version. Label the announce so the destination is honest.
+    local install_label="${PLUGIN_VERSION:-latest}"
+    local self_update_label="latest"
+
+    if version_gt "0.14.0" "$installed"; then
+        # No `cartog self update` CLI before 0.14.0 — bootstrap via install.sh.
+        echo "Updating cartog $installed → $install_label via $SCRIPT_DIR/install.sh (pre-self-update)..."
+        if ! bash "$SCRIPT_DIR/install.sh" ${PLUGIN_VERSION:+"$PLUGIN_VERSION"} >&2; then
+            echo "cartog install failed. See output above." >&2
+            exit 1
         fi
+        return 0
     fi
 
-    if [ -z "$latest" ]; then
-        # --check is read-only; --json gives a stable schema with `latest`.
-        # Exit codes: 0 up to date, 1 outdated, 2 network/parse error.
-        local output rc
-        output="$(cartog self update --check --json 2>/dev/null)" && rc=0 || rc=$?
-        case "$rc" in
-            0|1) ;;
-            *)   return 0 ;;
-        esac
-        latest="$(printf '%s' "$output" | sed -n 's/.*"latest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-        [ -n "$latest" ] || return 0
-        mkdir -p "$(dirname "$VERSION_CACHE")"
-        echo "$latest $now" > "$VERSION_CACHE"
+    # No plugin version pinned and the binary may already be at latest.
+    # Use `--check` to avoid a no-op self update.
+    if [ -z "$PLUGIN_VERSION" ]; then
+        local rc=0
+        cartog self update --check --quiet 2>/dev/null || rc=$?
+        # rc: 0 = up to date, 1 = update available, 2 = network error.
+        # Only proceed when rc=1; everything else is "do nothing".
+        [ "$rc" -eq 1 ] || return 0
     fi
 
-    if version_gt "$latest" "$installed"; then
-        echo "New cartog version available: $latest (installed: $installed). Run: cartog self update"
+    echo "Updating cartog $installed → $self_update_label via 'cartog self update'..."
+    local update_output update_rc
+    update_output="$(cartog self update 2>&1)" && update_rc=0 || update_rc=$?
+    if [ "$update_rc" -ne 0 ]; then
+        echo "cartog self update failed (exit $update_rc):" >&2
+        printf '%s\n' "$update_output" >&2
+        exit 1
     fi
+    printf '%s\n' "$update_output"
 }
 
-# Semver compare: returns 0 iff $1 > $2 component-wise. Local pre-release
-# suffixes (e.g. 0.14.0-rc.1 from a dev build) compare as the bare numeric
-# triple, which is fine — the binary's own --check refuses prereleases as
-# "latest", so we only ever compare a stable `latest` against `installed`.
+# Semver compare: returns 0 iff $1 > $2 component-wise.
+# Pre-release suffixes (e.g. 0.14.0-rc.1) are stripped — bare numeric triple compare.
 version_gt() {
     local IFS=.
     local -a a b
@@ -131,7 +143,7 @@ version_gt() {
     return 1
 }
 
-check_update || true
+ensure_cartog
 
 # Phase 1: Code graph index (always fast, incremental)
 if [ ! -f "$DB_FILE" ]; then
@@ -152,7 +164,14 @@ fi
 # Uses a lock directory to prevent concurrent rag index processes across sessions.
 # Stale lock (>1 hour) is removed automatically — handles crashed processes where trap didn't fire.
 if [ -d "$LOCK_DIR" ]; then
-    lock_age=$(( $(date +%s) - $(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0) ))
+    # GNU stat (Linux) uses -c %Y; BSD stat (macOS) uses -f %m. Try GNU first
+    # because BSD `stat -f %m` would *succeed* on Linux (printing filesystem
+    # stats instead of mtime), which would corrupt the arithmetic below.
+    lock_mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0)"
+    case "$lock_mtime" in
+        ''|*[!0-9]*) lock_mtime=0 ;;
+    esac
+    lock_age=$(( $(date +%s) - lock_mtime ))
     if [ "$lock_age" -gt 3600 ]; then
         echo "Removing stale RAG lock (${lock_age}s old)."
         rmdir "$LOCK_DIR" 2>/dev/null || true
