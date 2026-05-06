@@ -122,10 +122,6 @@ cargo install cartog --features ollama-embedding      # + Ollama support
 curl -L https://github.com/jrollin/cartog/releases/latest/download/cartog-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv cartog /usr/local/bin/
 
-# macOS (Intel)
-curl -L https://github.com/jrollin/cartog/releases/latest/download/cartog-x86_64-apple-darwin.tar.gz | tar xz
-sudo mv cartog /usr/local/bin/
-
 # Linux (x86_64)
 curl -L https://github.com/jrollin/cartog/releases/latest/download/cartog-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cartog /usr/local/bin/

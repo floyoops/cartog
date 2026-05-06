@@ -6,6 +6,7 @@ Start here: the root [README](../README.md) for install and quick start.
 
 - [product.md](product.md) — vision, target users, positioning, benchmark caveats
 - [usage.md](usage.md) — complete CLI reference, MCP server setup, agent skill
+- [updates.md](updates.md) — `cartog self update`, exit codes, env vars, state file
 - [editor-integration.md](editor-integration.md) — Neovim, VS Code, Emacs, Zed recipes
 - [troubleshooting.md](troubleshooting.md) — common errors and fixes
 

@@ -310,6 +310,16 @@ cartog serve --watch --rag      # watcher + deferred RAG embedding
 
 When an agent calls `cartog_index` via MCP, LSP servers are started once and **kept warm** for the session. Subsequent index calls reuse warm servers (~2s instead of a cold 2-15s startup). Background watch re-indexing stays heuristic-only.
 
+### Self (upgrade / inspect / rollback)
+```bash
+cartog self update              # upgrade in place to latest stable
+cartog self update --check      # report whether an update exists; exit 1 if outdated
+cartog self version             # version + target + install source + last check
+cartog self rollback            # restore the previous binary saved at <bin>.old
+```
+
+User-facing maintenance commands. If the agent observes a "new cartog version available" hint or a stale binary, it can suggest the user run `cartog self update`. `cargo install cartog` users get an exit-3 refusal pointing at `cargo install cartog --force` instead.
+
 ## Token Budget
 
 Use `--tokens N` to limit output to approximately N tokens (human-readable only, ignored with `--json`):

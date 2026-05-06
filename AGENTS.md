@@ -2,7 +2,7 @@
 
 ## Project
 
-cartog — code graph indexer for LLM coding agents. Cargo workspace (9 crates), tree-sitter parsing, SQLite storage.
+cartog — code graph indexer for LLM coding agents. Cargo workspace (10 crates), tree-sitter parsing, SQLite storage.
 
 See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/tech.md) for architecture decisions, [docs/structure.md](docs/structure.md) for module layout, [docs/usage.md](docs/usage.md) for CLI commands and MCP/skill setup.
 
@@ -11,7 +11,7 @@ See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/
 ```bash
 cargo build              # debug build
 cargo build --release    # release build
-cargo test --workspace   # run all tests (~495 tests across 9 crates)
+cargo test --workspace   # run all tests (~600 tests across 10 crates)
 cargo fmt --check        # check formatting
 cargo clippy --all-targets -- -D warnings  # lint
 ```
@@ -52,7 +52,7 @@ Run `make check` before committing. Run `make eval-skill` after changing skill S
 See [docs/structure.md](docs/structure.md) for full directory tree and module responsibilities.
 
 ```
-crates/cartog/         (binary — CLI dispatch, config)
+crates/cartog/         (binary — CLI dispatch, config, self-update)
 ├── cartog-core        (Symbol, Edge, SymbolKind, detect_language)
 ├── cartog-db          (SQLite: core + RAG schema, edge resolution)
 ├── cartog-languages   (tree-sitter extractors, 8 languages)
@@ -60,7 +60,8 @@ crates/cartog/         (binary — CLI dispatch, config)
 ├── cartog-rag         (embeddings, hybrid search, reranker)
 ├── cartog-lsp         (LSP-based edge resolution — default feature)
 ├── cartog-watch       (debounced re-index + deferred RAG)
-└── cartog-mcp         (MCP server over stdio, 12 tools)
+├── cartog-mcp         (MCP server over stdio, 12 tools)
+└── cartog-process-lock (PID-file locks for serve/watch peers)
 ```
 
 Each language extractor implements the `Extractor` trait from `crates/cartog-languages/src/lib.rs`:
@@ -82,7 +83,7 @@ Returns `Vec<Symbol>` + `Vec<Edge>`. After all files are extracted, `db.resolve_
 
 - **CI** (`.github/workflows/ci.yml`): runs on push/PR to `main` — check, fmt, clippy, test, coverage (cargo-llvm-cov → Codecov)
 - **Release** (`.github/workflows/release.yml`): runs on tag push (`v*`) — builds binaries for 5 targets, creates GitHub Release, publishes to crates.io
-- **Targets**: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`
+- **Targets** (4): `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`
 - **Secrets required**: `CARGO_REGISTRY_TOKEN` (crates.io), `CODECOV_TOKEN` (Codecov)
 
 ### Release Process
@@ -119,7 +120,7 @@ After implementation, mark checklist items complete — the spec stays as a desi
 ## Current State
 
 - **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, Markdown
-- **CLI**: 18 top-level commands (`index`, `search`, `outline`, `refs`, `callees`, `impact`, `hierarchy`, `deps`, `stats`, `map`, `changes`, `config`, `doctor`, `watch`, `serve`, `completions`, `manpage`, plus `rag` with 3 subcommands) + MCP server (12 tools)
+- **CLI**: 19 top-level commands (`index`, `search`, `outline`, `refs`, `callees`, `impact`, `hierarchy`, `deps`, `stats`, `map`, `changes`, `config`, `doctor`, `watch`, `serve`, `completions`, `manpage`, plus `rag` with 3 subcommands and `self` with 3 subcommands) + MCP server (12 tools)
 - **Indexing**: incremental (git-based + SHA-256 + Merkle-tree symbol diffing), `--force` re-index. Stable symbol IDs (`file:kind:qualified_name`) survive line movements. Scoped edge resolution for changed files only
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
 - **Watch**: `cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding
