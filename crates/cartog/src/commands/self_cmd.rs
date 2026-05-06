@@ -204,8 +204,82 @@ fn emit_check_outcome(outcome: &CheckOutcome, json: bool) {
     }
 }
 
+/// `cartog self rollback` entry point.
+///
+/// Restores the binary previously saved at `<bin>.old` (created by a
+/// successful `self update`) onto `<bin>`. The currently-running broken
+/// binary is staged aside via `Move::replace_using_temp` and then deleted
+/// so the user is left with a single binary and no leftover sibling.
+///
+/// Exit codes:
+/// - `0` — successfully restored
+/// - `1` — no `.old` to restore
+/// - `2` — swap failed
+///
+/// Platform note: on Windows, renaming a running `.exe` is forbidden by
+/// the OS and the swap will fail with exit 2. Users on Windows who need
+/// to roll back must invoke rollback from a different running process.
 pub fn cmd_self_rollback() -> Result<()> {
-    anyhow::bail!("cartog self rollback: not yet implemented")
+    let exit_code = run_rollback();
+    std::process::exit(exit_code);
+}
+
+fn run_rollback() -> i32 {
+    let current_bin = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("cartog: cannot resolve current exe: {e}");
+            return 2;
+        }
+    };
+    let backup_path = backup_path_for(&current_bin);
+    if !backup_path.exists() {
+        eprintln!(
+            "cartog: no previous binary to roll back to (looked for {})",
+            backup_path.display(),
+        );
+        return 1;
+    }
+
+    // Stage the currently-running binary aside via a per-PID temp path so
+    // a parallel `self update` cannot collide with our intermediate file.
+    let install_dir = match current_bin.parent() {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "cartog: current exe {} has no parent directory",
+                current_bin.display(),
+            );
+            return 2;
+        }
+    };
+    let intermediate = install_dir.join(format!(".cartog.broken.{}.tmp", std::process::id()));
+
+    if let Err(e) = self_update::Move::from_source(&backup_path)
+        .replace_using_temp(&intermediate)
+        .to_dest(&current_bin)
+    {
+        eprintln!("cartog: rollback failed: {e}");
+        return 2;
+    }
+
+    // Per RD-2 the user is back to a single binary with no `.old` sibling.
+    // Move::to_dest consumed `<bin>.old`, so only the staged broken binary
+    // remains at `intermediate`. Best-effort delete; a failure here is
+    // worth surfacing but does not invalidate the rollback.
+    if let Err(e) = std::fs::remove_file(&intermediate) {
+        tracing::warn!(
+            error = %e,
+            path = %intermediate.display(),
+            "rollback succeeded but failed to clean up staged broken binary",
+        );
+    }
+
+    println!(
+        "cartog: rolled back to previous binary ({})",
+        current_bin.display(),
+    );
+    0
 }
 
 // ── --check internals ─────────────────────────────────────────────────

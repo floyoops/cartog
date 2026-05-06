@@ -508,3 +508,114 @@ fn self_update_full_already_up_to_date_exits_zero() {
         "should report up-to-date, got: {stdout}"
     );
 }
+
+// ── self rollback ─────────────────────────────────────────────────────
+//
+// Rollback tests run as subprocesses against a *copy* of the cartog
+// binary in a sandboxed install dir, so the swap operates on real files
+// without touching the test runner's binary or `target/debug/`. Gated to
+// unix because (a) Windows can't rename a running .exe and (b) the
+// chmod helper here is unix-only.
+
+#[cfg(unix)]
+fn copy_cartog_into(dir: &std::path::Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("cartog");
+    std::fs::copy(cartog_bin(), &bin).expect("copy cartog");
+    let mut perms = std::fs::metadata(&bin).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&bin, perms).unwrap();
+    bin
+}
+
+#[cfg(unix)]
+fn run_self_rollback(bin: &std::path::Path, state_dir: &std::path::Path) -> std::process::Output {
+    Command::new(bin)
+        .arg("self")
+        .arg("rollback")
+        .env("HOME", state_dir)
+        .env("XDG_STATE_HOME", state_dir.join("state"))
+        .env("XDG_DATA_HOME", state_dir.join("data"))
+        .env("XDG_CONFIG_HOME", state_dir.join("config"))
+        .env_remove("CARGO_HOME")
+        .output()
+        .expect("failed to spawn cartog")
+}
+
+#[cfg(unix)]
+#[test]
+fn self_rollback_exits_one_when_no_old_present() {
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    let bin = copy_cartog_into(install_dir.path());
+
+    let out = run_self_rollback(&bin, home.path());
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "rollback with no .old must exit 1; stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no previous binary"),
+        "expected guidance about missing .old, got stderr: {stderr}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn self_rollback_swaps_old_back_in_when_present() {
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+
+    // Plant a "broken" current binary and a "good" .old binary. We use
+    // copies of the real cartog for both so the post-rollback `cartog
+    // --version` (run by the test) actually works — the test only cares
+    // that the swap happened and no .old remains. Distinguish them by
+    // appending unique trailing bytes so the file size differs.
+    let bin = copy_cartog_into(install_dir.path());
+    let backup = install_dir.path().join("cartog.old");
+    std::fs::copy(&bin, &backup).unwrap();
+    // Append a marker to the *current* binary so we can tell it apart from
+    // the backup by size. fs::write replaces content but preserves perms,
+    // so the executable bit copy_cartog_into set survives.
+    let mut current_bytes = std::fs::read(&bin).unwrap();
+    current_bytes.extend_from_slice(b"\n#current-marker\n");
+    std::fs::write(&bin, &current_bytes).unwrap();
+    let backup_size = std::fs::metadata(&backup).unwrap().len();
+
+    let out = run_self_rollback(&bin, home.path());
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "successful rollback must exit 0; stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    // After rollback, `<bin>` should match the original .old, and the
+    // .old sibling must be gone (RD-2: single binary, no .old).
+    let new_bin_size = std::fs::metadata(&bin).unwrap().len();
+    assert_eq!(
+        new_bin_size, backup_size,
+        "post-rollback binary size should match the backup"
+    );
+    assert!(
+        !backup.exists(),
+        ".old must be consumed by the rollback (got leftover at {})",
+        backup.display()
+    );
+    // No leftover staged-broken-binary intermediate either.
+    let leftovers: Vec<String> = std::fs::read_dir(install_dir.path())
+        .unwrap()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with(".cartog.broken."))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "no .cartog.broken.*.tmp leftovers expected, got: {leftovers:?}"
+    );
+}
