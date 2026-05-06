@@ -298,3 +298,75 @@ fn spawn_check_run_once_rejects_prerelease_tags() {
         "state file must not be written on parse failure"
     );
 }
+
+// ── T-21: combined suppression signals ────────────────────────────────
+//
+// The single-signal `main_epilogue_skips_*` tests above cover each gate
+// in isolation. These verify the contract still holds when *multiple*
+// suppression signals are active simultaneously (e.g. non-TTY AND
+// disabled, or LongLived AND a fresh state file). A regression that
+// reorders the gating short-circuits would pass the single-signal
+// tests but could fail one of these.
+
+#[test]
+fn suppression_holds_when_disabled_and_long_lived_combined() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = dir.path().join("state.toml");
+    let mut input = epilogue_input(&state_path, "http://127.0.0.1:1/");
+    input.disabled_env = Some("1");
+    input.command_kind = CommandKind::LongLived;
+    assert!(
+        !maybe_spawn(input),
+        "any single signal suppresses; both must too"
+    );
+    assert!(!state_path.exists());
+}
+
+#[test]
+fn suppression_holds_when_non_tty_and_always_mode_combined() {
+    // CARTOG_UPDATE_CHECK=always overrides the daily interval but must
+    // NOT override the TTY gate — interactive output is the whole point.
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = dir.path().join("state.toml");
+    let mut input = epilogue_input(&state_path, "http://127.0.0.1:1/");
+    input.stdout_is_tty = false;
+    input.mode_env = Some("always");
+    assert!(
+        !maybe_spawn(input),
+        "non-TTY must suppress even with mode=always (interactive-only contract)"
+    );
+}
+
+#[test]
+fn suppression_holds_when_long_lived_and_fresh_state() {
+    // Even with an ancient last_check (24h gate would fire on its own), a
+    // long-lived command (serve/watch) must never trigger an auto-check.
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = dir.path().join("state.toml");
+    State {
+        last_update_check: Some("2020-01-01T00:00:00Z".to_string()),
+        ..Default::default()
+    }
+    .save_to(&state_path)
+    .expect("seed state");
+    let original = std::fs::read_to_string(&state_path).expect("read seeded state");
+
+    let mut input = epilogue_input(&state_path, "http://127.0.0.1:1/");
+    input.command_kind = CommandKind::LongLived;
+    assert!(!maybe_spawn(input), "long-lived must beat the 24h interval");
+    let after = std::fs::read_to_string(&state_path).expect("re-read state");
+    assert_eq!(after, original, "no spawn must not mutate state");
+}
+
+#[test]
+fn suppression_priority_disabled_env_beats_always_mode() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = dir.path().join("state.toml");
+    let mut input = epilogue_input(&state_path, "http://127.0.0.1:1/");
+    input.disabled_env = Some("1");
+    input.mode_env = Some("always");
+    assert!(
+        !maybe_spawn(input),
+        "CARTOG_NO_UPDATE_CHECK=1 must beat CARTOG_UPDATE_CHECK=always"
+    );
+}

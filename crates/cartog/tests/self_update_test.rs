@@ -605,3 +605,246 @@ fn self_rollback_swaps_old_back_in_when_present() {
         "no .cartog.broken.*.tmp leftovers expected, got: {leftovers:?}"
     );
 }
+
+// ── T-20: focused spec-rule coverage ──────────────────────────────────
+//
+// One pinpoint test per spec rule (BR-1, BR-4, BR-6, RD-3) so a future
+// regression that re-routes through one of these branches (e.g. a
+// refactor that swaps the cargo refusal order with the network probe)
+// triggers a test failure naming the exact contract that broke.
+
+/// Multi-route mock that serves `/releases/latest`, `<archive>`, and
+/// `SHA256SUMS` from one listener. Returns `(api_url, download_base)`
+/// suitable for `CARTOG_GITHUB_API_URL` and `CARTOG_GITHUB_DOWNLOAD_BASE`.
+fn spawn_release_mock(latest: &str, archive_bytes: Vec<u8>, sums_text: String) -> (String, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
+    let port = listener.local_addr().unwrap().port();
+    let latest = latest.to_string();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..n]);
+            let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+            let (status, content_type, body): (&str, &str, Vec<u8>) =
+                if path.contains("/releases/latest") {
+                    (
+                        "200 OK",
+                        "application/json",
+                        format!(r#"{{"tag_name":"v{latest}"}}"#).into_bytes(),
+                    )
+                } else if path.ends_with("SHA256SUMS") {
+                    ("200 OK", "text/plain", sums_text.clone().into_bytes())
+                } else if path.contains("/cartog-") {
+                    ("200 OK", "application/octet-stream", archive_bytes.clone())
+                } else {
+                    ("404 Not Found", "text/plain", b"not found".to_vec())
+                };
+            let header = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(&body);
+            let _ = stream.flush();
+        }
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    (format!("{base}/releases/latest"), base)
+}
+
+#[test]
+fn cargo_source_refusal_short_circuits_before_network() {
+    // BR-4: a cargo-installed binary must refuse `self update` *without*
+    // reaching the network. Point both URLs at a black hole; if the
+    // refusal ever stops being the first branch, the test will fail with
+    // a network error instead of exit 3.
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = run_self_update_full(
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[("CARTOG_TEST_INSTALL_SOURCE", "cargo")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "cargo-installed must exit 3 (cargo refusal); stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        combined.contains("cargo install cartog --force"),
+        "guidance must name the cargo command (AC-5.2), got: {combined}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn checksum_mismatch_abort_leaves_binary_intact() {
+    // BR-1: a checksum mismatch must abort with no FS mutation.
+    // Mock GitHub returns a "newer" version, a tarball whose actual SHA256
+    // does not match the value in SHA256SUMS, and a plausible-looking
+    // SHA256SUMS file. We assert: exit code 4, no `<bin>.old` created,
+    // staging dirs cleaned up.
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let archive_bytes = b"not a real tarball, but bytes nonetheless".to_vec();
+    let target = std::env::var("TARGET").unwrap_or_else(|_| {
+        // Best-effort guess from the host triple. The binary's TARGET is
+        // baked at build time, so we just need any plausible filename
+        // SHA256SUMS entry — the binary parses by exact filename match.
+        cartog_target_triple()
+    });
+    let archive_name = if target.contains("windows") {
+        format!("cartog-{target}.zip")
+    } else {
+        format!("cartog-{target}.tar.gz")
+    };
+    // Wrong hash (64 hex chars but doesn't match the bytes above).
+    let bad_hash = "0".repeat(64);
+    let sums = format!("{bad_hash}  {archive_name}\n");
+    let (api, dl_base) = spawn_release_mock("99.0.0", archive_bytes, sums);
+
+    let out = Command::new(cartog_bin())
+        .arg("self")
+        .arg("update")
+        .env("HOME", dir.path())
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("XDG_DATA_HOME", dir.path().join("data"))
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("CARTOG_GITHUB_API_URL", &api)
+        .env("CARTOG_GITHUB_DOWNLOAD_BASE", &dl_base)
+        .env("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")
+        .env_remove("CARGO_HOME")
+        .output()
+        .expect("spawn cartog");
+
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "checksum mismatch must exit 4 (BR-1); stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        combined.contains("checksum"),
+        "message should mention checksum, got: {combined}"
+    );
+    // The running test binary itself was not touched (we point HOME at a
+    // tempdir but the actual binary lives in target/debug). The post-
+    // condition we *can* check: no `<bin>.old` sibling appeared next to
+    // the running binary, and no stale staging dirs in the install dir.
+    let bin = cartog_bin();
+    let parent = bin.parent().unwrap();
+    let old_path = parent.join("cartog.old");
+    assert!(
+        !old_path.exists(),
+        "checksum failure must not create <bin>.old, found: {}",
+        old_path.display()
+    );
+    let staging_leftovers: Vec<String> = std::fs::read_dir(parent)
+        .unwrap()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with(".cartog-update-"))
+        .collect();
+    assert!(
+        staging_leftovers.is_empty(),
+        "staging dirs must be cleaned up after checksum failure, got: {staging_leftovers:?}"
+    );
+}
+
+/// Resolve the target triple at runtime when `TARGET` env is unset (it's
+/// only populated for build scripts, not for tests). Mirrors the format
+/// `archive_name_for` consumes.
+#[cfg(unix)]
+fn cartog_target_triple() -> String {
+    // `cartog self version --json` reports the bare triple.
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = Command::new(cartog_bin())
+        .arg("self")
+        .arg("version")
+        .arg("--json")
+        .env("HOME", dir.path())
+        .env_remove("CARGO_HOME")
+        .output()
+        .expect("spawn cartog self version");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    stdout
+        .split("\"target\"")
+        .nth(1)
+        .and_then(|s| s.split('"').nth(1))
+        .map(str::to_string)
+        .expect("self version --json should report target")
+}
+
+#[cfg(unix)]
+#[test]
+fn rollback_removes_old_after_successful_swap() {
+    // BR-6 + RD-2: after a successful rollback, the user is back to a
+    // single binary with no `.old` sibling. Pinpoints just the cleanup
+    // invariant — the broader rollback test asserts content/size as well.
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+
+    let bin = copy_cartog_into(install_dir.path());
+    let backup = install_dir.path().join("cartog.old");
+    std::fs::copy(&bin, &backup).unwrap();
+
+    let out = run_self_rollback(&bin, home.path());
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "rollback should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        !backup.exists(),
+        ".old must be removed after rollback (RD-2), found leftover: {}",
+        backup.display(),
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn concurrent_process_abort_names_the_running_peer() {
+    // RD-3 + AC-1.3: when a peer is detected, the upgrade refuses (exit
+    // 6) and the message must name the offending slot+pid so the user
+    // knows what to stop.
+    let dir = tempfile::TempDir::new().unwrap();
+    let lock_dir = isolated_lock_dir(dir.path());
+    std::fs::create_dir_all(&lock_dir).unwrap();
+    // Use the test runner's own PID — guaranteed alive for the duration.
+    let pid = std::process::id();
+    std::fs::write(lock_dir.join("serve.pid"), pid.to_string()).unwrap();
+
+    let out = run_self_update_full(
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(6),
+        "live peer must exit 6; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        combined.contains("serve") && combined.contains(&pid.to_string()),
+        "abort message should name the slot and pid, got: {combined}"
+    );
+}
