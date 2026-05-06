@@ -28,3 +28,11 @@ pub use cartog_process_lock as process_lock;
 /// only so integration tests can reach it. Not a stable public API.
 #[doc(hidden)]
 pub mod auto_check;
+
+/// Persistent CLI state (last update check, last known latest version).
+///
+/// Hidden from rustdoc: internal CLI plumbing exposed via the lib facade
+/// only so the auto-check thread (`auto_check::spawn_check`) and
+/// integration tests can reach it. Not a stable public API.
+#[doc(hidden)]
+pub mod state;

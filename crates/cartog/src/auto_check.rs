@@ -1,10 +1,18 @@
 //! Auto-check predicate and helpers for the daily background update probe.
 //!
-//! The actual thread spawn lands in a follow-up task; this module owns the
-//! "should we even bother?" decision so it can be unit-tested in isolation
-//! from the network and the filesystem.
+//! Two responsibilities:
+//! 1. The pure [`should_check`] predicate decides whether to fire the
+//!    background probe at all (env, TTY, command kind, interval).
+//! 2. [`run_check_once`] / [`spawn_check`] perform the actual probe:
+//!    fetch the latest release tag and update the on-disk state file.
+//!
+//! Both halves take their inputs as parameters so unit tests can exercise
+//! them without touching real env / FS / network.
 
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
+
+use crate::state::State;
 
 /// Kind of command currently running. Long-lived commands (`serve`,
 /// `watch`) deliberately skip the auto-check — they are typically started
@@ -164,6 +172,182 @@ fn days_since_epoch(year: u64, month: u64, day: u64) -> Option<u64> {
 
 fn is_leap(year: u32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+// ── background fetch + state write ────────────────────────────────────
+
+/// Spawn a detached background thread that fetches the latest release tag
+/// and writes the result + timestamp to the state file. Returns
+/// immediately; the caller never waits.
+///
+/// This intentionally swallows all failures: a network blip or transient
+/// permission error must never disturb the user's actual command. The
+/// state file simply won't be updated; the next check (24h+ later, or on
+/// the next invocation in `Always` mode) will retry.
+///
+/// Note: the design contemplates a "best-effort 100 ms join hint" so
+/// fast networks get state persisted before process exit, with detach as
+/// fallback. We currently pure-detach: on a localhost / fast LAN the
+/// network call usually finishes before `main` returns, but a slow probe
+/// against `api.github.com` can be killed by process exit. Acceptable
+/// trade-off — the next invocation reruns the check.
+pub fn spawn_check(api_url: String, state_path: Option<PathBuf>, current_version: String) {
+    std::thread::spawn(move || {
+        if let Err(e) = run_check_once(&api_url, state_path.as_deref(), &current_version) {
+            tracing::debug!(error = %e, "background update check failed");
+        }
+    });
+}
+
+/// Synchronous body of the background check. Factored out so tests can
+/// drive it without spawning a thread.
+pub fn run_check_once(
+    api_url: &str,
+    state_path: Option<&std::path::Path>,
+    current_version: &str,
+) -> Result<(), CheckOnceError> {
+    let latest = fetch_latest_tag(api_url)?;
+    let outdated = compare_stable_versions(current_version, &latest) == std::cmp::Ordering::Less;
+    if let Some(path) = state_path {
+        let mut state = State::load_from(path);
+        state.last_update_check = Some(now_rfc3339());
+        state.last_known_latest = Some(latest);
+        state.last_known_outdated = outdated;
+        state
+            .save_to(path)
+            .map_err(|e| CheckOnceError::StateSave(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Categorised error surface for [`run_check_once`]. Tests assert on the
+/// variants; production code only ever logs the message.
+#[derive(Debug)]
+pub enum CheckOnceError {
+    Network(String),
+    Parse(String),
+    StateSave(String),
+}
+
+impl std::fmt::Display for CheckOnceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CheckOnceError::Network(m) => write!(f, "network error: {m}"),
+            CheckOnceError::Parse(m) => write!(f, "parse error: {m}"),
+            CheckOnceError::StateSave(m) => write!(f, "state save failed: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for CheckOnceError {}
+
+/// Fetch GitHub's `releases/latest`, return the bare semver tag.
+///
+/// Mirrors the strict-stable-only contract from `commands::self_cmd`: a
+/// prerelease-shaped tag (`-alpha`, `-rc`, `-nightly`, …) is treated as
+/// "no eligible release" and reported as a parse error so the auto-check
+/// thread doesn't write garbage into the state file.
+///
+/// Duplicated from `commands::self_cmd` because the two callers want
+/// different error shapes (`CheckOnceError` here vs `anyhow::Error`
+/// there). When a third caller appears, extract to a shared helper.
+fn fetch_latest_tag(url: &str) -> Result<String, CheckOnceError> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(concat!("cartog/", env!("CARGO_PKG_VERSION")))
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| CheckOnceError::Network(e.to_string()))?;
+    let response = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .map_err(|e| CheckOnceError::Network(e.to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(CheckOnceError::Network(format!("HTTP {status}")));
+    }
+    let body = response
+        .text()
+        .map_err(|e| CheckOnceError::Network(e.to_string()))?;
+    parse_release_tag(&body)
+        .ok_or_else(|| CheckOnceError::Parse("no stable release tag in response".to_string()))
+}
+
+/// Pull `tag_name` from the JSON payload. Strips a leading `v`, rejects
+/// any prerelease suffix.
+fn parse_release_tag(json: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(json).ok()?;
+    let tag = parsed.get("tag_name")?.as_str()?;
+    let trimmed = tag.strip_prefix('v').unwrap_or(tag);
+    if trimmed.contains('-') {
+        return None;
+    }
+    if !is_stable_semver(trimmed) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn is_stable_semver(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn compare_stable_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |s: &str| -> [u64; 3] {
+        let mut parts = s.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
+        [
+            parts.next().unwrap_or(0),
+            parts.next().unwrap_or(0),
+            parts.next().unwrap_or(0),
+        ]
+    };
+    parse(a).cmp(&parse(b))
+}
+
+/// RFC3339 timestamp for `now`, formatted as `YYYY-MM-DDTHH:MM:SSZ` to
+/// match the parser. Hand-rolled to avoid a `chrono` / `time` dep for
+/// one call site.
+fn now_rfc3339() -> String {
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let day_secs = 86_400u64;
+    let mut days = secs / day_secs;
+    let rem = secs % day_secs;
+    let hour = rem / 3600;
+    let minute = (rem % 3600) / 60;
+    let second = rem % 60;
+    let mut year: u64 = 1970;
+    loop {
+        let dy: u64 = if is_leap(year as u32) { 366 } else { 365 };
+        if days < dy {
+            break;
+        }
+        days -= dy;
+        year += 1;
+    }
+    let months = [31u64, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut month = 1u64;
+    for (idx, &dm) in months.iter().enumerate() {
+        let dm = if idx == 1 && is_leap(year as u32) {
+            29
+        } else {
+            dm
+        };
+        if days < dm {
+            break;
+        }
+        days -= dm;
+        month += 1;
+    }
+    let day = days + 1;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 #[cfg(test)]

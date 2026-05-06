@@ -1,8 +1,7 @@
 mod cli;
 mod commands;
 mod config;
-#[allow(dead_code)]
-mod state;
+use cartog::state;
 
 use anyhow::Result;
 use cartog_mcp as mcp;
