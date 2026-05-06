@@ -163,8 +163,19 @@ jobs:
         run: |
           set -euo pipefail
           cd artifacts
-          sha256sum cartog-*.tar.gz cartog-*.zip > SHA256SUMS
+          # nullglob: an absent matrix target (e.g. dropped Windows) expands
+          # to nothing instead of a literal pattern that would fail sha256sum.
+          shopt -s nullglob
+          files=( cartog-*.tar.gz cartog-*.zip )
+          shopt -u nullglob
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no release archives to hash" >&2
+            exit 1
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS
+          echo "::group::SHA256SUMS"
           cat SHA256SUMS
+          echo "::endgroup::"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -172,6 +183,11 @@ jobs:
           body: ${{ needs.changelog.outputs.release_body }}
           files: artifacts/*
 
+  # NOTE: CARTOG_RELEASE_BUILD is intentionally NOT set in this job. Binaries
+  # produced by `cargo install cartog` from crates.io must be detected as
+  # `cargo` at runtime (via the path heuristic in commands/self_cmd.rs).
+  # Setting it here would brand them as `release-tarball` and let
+  # `cartog self update` overwrite cargo-managed binaries.
   publish:
     name: Publish to crates.io
     needs: build
