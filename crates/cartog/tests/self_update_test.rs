@@ -372,3 +372,139 @@ fn self_update_check_does_not_write_state_file() {
         "--check must not write state.toml anywhere under HOME",
     );
 }
+
+// ── self update full upgrade flow ─────────────────────────────────────
+
+/// Spawn `cartog self update` (no --check) in an isolated HOME with a
+/// mocked GitHub API. The download base is also pinned to a localhost URL
+/// — tests that don't actually exercise the download path can leave it
+/// pointing at a black hole because the upgrade-refusal branches return
+/// before any download happens.
+fn run_self_update_full(
+    state_dir: &std::path::Path,
+    api_url: &str,
+    extra_env: &[(&str, &str)],
+) -> std::process::Output {
+    let mut cmd = Command::new(cartog_bin());
+    cmd.arg("self")
+        .arg("update")
+        .env("HOME", state_dir)
+        .env("XDG_STATE_HOME", state_dir.join("state"))
+        .env("XDG_DATA_HOME", state_dir.join("data"))
+        .env("XDG_CONFIG_HOME", state_dir.join("config"))
+        .env("CARTOG_GITHUB_API_URL", api_url)
+        // Ensure no test ever tries to talk to real GitHub for downloads.
+        .env(
+            "CARTOG_GITHUB_DOWNLOAD_BASE",
+            "http://127.0.0.1:1/blackhole",
+        )
+        .env_remove("CARGO_HOME");
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    cmd.output().expect("failed to spawn cartog")
+}
+
+/// Reverse-DNS bundle id used by `directories::ProjectDirs` on macOS.
+/// Used to seed PID lock files into the directory the binary will scan.
+#[cfg(not(target_os = "windows"))]
+fn isolated_lock_dir(fake_home: &std::path::Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        fake_home
+            .join("Library")
+            .join("Application Support")
+            .join("io.cartog.cartog")
+    } else {
+        fake_home.join("state").join("cartog")
+    }
+}
+
+#[test]
+fn self_update_full_aborts_for_cargo_install() {
+    // Force the install-source detection into the cargo branch via the
+    // test seam. Network is irrelevant — the cargo refusal must short
+    // circuit before any HTTP call. Pointing the API at a black hole
+    // verifies that.
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = run_self_update_full(
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[("CARTOG_TEST_INSTALL_SOURCE", "cargo")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "cargo source must exit 3; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        combined.contains("cargo install cartog --force"),
+        "guidance message should name the cargo command, got: {combined}"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn self_update_full_aborts_when_peer_running() {
+    // Plant a live PID file (our own PID) in the lock dir the binary will
+    // discover. The upgrade flow must refuse before fetching anything.
+    let dir = tempfile::TempDir::new().unwrap();
+    let lock_dir = isolated_lock_dir(dir.path());
+    std::fs::create_dir_all(&lock_dir).unwrap();
+    std::fs::write(lock_dir.join("watch.pid"), std::process::id().to_string()).unwrap();
+
+    let out = run_self_update_full(
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        // Force "release-tarball" so the cargo-source branch doesn't fire.
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(6),
+        "live peer must exit 6; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        combined.contains("watch") && combined.contains(&std::process::id().to_string()),
+        "message should name the slot and pid, got: {combined}"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn self_update_full_already_up_to_date_exits_zero() {
+    // Mock GitHub returns the running version; upgrade must report
+    // "already up to date" without touching the binary.
+    let dir = tempfile::TempDir::new().unwrap();
+    let api = spawn_canned_github_response(format!(
+        "{{\"tag_name\":\"v{}\"}}",
+        env!("CARGO_PKG_VERSION")
+    ));
+    let out = run_self_update_full(
+        dir.path(),
+        &api,
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "up-to-date upgrade must exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("already up to date"),
+        "should report up-to-date, got: {stdout}"
+    );
+}
