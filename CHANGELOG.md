@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.14.0] - 2026-05-06
+## [0.14.1] - 2026-05-06
 
 ### Bug Fixes
 
@@ -47,6 +47,7 @@
 - **self-update**: Harden upgrade flow against post-swap edge cases ([`81eac1f`](https://github.com/jrollin/cartog/commit/81eac1fa685c4ff18f3ba19e3564e3f43fab028e))
 - **release**: Publish cartog-process-lock to crates.io ([`76a2ba1`](https://github.com/jrollin/cartog/commit/76a2ba1e87572290b49a74e48390cc5d20dc650b))
 - **test**: Work around Linux ETXTBSY in smoke_test unit tests ([`3596c58`](https://github.com/jrollin/cartog/commit/3596c58eba0286095b9df106b59cf3a329796c73))
+- **skill**: Print actionable install guide when cartog is missing ([`8feb09c`](https://github.com/jrollin/cartog/commit/8feb09c4a853391a1abdac4a14216a334411748d))
 
 ### Documentation
 
