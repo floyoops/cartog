@@ -925,10 +925,10 @@ deadbeef *cartog-x86_64-unknown-linux-gnu.tar.gz
                     let _ = child.wait();
                     return;
                 }
-                Err(e) if e.raw_os_error() == Some(26) => {
+                Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
                     std::thread::sleep(Duration::from_millis(20 * (attempt + 1)));
                 }
-                Err(_) => return,
+                Err(e) => panic!("unexpected spawn error from {bin:?}: {e}"),
             }
         }
     }
