@@ -1,6 +1,9 @@
 mod cli;
 mod commands;
 mod config;
+// Wired into commands by T-5/T-10 (`self version`, auto-check).
+#[allow(dead_code)]
+mod state;
 
 use anyhow::Result;
 use cartog_mcp as mcp;

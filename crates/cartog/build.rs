@@ -38,6 +38,22 @@ fn main() {
     };
     println!("cargo:rustc-env=CARTOG_BUILD_FEATURES={features_str}");
 
+    // Distribution channel baked at build time. The release workflow sets
+    // `CARTOG_RELEASE_BUILD=1` for tarball builds; everything else is `dev`.
+    // `cargo install` users are detected at runtime by inspecting the binary
+    // path (see commands/self_cmd.rs install-source resolution).
+    let install_source = if env::var_os("CARTOG_RELEASE_BUILD").is_some() {
+        "release-tarball"
+    } else {
+        "dev"
+    };
+    println!("cargo:rustc-env=CARTOG_INSTALL_SOURCE={install_source}");
+    println!("cargo:rerun-if-env-changed=CARTOG_RELEASE_BUILD");
+
+    // Target triple as seen by rustc; surfaced via `cartog self version`.
+    let target = env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
+    println!("cargo:rustc-env=CARTOG_TARGET_TRIPLE={target}");
+
     // Re-run when git HEAD moves. Resolve the path via git itself so we
     // handle git worktrees (where .git is a file, not a dir) and
     // unusual layouts correctly. When git isn't available (e.g.
