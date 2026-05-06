@@ -45,20 +45,30 @@ else
         DB_FILE=".cartog.db"
     fi
 fi
-REPO="jrollin/cartog"
 VERSION_CACHE="${HOME}/.cache/cartog/latest_version"
 VERSION_TTL=86400  # 24 hours
 
-# Phase 0: Check for newer cartog version (non-blocking)
+# Phase 0: Check for newer cartog version (non-blocking, never installs).
+# Delegates to `cartog self update --check` per BR-9 — the hook only ever
+# *reports*; bootstrap and upgrades are user-initiated via install.sh /
+# `cartog self update`. A local 24h cache short-circuits the network call
+# on subsequent invocations within the same day.
 check_update() {
+    if ! command -v cartog >/dev/null 2>&1; then
+        echo "cartog not found on PATH. Install with: bash $SCRIPT_DIR/install.sh"
+        return 0
+    fi
+
     local installed
-    installed="$(cartog --version 2>/dev/null | sed -E 's/^cartog //')" || return 0
+    installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')"
     [ -n "$installed" ] || return 0
 
-    local latest=""
-    local now
+    local now latest=""
     now=$(date +%s)
 
+    # Fresh cache (≤24h) — reuse the cached `latest` without hitting the
+    # network. Still compare against `installed` so the outdated hint
+    # surfaces on every session within the TTL window.
     if [ -f "$VERSION_CACHE" ]; then
         local cached_version cached_ts
         cached_version="$(cut -d' ' -f1 "$VERSION_CACHE" 2>/dev/null)" || true
@@ -69,32 +79,23 @@ check_update() {
     fi
 
     if [ -z "$latest" ]; then
-        local tag
-        tag="$(curl -fsSL --max-time 5 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-            | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')" || return 0
-        [ -n "$tag" ] || return 0
-        latest="$tag"
+        # --check is read-only; --json gives a stable schema with `latest`.
+        # Exit codes: 0 up to date, 1 outdated, 2 network/parse error.
+        local output rc
+        output="$(cartog self update --check --json 2>/dev/null)" && rc=0 || rc=$?
+        case "$rc" in
+            0|1) ;;
+            *)   return 0 ;;
+        esac
+        latest="$(printf '%s' "$output" | sed -n 's/.*"latest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        [ -n "$latest" ] || return 0
         mkdir -p "$(dirname "$VERSION_CACHE")"
         echo "$latest $now" > "$VERSION_CACHE"
     fi
 
-    if version_gt "$latest" "$installed"; then
-        echo "New cartog version available: $latest (installed: $installed). Update with: bash $SCRIPT_DIR/install.sh $latest"
+    if [ "$latest" != "$installed" ]; then
+        echo "New cartog version available: $latest (installed: $installed). Run: cartog self update"
     fi
-}
-
-version_gt() {
-    local IFS=.
-    local -a a b
-    read -ra a <<< "$1"
-    read -ra b <<< "$2"
-    local i
-    for ((i=0; i<${#a[@]}; i++)); do
-        local ai="${a[i]:-0}" bi="${b[i]:-0}"
-        if [ "$ai" -gt "$bi" ] 2>/dev/null; then return 0; fi
-        if [ "$ai" -lt "$bi" ] 2>/dev/null; then return 1; fi
-    done
-    return 1
 }
 
 check_update || true
