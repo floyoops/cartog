@@ -141,7 +141,10 @@ fn main() -> Result<()> {
         ),
         Command::Serve { watch, rag } => {
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(mcp::run_server(&db_path, watch, rag, provider_config))
+            let opts = mcp::ServerOptions {
+                pid_lock_dir: state::default_state_dir(),
+            };
+            runtime.block_on(mcp::run_server(&db_path, watch, rag, provider_config, opts))
         }
         Command::Rag(rag_cmd) => match rag_cmd {
             RagCommand::Setup => commands::cmd_rag_setup(cli.json),

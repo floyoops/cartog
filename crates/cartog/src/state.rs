@@ -47,20 +47,27 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-/// Resolve the platform-specific state file path.
+/// Resolve the platform-specific state directory. Hosts both
+/// `state.toml` and the PID lock files written by long-lived commands.
 ///
 /// Returns `None` if no home/state directory could be resolved (e.g. a
 /// sandboxed environment with neither `$HOME` nor `%USERPROFILE%`).
-pub fn default_path() -> Option<PathBuf> {
+pub fn default_state_dir() -> Option<PathBuf> {
     let proj = ProjectDirs::from("io", "cartog", "cartog")?;
     // On Linux, `state_dir()` returns `$XDG_STATE_HOME/cartog`. macOS and
     // Windows do not distinguish state from data-local, so fall back to
     // `data_local_dir()` there.
-    let dir = proj
-        .state_dir()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| proj.data_local_dir().to_path_buf());
-    Some(dir.join(FILE_NAME))
+    Some(
+        proj.state_dir()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| proj.data_local_dir().to_path_buf()),
+    )
+}
+
+/// Resolve the platform-specific state file path (`state.toml` inside
+/// [`default_state_dir`]).
+pub fn default_state_file() -> Option<PathBuf> {
+    Some(default_state_dir()?.join(FILE_NAME))
 }
 
 impl State {
@@ -233,6 +240,7 @@ mod tests {
         // `default_path` should never panic. On a normal dev workstation it
         // returns Some; in a sandbox without a home directory it returns None.
         // Either is acceptable — the test just asserts no panic.
-        let _ = default_path();
+        let _ = default_state_file();
+        let _ = default_state_dir();
     }
 }

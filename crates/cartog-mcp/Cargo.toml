@@ -13,6 +13,7 @@ cartog-db = { workspace = true }
 cartog-indexer = { workspace = true }
 cartog-rag = { workspace = true }
 cartog-watch = { workspace = true }
+cartog-process-lock = { workspace = true }
 cartog-lsp = { workspace = true, optional = true }
 anyhow = { workspace = true }
 rmcp = { workspace = true }
@@ -23,3 +24,6 @@ tracing = { workspace = true }
 
 [features]
 lsp = ["dep:cartog-lsp", "cartog-indexer/lsp"]
+
+[dev-dependencies]
+tempfile = { workspace = true }

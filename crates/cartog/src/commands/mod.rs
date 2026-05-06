@@ -1410,6 +1410,7 @@ pub fn cmd_watch(
     config.rag_delay = Duration::from_secs(rag_delay);
     config.rag_config = provider_config;
     config.json_events = json;
+    config.pid_lock_dir = crate::state::default_state_dir();
 
     let db_path_str = db_path.to_string_lossy();
     watch::run_watch(config, &db_path_str)

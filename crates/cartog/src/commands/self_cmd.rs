@@ -112,7 +112,7 @@ impl VersionInfo {
 /// running binary's path, then prints either a human-readable summary or a
 /// JSON object.
 pub fn cmd_self_version(json: bool) -> Result<()> {
-    let state = match state::default_path() {
+    let state = match state::default_state_file() {
         Some(p) => State::load_from(&p),
         None => State::default(),
     };

@@ -16,8 +16,8 @@ pub use cartog_lsp as lsp;
 /// PID-file locks used by long-lived commands (`serve`, `watch`) and
 /// consulted by `cartog self update` to detect concurrent peers.
 ///
-/// Hidden from rustdoc: this is internal CLI plumbing that lives on
-/// the lib facade only because integration tests need it. Not a stable
-/// public API — may change without a major-version bump.
+/// Hidden from rustdoc: this is internal CLI plumbing re-exported only
+/// so integration tests can reach it without each consumer crate
+/// importing `cartog-process-lock` directly. Not a stable public API.
 #[doc(hidden)]
-pub mod process_lock;
+pub use cartog_process_lock as process_lock;

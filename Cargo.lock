@@ -217,6 +217,7 @@ dependencies = [
  "cartog-languages",
  "cartog-lsp",
  "cartog-mcp",
+ "cartog-process-lock",
  "cartog-rag",
  "cartog-watch",
  "clap",
@@ -224,7 +225,6 @@ dependencies = [
  "clap_mangen",
  "criterion",
  "directories",
- "libc",
  "reqwest",
  "self_update",
  "serde",
@@ -235,7 +235,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -318,13 +317,24 @@ dependencies = [
  "cartog-db",
  "cartog-indexer",
  "cartog-lsp",
+ "cartog-process-lock",
  "cartog-rag",
  "cartog-watch",
  "rmcp",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "cartog-process-lock"
+version = "0.13.2"
+dependencies = [
+ "libc",
+ "tempfile",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -349,12 +359,14 @@ dependencies = [
  "cartog-core",
  "cartog-db",
  "cartog-indexer",
+ "cartog-process-lock",
  "cartog-rag",
  "ctrlc",
  "notify",
  "notify-debouncer-mini",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
 ]
 

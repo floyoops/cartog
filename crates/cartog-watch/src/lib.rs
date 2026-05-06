@@ -36,6 +36,12 @@ pub struct WatchConfig {
     /// Emit newline-delimited JSON events on stdout. When false, the loop
     /// only produces tracing logs on stderr (existing behavior).
     pub json_events: bool,
+    /// If set, the watch loop writes `<dir>/watch.pid` at startup and
+    /// removes it on graceful exit. `cartog self update` consults these
+    /// files before swapping the binary so it can refuse to clobber a
+    /// running watcher. `None` skips PID-file management entirely (used
+    /// by tests and by callers that don't need self-update awareness).
+    pub pid_lock_dir: Option<PathBuf>,
 }
 
 impl WatchConfig {
@@ -50,9 +56,13 @@ impl WatchConfig {
             rag_delay: Duration::from_secs(30),
             rag_config: rag::EmbeddingProviderConfig::default(),
             json_events: false,
+            pid_lock_dir: None,
         }
     }
 }
+
+/// Slot name used by `cartog watch` for its PID file.
+pub const WATCH_LOCK_SLOT: &str = "watch";
 
 /// A single event emitted by the watch loop when `json_events` is enabled.
 ///
@@ -203,6 +213,18 @@ fn watch_loop(
     db_path: &str,
     shutdown: &AtomicBool,
 ) -> Result<()> {
+    // Acquire the PID lock first so a failure to write the file aborts
+    // before we open the DB or start watching. `_lock` lives until the
+    // function returns, then RAII drop removes the file.
+    let _lock: Option<cartog_process_lock::ProcessLock> = match config.pid_lock_dir.as_deref() {
+        Some(dir) => Some(
+            cartog_process_lock::ProcessLock::acquire(dir, WATCH_LOCK_SLOT).with_context(|| {
+                format!("failed to acquire watch PID lock at {}", dir.display())
+            })?,
+        ),
+        None => None,
+    };
+
     let db = Database::open(db_path, config.rag_config.resolved_dimension())
         .context("failed to open database for watcher")?;
 
