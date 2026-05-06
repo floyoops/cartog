@@ -93,9 +93,27 @@ check_update() {
         echo "$latest $now" > "$VERSION_CACHE"
     fi
 
-    if [ "$latest" != "$installed" ]; then
+    if version_gt "$latest" "$installed"; then
         echo "New cartog version available: $latest (installed: $installed). Run: cartog self update"
     fi
+}
+
+# Semver compare: returns 0 iff $1 > $2 component-wise. Local pre-release
+# suffixes (e.g. 0.14.0-rc.1 from a dev build) compare as the bare numeric
+# triple, which is fine — the binary's own --check refuses prereleases as
+# "latest", so we only ever compare a stable `latest` against `installed`.
+version_gt() {
+    local IFS=.
+    local -a a b
+    read -ra a <<< "${1%%-*}"
+    read -ra b <<< "${2%%-*}"
+    local i
+    for ((i=0; i<${#a[@]} || i<${#b[@]}; i++)); do
+        local ai="${a[i]:-0}" bi="${b[i]:-0}"
+        if [ "$ai" -gt "$bi" ] 2>/dev/null; then return 0; fi
+        if [ "$ai" -lt "$bi" ] 2>/dev/null; then return 1; fi
+    done
+    return 1
 }
 
 check_update || true
