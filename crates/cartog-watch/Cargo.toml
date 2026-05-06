@@ -12,6 +12,7 @@ cartog-core = { workspace = true }
 cartog-db = { workspace = true }
 cartog-indexer = { workspace = true }
 cartog-rag = { workspace = true }
+cartog-process-lock = { workspace = true }
 anyhow = { workspace = true }
 ctrlc = { workspace = true }
 notify = { workspace = true }
@@ -19,3 +20,6 @@ notify-debouncer-mini = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

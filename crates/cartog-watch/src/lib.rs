@@ -36,6 +36,10 @@ pub struct WatchConfig {
     /// Emit newline-delimited JSON events on stdout. When false, the loop
     /// only produces tracing logs on stderr (existing behavior).
     pub json_events: bool,
+    /// Directory for the watcher's PID file (written on startup, removed on
+    /// graceful exit). `None` disables PID-file tracking. Consulted by
+    /// `cartog self update` to detect a running watcher.
+    pub pid_lock_dir: Option<PathBuf>,
 }
 
 impl WatchConfig {
@@ -50,9 +54,12 @@ impl WatchConfig {
             rag_delay: Duration::from_secs(30),
             rag_config: rag::EmbeddingProviderConfig::default(),
             json_events: false,
+            pid_lock_dir: None,
         }
     }
 }
+
+pub const WATCH_LOCK_SLOT: &str = "watch";
 
 /// A single event emitted by the watch loop when `json_events` is enabled.
 ///
@@ -137,6 +144,10 @@ impl Drop for WatchHandle {
 ///
 /// Returns a `WatchHandle` that can be used to stop the watcher.
 /// The watcher opens its own `Database` connection (SQLite WAL allows concurrent readers).
+///
+/// Errors from `watch_loop` (including PID-lock acquire failures) are
+/// logged inside the thread; the caller still receives `Ok(WatchHandle)`.
+/// Use [`run_watch`] when lock failures must propagate synchronously.
 pub fn spawn_watch(config: WatchConfig, db_path: &str) -> Result<WatchHandle> {
     let root = config
         .root
@@ -203,6 +214,16 @@ fn watch_loop(
     db_path: &str,
     shutdown: &AtomicBool,
 ) -> Result<()> {
+    // Acquire first so a lock failure aborts before opening DB / watcher.
+    let _lock: Option<cartog_process_lock::ProcessLock> = match config.pid_lock_dir.as_deref() {
+        Some(dir) => Some(
+            cartog_process_lock::ProcessLock::acquire(dir, WATCH_LOCK_SLOT).with_context(|| {
+                format!("failed to acquire watch PID lock at {}", dir.display())
+            })?,
+        ),
+        None => None,
+    };
+
     let db = Database::open(db_path, config.rag_config.resolved_dimension())
         .context("failed to open database for watcher")?;
 

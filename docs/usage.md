@@ -14,6 +14,8 @@ cargo build --release
 cargo install --path .
 ```
 
+To upgrade an existing install in place, `cartog self update`. See [updates.md](updates.md) for the full `cartog self` command surface, env vars, and rollback.
+
 ## Configuration
 
 cartog resolves the database path using the following priority (highest wins):
@@ -403,6 +405,19 @@ Emit a `roff` man page on stdout. Intended for packagers and distro maintainers.
 cartog manpage > /usr/local/share/man/man1/cartog.1
 man cartog
 ```
+
+### `cartog self <update|version|rollback>`
+
+Manage the installed cartog binary in place: upgrade, inspect, or roll back.
+
+```bash
+cartog self update             # upgrade to the latest stable
+cartog self update --check     # report whether an update exists; exit 1 if outdated
+cartog self version            # version + target + install source + last check
+cartog self rollback           # restore the previous binary saved at <bin>.old
+```
+
+`cartog self update` refuses to overwrite a `cargo install cartog` binary (exit 3) and points at `cargo install cartog --force` instead. See [updates.md](updates.md) for the full exit-code matrix, env vars (`CARTOG_NO_UPDATE_CHECK`, `CARTOG_UPDATE_CHECK`), platform-specific state file location, and rollback contract.
 
 ### `cartog rag setup`
 

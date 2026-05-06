@@ -122,10 +122,6 @@ cargo install cartog --features ollama-embedding      # + Ollama support
 curl -L https://github.com/jrollin/cartog/releases/latest/download/cartog-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv cartog /usr/local/bin/
 
-# macOS (Intel)
-curl -L https://github.com/jrollin/cartog/releases/latest/download/cartog-x86_64-apple-darwin.tar.gz | tar xz
-sudo mv cartog /usr/local/bin/
-
 # Linux (x86_64)
 curl -L https://github.com/jrollin/cartog/releases/latest/download/cartog-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cartog /usr/local/bin/
@@ -136,6 +132,19 @@ sudo mv cartog /usr/local/bin/
 
 # Windows (x86_64) — download .zip from releases page
 ```
+
+### Upgrade
+
+Once cartog is on your `PATH`:
+
+```bash
+cartog self update           # upgrade in place to the latest stable
+cartog self update --check   # report whether an update exists; exit 1 if outdated
+cartog self version          # show installed version + last-check timestamp
+cartog self rollback         # restore the previous binary
+```
+
+Cargo-installed binaries upgrade with `cargo install cartog --force`. See [docs/updates.md](docs/updates.md) for env vars, exit codes, and the state file location.
 
 ### Claude Code plugin
 

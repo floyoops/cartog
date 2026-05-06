@@ -39,6 +39,8 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
+        env:
+          CARTOG_RELEASE_BUILD: "1"
         run: cargo build --release --target ${{ matrix.target }}
 
       # Smoke-test the built binary (all runners are native — no cross-compilation)
@@ -55,7 +57,7 @@ jobs:
 
           # All expected subcommands are present
           HELP=$($BIN --help)
-          for cmd in index outline search refs callees impact hierarchy deps stats doctor config map changes watch serve rag; do
+          for cmd in index outline search refs callees impact hierarchy deps stats doctor config map changes watch serve rag self; do
             echo "$HELP" | grep -q "$cmd" || { echo "FAIL: missing subcommand '$cmd'"; exit 1; }
           done
 
@@ -64,6 +66,15 @@ jobs:
           for cmd in setup index search; do
             echo "$RAG_HELP" | grep -q "$cmd" || { echo "FAIL: missing rag subcommand '$cmd'"; exit 1; }
           done
+
+          # self subcommands (update / version / rollback) — proves
+          # CARTOG_RELEASE_BUILD baked the right install_source.
+          SELF_HELP=$($BIN self --help)
+          for cmd in update version rollback; do
+            echo "$SELF_HELP" | grep -q "$cmd" || { echo "FAIL: missing self subcommand '$cmd'"; exit 1; }
+          done
+          $BIN self version | grep -q "release-tarball" \
+            || { echo "FAIL: install_source should be release-tarball"; $BIN self version; exit 1; }
 
           echo "Smoke test passed"
 
@@ -79,7 +90,7 @@ jobs:
           echo "$VERSION" | grep -q "cartog"
 
           HELP=$($BIN --help)
-          for cmd in index outline search refs callees impact hierarchy deps stats doctor config map changes watch serve rag; do
+          for cmd in index outline search refs callees impact hierarchy deps stats doctor config map changes watch serve rag self; do
             echo "$HELP" | grep -q "$cmd" || { echo "FAIL: missing subcommand '$cmd'"; exit 1; }
           done
 
@@ -87,6 +98,13 @@ jobs:
           for cmd in setup index search; do
             echo "$RAG_HELP" | grep -q "$cmd" || { echo "FAIL: missing rag subcommand '$cmd'"; exit 1; }
           done
+
+          SELF_HELP=$($BIN self --help)
+          for cmd in update version rollback; do
+            echo "$SELF_HELP" | grep -q "$cmd" || { echo "FAIL: missing self subcommand '$cmd'"; exit 1; }
+          done
+          $BIN self version | grep -q "release-tarball" \
+            || { echo "FAIL: install_source should be release-tarball"; $BIN self version; exit 1; }
 
           echo "Smoke test passed"
 
@@ -154,12 +172,38 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # Generate SHA256SUMS over every shipped archive. Format matches
+      # `sha256sum -c` (one entry per line, "<hash>  <filename>") so users
+      # and `cartog self update` can verify downloads in bulk.
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd artifacts
+          # nullglob: an absent matrix target (e.g. dropped Windows) expands
+          # to nothing instead of a literal pattern that would fail sha256sum.
+          shopt -s nullglob
+          files=( cartog-*.tar.gz cartog-*.zip )
+          shopt -u nullglob
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no release archives to hash" >&2
+            exit 1
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS
+          echo "::group::SHA256SUMS"
+          cat SHA256SUMS
+          echo "::endgroup::"
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body: ${{ needs.changelog.outputs.release_body }}
           files: artifacts/*
 
+  # NOTE: CARTOG_RELEASE_BUILD is intentionally NOT set in this job. Binaries
+  # produced by `cargo install cartog` from crates.io must be detected as
+  # `cargo` at runtime (via the path heuristic in commands/self_cmd.rs).
+  # Setting it here would brand them as `release-tarball` and let
+  # `cartog self update` overwrite cargo-managed binaries.
   publish:
     name: Publish to crates.io
     needs: build
@@ -169,6 +213,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Publish all crates in dependency order
         env:
+          # Do not add CARTOG_RELEASE_BUILD here — see job-level NOTE above.
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           crates=(
@@ -178,6 +223,7 @@ jobs:
             cartog-lsp
             cartog-rag
             cartog-indexer
+            cartog-process-lock
             cartog-watch
             cartog-mcp
             cartog

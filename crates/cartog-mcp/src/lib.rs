@@ -869,6 +869,30 @@ impl ServerHandler for CartogServer {
     }
 }
 
+pub const SERVE_LOCK_SLOT: &str = "serve";
+
+#[derive(Default)]
+pub struct ServerOptions {
+    /// Directory for the server's PID file (written on startup, removed on
+    /// graceful exit). `None` disables PID-file tracking. Consulted by
+    /// `cartog self update` to detect a running peer.
+    pub pid_lock_dir: Option<PathBuf>,
+}
+
+/// Acquire the serve PID lock; returns `Ok(None)` when no lock dir is configured.
+pub fn acquire_serve_lock(
+    opts: &ServerOptions,
+) -> anyhow::Result<Option<cartog_process_lock::ProcessLock>> {
+    use anyhow::Context;
+    let dir = match opts.pid_lock_dir.as_deref() {
+        Some(d) => d,
+        None => return Ok(None),
+    };
+    cartog_process_lock::ProcessLock::acquire(dir, SERVE_LOCK_SLOT)
+        .map(Some)
+        .with_context(|| format!("failed to acquire serve PID lock at {}", dir.display()))
+}
+
 /// Start the MCP server over stdio.
 ///
 /// When `watch` is true, a background file watcher keeps the index fresh.
@@ -878,8 +902,12 @@ pub async fn run_server(
     watch: bool,
     rag: bool,
     rag_config: rag::EmbeddingProviderConfig,
+    opts: ServerOptions,
 ) -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
+
+    // Acquire first so a lock failure aborts before opening DB / watcher.
+    let _lock = acquire_serve_lock(&opts)?;
 
     // Optionally spawn a background file watcher
     let db_path_str = db_path.to_string_lossy().into_owned();
@@ -1129,5 +1157,56 @@ mod tests {
         let json = serde_json::to_string(&entry).expect("serialize");
         assert!(json.contains("\"Dog\""));
         assert!(json.contains("\"Animal\""));
+    }
+
+    // ── PID-file lock tests ──
+
+    #[test]
+    fn pid_file_acquired_when_lock_dir_set() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let opts = ServerOptions {
+            pid_lock_dir: Some(dir.path().to_path_buf()),
+        };
+        let lock = acquire_serve_lock(&opts).expect("acquire");
+        assert!(lock.is_some(), "lock should be returned when dir is set");
+        let path = dir.path().join(format!("{SERVE_LOCK_SLOT}.pid"));
+        assert!(path.exists(), "PID file should exist while lock is held");
+        let pid: u32 = std::fs::read_to_string(&path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(pid, std::process::id());
+        drop(lock);
+        assert!(
+            !path.exists(),
+            "PID file should be removed once the lock is dropped"
+        );
+    }
+
+    #[test]
+    fn pid_file_skipped_when_lock_dir_unset() {
+        let opts = ServerOptions::default();
+        let lock = acquire_serve_lock(&opts).expect("noop");
+        assert!(
+            lock.is_none(),
+            "no lock dir → no PID file, no guard returned"
+        );
+    }
+
+    #[test]
+    fn pid_file_acquire_failure_propagates() {
+        // Pointing pid_lock_dir at a regular file makes ProcessLock::acquire
+        // fail at create_dir_all; the error must surface to the caller so
+        // `cartog serve` aborts rather than silently running unlocked.
+        let blocker = tempfile::NamedTempFile::new().unwrap();
+        let opts = ServerOptions {
+            pid_lock_dir: Some(blocker.path().to_path_buf()),
+        };
+        let err = acquire_serve_lock(&opts).unwrap_err();
+        assert!(
+            err.to_string().contains("serve PID lock"),
+            "error should mention the lock context, got: {err}"
+        );
     }
 }

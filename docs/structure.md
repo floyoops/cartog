@@ -2,7 +2,7 @@
 
 ## Workspace Layout
 
-cartog is a Cargo workspace with 9 crates under `crates/`. Each crate has its own `README.md` with detailed technical documentation.
+cartog is a Cargo workspace with 10 crates under `crates/`. Each crate has its own `README.md` with detailed technical documentation.
 
 ```
 cartog/
@@ -65,17 +65,28 @@ cartog/
 │   │   └── src/lib.rs       # WatchConfig, spawn_watch(), run_watch(), debounce + RAG timer
 │   ├── cartog-mcp/          # MCP server
 │   │   └── src/lib.rs       # CartogServer, 12 tool handlers, path validation
+│   ├── cartog-process-lock/ # PID-file locks (consulted by `cartog self update`)
+│   │   └── src/lib.rs       # ProcessLock, find_active_locks, is_alive
 │   └── cartog/              # Binary crate + lib facade
+│       ├── build.rs         # Bakes target triple + install source via env vars
 │       ├── src/
-│       │   ├── main.rs      # Entry point, CLI dispatch
+│       │   ├── main.rs      # Entry point, CLI dispatch, auto-check epilogue
 │       │   ├── lib.rs       # Re-exports: cartog::db, cartog::types, etc.
 │       │   ├── cli.rs       # Clap command definitions
-│       │   ├── commands.rs  # Command handlers (outline, refs, impact, etc.)
-│       │   └── config.rs    # .cartog.toml loading, DB path resolution
+│       │   ├── commands/    # Command handlers
+│       │   │   ├── mod.rs   # Top-level: outline, refs, impact, search, …
+│       │   │   └── self_cmd.rs  # `cartog self` (update/version/rollback)
+│       │   ├── config.rs    # .cartog.toml loading, DB path resolution
+│       │   ├── auto_check.rs # Daily background update probe (predicate + spawn)
+│       │   ├── state.rs     # `state.toml` (last update check, etc.)
+│       │   └── time_fmt.rs  # Hand-rolled RFC3339 ↔ Unix-seconds (no chrono dep)
 │       ├── benches/
 │       │   └── queries.rs   # Criterion micro-benchmarks (query latency, µs)
 │       └── tests/
-│           ├── rag_relevancy.rs  # RAG relevancy benchmark (P@k, R@k, NDCG)
+│           ├── rag_relevancy.rs   # RAG relevancy benchmark (P@k, R@k, NDCG)
+│           ├── self_update_test.rs # `cartog self` integration tests
+│           ├── auto_check_test.rs  # Auto-check epilogue gating tests
+│           ├── process_lock_test.rs # Cross-process PID-file lifecycle
 │           └── fixtures/
 │               └── auth/    # Python fixtures for indexer tests
 ├── .claude-plugin/
@@ -130,6 +141,7 @@ cartog/
 
 ```
 cartog-core          (tier 0 — no internal deps)
+cartog-process-lock  (tier 0 — no internal deps; libc/windows-sys only)
 ├── cartog-db        (tier 1)
 ├── cartog-languages (tier 1)
 │
@@ -137,8 +149,8 @@ cartog-core          (tier 0 — no internal deps)
 ├── cartog-rag       (tier 2 — db + core)
 ├── cartog-lsp       (tier 2 — db + core, default feature)
 │
-├── cartog-watch     (tier 3 — db + indexer + rag + core)
-├── cartog-mcp       (tier 3 — db + indexer + rag + watch + core)
+├── cartog-watch     (tier 3 — db + indexer + rag + core + process-lock)
+├── cartog-mcp       (tier 3 — db + indexer + rag + watch + core + process-lock)
 │
 └── cartog           (tier 4 — binary, depends on all)
 ```
@@ -156,8 +168,9 @@ Each crate has a `README.md` with detailed technical documentation. Summary:
 - **[cartog-rag](../crates/cartog-rag/README.md)**: Pluggable embedding providers (local ONNX, Ollama), hybrid search (FTS5 + vector KNN → RRF merge → cross-encoder reranking), model cache management. Indexes both code symbols and Markdown documents.
 - **[cartog-lsp](../crates/cartog-lsp/README.md)**: LSP-based edge resolution (default feature). Spawns language servers, sends `textDocument/definition`, maps responses to cartog symbol IDs. Omitted when built with `--no-default-features`.
 - **[cartog-watch](../crates/cartog-watch/README.md)**: Debounced file watcher (`notify-debouncer-mini`), incremental re-index on changes, deferred RAG embedding with configurable timer. See [spec-watch.md](spec-watch.md) for design details.
-- **[cartog-mcp](../crates/cartog-mcp/README.md)**: MCP server over stdio (`rmcp`). 12 tool handlers with JSON Schema params, path validation (canonicalization), `Arc<Mutex<Database>>` for shared state.
-- **[cartog](../crates/cartog/README.md)**: Binary crate (16 CLI commands via clap) + lib.rs facade re-exporting all crates as `cartog::db`, `cartog::types`, etc. Config resolution, logging setup, tokio runtime for MCP serve.
+- **[cartog-mcp](../crates/cartog-mcp/README.md)**: MCP server over stdio (`rmcp`). 12 tool handlers with JSON Schema params, path validation (canonicalization), `Arc<Mutex<Database>>` for shared state. Writes a `serve.pid` file consumed by `cartog self update`.
+- **cartog-process-lock**: Cross-platform PID-file locks (`<state_dir>/{slot}.pid`) for long-lived commands. `is_alive(pid)` via `kill(pid, 0)` on unix and `OpenProcess` on windows. Consulted by `cartog self update` so an upgrade refuses to clobber a running peer.
+- **[cartog](../crates/cartog/README.md)**: Binary crate (19 CLI commands via clap, including `cartog self` with `update`/`version`/`rollback`) + lib.rs facade re-exporting all crates as `cartog::db`, `cartog::types`, etc. Config resolution, logging setup, tokio runtime for MCP serve, daily background update probe.
 
 ## Conventions
 
