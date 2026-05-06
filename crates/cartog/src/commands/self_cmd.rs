@@ -892,16 +892,45 @@ deadbeef *cartog-x86_64-unknown-linux-gnu.tar.gz
         }
     }
 
-    /// Write an executable shell script and return its path.
+    /// Sync + close before chmod to avoid Linux ETXTBSY on fast spawn.
     #[cfg(unix)]
     fn write_exec_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::io::Write;
         use std::os::unix::fs::PermissionsExt;
         let path = dir.join(name);
-        std::fs::write(&path, body).unwrap();
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(body.as_bytes()).unwrap();
+            f.sync_data().unwrap();
+        }
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&path, perms).unwrap();
         path
+    }
+
+    /// Spin until exec(2) on the script no longer hits ETXTBSY (Linux
+    /// flags the inode briefly post-write).
+    #[cfg(unix)]
+    fn wait_for_exec_ready(bin: &Path) {
+        for attempt in 0..10 {
+            match std::process::Command::new(bin)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(mut child) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+                Err(e) if e.raw_os_error() == Some(26) => {
+                    std::thread::sleep(Duration::from_millis(20 * (attempt + 1)));
+                }
+                Err(_) => return,
+            }
+        }
     }
 
     #[cfg(unix)]
@@ -909,6 +938,7 @@ deadbeef *cartog-x86_64-unknown-linux-gnu.tar.gz
     fn smoke_test_passes_on_zero_exit() {
         let dir = tempfile::TempDir::new().unwrap();
         let bin = write_exec_script(dir.path(), "ok", "#!/bin/sh\nexit 0\n");
+        wait_for_exec_ready(&bin);
         smoke_test(&bin).expect("zero-exit binary must pass");
     }
 
@@ -917,6 +947,7 @@ deadbeef *cartog-x86_64-unknown-linux-gnu.tar.gz
     fn smoke_test_fails_on_non_zero_exit() {
         let dir = tempfile::TempDir::new().unwrap();
         let bin = write_exec_script(dir.path(), "fail", "#!/bin/sh\nexit 7\n");
+        wait_for_exec_ready(&bin);
         let err = smoke_test(&bin).expect_err("non-zero exit must fail");
         let msg = format!("{err:#}");
         assert!(msg.contains("exited with"), "got: {msg}");
@@ -935,6 +966,7 @@ deadbeef *cartog-x86_64-unknown-linux-gnu.tar.gz
         // net. Marked #[ignore] would mask the bug; better to fail loud.
         let dir = tempfile::TempDir::new().unwrap();
         let bin = write_exec_script(dir.path(), "hang", "#!/bin/sh\nsleep 30\n");
+        wait_for_exec_ready(&bin);
         let start = std::time::Instant::now();
         let err = smoke_test(&bin).expect_err("hanging binary must time out");
         let elapsed = start.elapsed();
