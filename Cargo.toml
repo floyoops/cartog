@@ -50,6 +50,8 @@ rayon = "1.10"
 toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
 self_update = { version = "0.42", default-features = false, features = ["archive-tar", "archive-zip", "compression-flate2", "rustls"] }
 directories = "5"
+libc = "0.2"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
 fastembed = { version = "5", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 rmcp = { version = "1.2", features = ["server", "transport-io"] }

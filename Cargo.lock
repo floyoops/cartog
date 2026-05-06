@@ -224,6 +224,7 @@ dependencies = [
  "clap_mangen",
  "criterion",
  "directories",
+ "libc",
  "reqwest",
  "self_update",
  "serde",
@@ -234,6 +235,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
