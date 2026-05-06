@@ -21,3 +21,10 @@ pub use cartog_lsp as lsp;
 /// importing `cartog-process-lock` directly. Not a stable public API.
 #[doc(hidden)]
 pub use cartog_process_lock as process_lock;
+
+/// Predicate gating the daily background update check.
+///
+/// Hidden from rustdoc: internal CLI plumbing exposed via the lib facade
+/// only so integration tests can reach it. Not a stable public API.
+#[doc(hidden)]
+pub mod auto_check;
