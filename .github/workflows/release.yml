@@ -39,6 +39,8 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
+        env:
+          CARTOG_RELEASE_BUILD: "1"
         run: cargo build --release --target ${{ matrix.target }}
 
       # Smoke-test the built binary (all runners are native — no cross-compilation)
@@ -153,6 +155,16 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      # Generate SHA256SUMS over every shipped archive. Format matches
+      # `sha256sum -c` (one entry per line, "<hash>  <filename>") so users
+      # and `cartog self update` can verify downloads in bulk.
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum cartog-*.tar.gz cartog-*.zip > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
