@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.14.4] - 2026-05-07
+## [0.14.5] - 2026-05-07
 
 ### Bug Fixes
 
@@ -50,6 +50,7 @@
 - **skill**: Print actionable install guide when cartog is missing ([`8feb09c`](https://github.com/jrollin/cartog/commit/8feb09c4a853391a1abdac4a14216a334411748d))
 - **skill**: Auto-install/update cartog binary against plugin version ([`6c5a296`](https://github.com/jrollin/cartog/commit/6c5a296abe0c65fb971e35717644914a407e0e8a))
 - **skill**: Defer cartog self update to SessionEnd to avoid peer-running deadlock ([`2e68387`](https://github.com/jrollin/cartog/commit/2e68387d5700b0b2a8a043a41a1af72e25996b43))
+- **skill**: Install to ~/.local/bin when ~/.cargo/bin is not on PATH ([`62d3c1c`](https://github.com/jrollin/cartog/commit/62d3c1cd6282e875ff64a74f453ef47e5721514f))
 
 ### Documentation
 
