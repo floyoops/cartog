@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.14.2] - 2026-05-06
+## [0.14.3] - 2026-05-07
 
 ### Bug Fixes
 
@@ -144,6 +144,10 @@
 - **github**: Add community health files ([`6c247c2`](https://github.com/jrollin/cartog/commit/6c247c282db4b2f5094580425c2fcb2032576e03))
 - **ci**: Add codecov.yml with 1% threshold tolerance ([`7d4af4a`](https://github.com/jrollin/cartog/commit/7d4af4a75f0682a66291c31066a07a692c27220c))
 - **security**: Bump rustls-webpki to 0.103.13 (RUSTSEC-2026-0104) ([`c4e0f0c`](https://github.com/jrollin/cartog/commit/c4e0f0cf448068ee8ac63dfd7a770a08861c4995))
+
+### Performance
+
+- **skill**: Move heavy session-start work to background pipeline ([`490a1b3`](https://github.com/jrollin/cartog/commit/490a1b3ec1c95cb7638a8c3946bfeffd5988b478))
 
 ### Refactor
 
