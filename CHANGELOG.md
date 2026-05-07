@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.14.3] - 2026-05-07
+## [0.14.4] - 2026-05-07
 
 ### Bug Fixes
 
@@ -49,6 +49,7 @@
 - **test**: Work around Linux ETXTBSY in smoke_test unit tests ([`3596c58`](https://github.com/jrollin/cartog/commit/3596c58eba0286095b9df106b59cf3a329796c73))
 - **skill**: Print actionable install guide when cartog is missing ([`8feb09c`](https://github.com/jrollin/cartog/commit/8feb09c4a853391a1abdac4a14216a334411748d))
 - **skill**: Auto-install/update cartog binary against plugin version ([`6c5a296`](https://github.com/jrollin/cartog/commit/6c5a296abe0c65fb971e35717644914a407e0e8a))
+- **skill**: Defer cartog self update to SessionEnd to avoid peer-running deadlock ([`2e68387`](https://github.com/jrollin/cartog/commit/2e68387d5700b0b2a8a043a41a1af72e25996b43))
 
 ### Documentation
 
