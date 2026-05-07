@@ -85,12 +85,22 @@ ensure_cartog_installed() {
         echo "cartog install failed. See output above." >&2
         exit 1
     fi
-    # install.sh may drop the binary in $HOME/.cargo/bin without it being on PATH yet.
+    # Probe the same candidates install.sh writes to, in case the chosen dir
+    # isn't on PATH yet.
     if ! command -v cartog >/dev/null 2>&1; then
-        export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+        for _candidate in \
+            "${CARTOG_INSTALL_DIR:-}" \
+            "$HOME/.local/bin" \
+            "${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin"; do
+            [ -n "$_candidate" ] || continue
+            if [ -x "$_candidate/cartog" ]; then
+                export PATH="$_candidate:$PATH"
+                break
+            fi
+        done
     fi
     if ! command -v cartog >/dev/null 2>&1; then
-        echo "cartog still not on PATH after install. Add ${CARGO_HOME:-\$HOME/.cargo}/bin to PATH and retry." >&2
+        echo "cartog still not on PATH after install. Add the install directory (printed above) to PATH and retry." >&2
         exit 1
     fi
 }

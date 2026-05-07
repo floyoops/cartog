@@ -87,6 +87,10 @@ MOCK
 create_mock_tar() {
     cat > "$TEST_DIR/bin/tar" <<'MOCK'
 #!/usr/bin/env bash
+# Drain stdin so the upstream `curl` doesn't get SIGPIPE under bash pipefail
+# (real `tar xz` reads stdin; a mock that exits without reading races and
+# makes `curl | tar` return 141 ~30% of the time on macOS).
+cat >/dev/null
 exit 0
 MOCK
     chmod +x "$TEST_DIR/bin/tar"
@@ -108,7 +112,21 @@ run_install() {
         # Use restricted PATH: test bin + essential system dirs only
         export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         export CARGO_HOME="$TEST_DIR/cargo_home"
-        mkdir -p "$CARGO_HOME/bin"
+        export HOME="$TEST_DIR/home"
+        mkdir -p "$CARGO_HOME/bin" "$HOME"
+        bash "$INSTALL_SCRIPT" "$@" 2>&1
+    )
+}
+
+# Variant that runs install.sh in a sandbox where cartog is NOT pre-installed,
+# letting us observe pick_install_dir's choice via the "installed to" line.
+run_install_fresh() {
+    (
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        mkdir -p "$HOME"
+        # Intentionally do not export CARGO_HOME unless the caller did — the
+        # test sets it via env when needed.
         bash "$INSTALL_SCRIPT" "$@" 2>&1
     )
 }
@@ -293,6 +311,288 @@ MOCK
     teardown
 }
 
+test_install_dir_prefers_local_bin_when_present() {
+    echo "TEST: ~/.local/bin exists → install dir is ~/.local/bin (not ~/.cargo/bin)"
+    setup
+    create_mock_curl
+    create_mock_tar
+    mkdir -p "$TEST_DIR/home/.local/bin"
+
+    local output
+    output=$(run_install_fresh) || true
+
+    assert_contains "installs to ~/.local/bin" "installed to $TEST_DIR/home/.local/bin/cartog" "$output"
+    assert_not_contains "does not install to ~/.cargo/bin" ".cargo/bin/cartog" "$output"
+    teardown
+}
+
+test_install_dir_falls_back_to_cargo_bin() {
+    echo "TEST: ~/.local/bin missing + no override → falls back to ~/.cargo/bin"
+    setup
+    create_mock_curl
+    create_mock_tar
+
+    local output
+    output=$(run_install_fresh) || true
+
+    assert_contains "installs to ~/.cargo/bin" "installed to $TEST_DIR/home/.cargo/bin/cartog" "$output"
+    teardown
+}
+
+test_install_dir_respects_cartog_install_dir_env() {
+    echo "TEST: \$CARTOG_INSTALL_DIR set → installs there regardless of ~/.local/bin"
+    setup
+    create_mock_curl
+    create_mock_tar
+    mkdir -p "$TEST_DIR/home/.local/bin"
+    mkdir -p "$TEST_DIR/custom-prefix"
+
+    local output
+    output=$(
+        export CARTOG_INSTALL_DIR="$TEST_DIR/custom-prefix"
+        run_install_fresh
+    ) || true
+
+    assert_contains "installs to override" "installed to $TEST_DIR/custom-prefix/cartog" "$output"
+    assert_not_contains "ignores ~/.local/bin when override is set" ".local/bin/cartog" "$output"
+    teardown
+}
+
+test_install_dir_reuses_existing_cartog_location() {
+    echo "TEST: cartog already on PATH → upgrade reuses its directory (no stale duplicate)"
+    setup
+    create_mock_cartog "0.6.1"  # lives at $TEST_DIR/bin/cartog
+    create_mock_curl
+    create_mock_tar
+    mkdir -p "$TEST_DIR/home/.local/bin"  # would otherwise be preferred
+
+    local output
+    output=$(run_install "0.7.0") || true
+
+    assert_contains "reuses existing dir" "installed to $TEST_DIR/bin/cartog" "$output"
+    assert_not_contains "does not pick ~/.local/bin" ".local/bin/cartog" "$output"
+    # Stale-duplicate check: ~/.local/bin must remain empty.
+    if [ ! -e "$TEST_DIR/home/.local/bin/cartog" ]; then
+        echo "  PASS: no stale duplicate in ~/.local/bin"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: stale duplicate created in ~/.local/bin"
+        FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
+test_path_warning_when_install_dir_not_on_path() {
+    echo "TEST: install dir not on PATH → verify_install prints PATH warning"
+    setup
+    create_mock_curl
+    create_mock_tar
+    # Pre-create the binary in the chosen dir so verify_install can run it
+    # (the mocked tar doesn't actually extract).
+    mkdir -p "$TEST_DIR/home/.cargo/bin"
+    cat > "$TEST_DIR/home/.cargo/bin/cartog" <<'MOCK'
+#!/usr/bin/env bash
+echo "cartog 0.9.0"
+MOCK
+    chmod +x "$TEST_DIR/home/.cargo/bin/cartog"
+
+    local output
+    output=$(run_install_fresh) || true
+
+    assert_contains "warns about PATH" "is not in your PATH" "$output"
+    assert_contains "shows export hint" "export PATH=" "$output"
+    teardown
+}
+
+test_no_path_warning_when_install_dir_on_path() {
+    echo "TEST: install dir IS on PATH → no PATH warning"
+    setup
+    create_mock_curl
+    create_mock_tar
+    # Use the test PATH dir as both the install target (via override) and an
+    # entry already on PATH. Pre-stage a working binary there.
+    cat > "$TEST_DIR/bin/cartog" <<'MOCK'
+#!/usr/bin/env bash
+echo "cartog 0.9.0"
+MOCK
+    chmod +x "$TEST_DIR/bin/cartog"
+
+    local output
+    output=$(
+        export CARTOG_INSTALL_DIR="$TEST_DIR/bin"
+        run_install_fresh
+    ) || true
+
+    assert_not_contains "no PATH warning" "is not in your PATH" "$output"
+    teardown
+}
+
+test_install_dir_ignores_cartog_function_shadow() {
+    echo "TEST: cartog as a shell function → pick_install_dir does NOT install into cwd"
+    setup
+    create_mock_curl
+    create_mock_tar
+    mkdir -p "$TEST_DIR/home/.local/bin"
+    # Wrapper script that defines a `cartog` function and then runs install.sh.
+    # `command -v cartog` from inside install.sh would print "cartog" (function
+    # name), and a buggy pick_install_dir would dirname that to "." and write
+    # the binary into the wrapper's cwd.
+    local wrapper="$TEST_DIR/run-with-function.sh"
+    cat > "$wrapper" <<WRAP
+#!/usr/bin/env bash
+cartog() { echo "cartog 0.6.1"; }
+export -f cartog
+cd "$TEST_DIR/home"
+bash "$INSTALL_SCRIPT" "0.7.0" 2>&1
+WRAP
+    chmod +x "$wrapper"
+
+    local output
+    output=$(
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        export CARGO_HOME="$TEST_DIR/cargo_home"
+        mkdir -p "$CARGO_HOME/bin"
+        bash "$wrapper"
+    ) || true
+
+    assert_contains "falls back to ~/.local/bin (function shadow ignored)" "installed to $TEST_DIR/home/.local/bin/cartog" "$output"
+    assert_not_contains "does not install into cwd" "installed to $TEST_DIR/home/cartog" "$output"
+    teardown
+}
+
+test_path_warning_handles_trailing_slash() {
+    echo "TEST: PATH entry has trailing slash → no spurious 'not in PATH' warning"
+    setup
+    create_mock_curl
+    create_mock_tar
+    cat > "$TEST_DIR/bin/cartog" <<'MOCK'
+#!/usr/bin/env bash
+echo "cartog 0.9.0"
+MOCK
+    chmod +x "$TEST_DIR/bin/cartog"
+
+    local output
+    output=$(
+        # Append trailing slash to the PATH entry that holds the install dir.
+        export PATH="$TEST_DIR/bin/:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        export CARTOG_INSTALL_DIR="$TEST_DIR/bin"
+        mkdir -p "$HOME"
+        bash "$INSTALL_SCRIPT" 2>&1
+    ) || true
+
+    assert_not_contains "no PATH warning despite trailing slash" "is not in your PATH" "$output"
+    teardown
+}
+
+test_verify_install_preserves_existing_binary_on_exec_failure() {
+    echo "TEST: existing binary that fails --version is NOT deleted when no install just happened"
+    setup
+    # Source install.sh's helpers in a subshell, then call verify_install
+    # directly with NO marker file present. just_installed should stay 0,
+    # so the broken binary at $bin must survive.
+    mkdir -p "$TEST_DIR/installdir"
+    cat > "$TEST_DIR/installdir/cartog" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/installdir/cartog"
+
+    (
+        # Strip lines below the function definitions so sourcing doesn't
+        # trigger the actual install flow at the bottom of the script.
+        sed -n '1,/^# Try pre-built binary first/p' "$INSTALL_SCRIPT" | sed '$d' > "$TEST_DIR/install-lib.sh"
+        export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        export CARTOG_INSTALL_DIR="$TEST_DIR/installdir"
+        # shellcheck disable=SC1091
+        source "$TEST_DIR/install-lib.sh"
+        # Marker absent → just_installed=0 → broken binary must NOT be deleted.
+        verify_install >/dev/null 2>&1 || true
+    )
+
+    if [ -x "$TEST_DIR/installdir/cartog" ]; then
+        echo "  PASS: pre-existing broken binary preserved (no marker → no delete)"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: pre-existing binary was wrongly deleted"
+        FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
+test_verify_install_deletes_freshly_installed_broken_binary() {
+    echo "TEST: freshly-installed binary that fails --version IS deleted (marker present)"
+    setup
+    mkdir -p "$TEST_DIR/installdir"
+    cat > "$TEST_DIR/installdir/cartog" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/installdir/cartog"
+
+    (
+        sed -n '1,/^# Try pre-built binary first/p' "$INSTALL_SCRIPT" | sed '$d' > "$TEST_DIR/install-lib.sh"
+        export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        export CARTOG_INSTALL_DIR="$TEST_DIR/installdir"
+        # shellcheck disable=SC1091
+        source "$TEST_DIR/install-lib.sh"
+        # Simulate install_from_github having just written the marker.
+        printf '%s\n' "$TEST_DIR/installdir" > "$INSTALL_DIR_MARKER"
+        verify_install >/dev/null 2>&1 || true
+    )
+
+    if [ ! -e "$TEST_DIR/installdir/cartog" ]; then
+        echo "  PASS: freshly-installed broken binary deleted"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: broken binary not deleted despite marker"
+        FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
+test_cargo_fallback_honors_cargo_install_root() {
+    echo "TEST: cargo fallback + CARGO_INSTALL_ROOT → verify_install probes the right dir"
+    setup
+    # Force github path to fail
+    cat > "$TEST_DIR/bin/curl" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/bin/curl"
+    create_mock_cargo
+    cat > "$TEST_DIR/bin/rustc" <<'MOCK'
+#!/usr/bin/env bash
+echo "rustc 1.77.0"
+MOCK
+    chmod +x "$TEST_DIR/bin/rustc"
+    # Pre-stage a runnable binary at the CARGO_INSTALL_ROOT location so
+    # verify_install can find it (cargo is mocked, doesn't actually write).
+    mkdir -p "$TEST_DIR/cargo-root/bin"
+    cat > "$TEST_DIR/cargo-root/bin/cartog" <<'MOCK'
+#!/usr/bin/env bash
+echo "cartog 0.9.0"
+MOCK
+    chmod +x "$TEST_DIR/cargo-root/bin/cartog"
+
+    local output
+    output=$(
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        export CARGO_HOME="$TEST_DIR/cargo_home"
+        export CARGO_INSTALL_ROOT="$TEST_DIR/cargo-root"
+        mkdir -p "$HOME" "$CARGO_HOME/bin"
+        bash "$INSTALL_SCRIPT" 2>&1
+    ) || true
+
+    assert_contains "verifies binary at CARGO_INSTALL_ROOT" "Verified: cartog 0.9.0" "$output"
+    assert_not_contains "does not report not-found" "binary not found" "$output"
+    teardown
+}
+
 # --- run all tests ---
 
 echo "=== install.sh unit tests ==="
@@ -315,6 +615,28 @@ echo ""
 test_no_curl_no_cargo_fails
 echo ""
 test_rust_version_too_old_fails
+echo ""
+test_install_dir_prefers_local_bin_when_present
+echo ""
+test_install_dir_falls_back_to_cargo_bin
+echo ""
+test_install_dir_respects_cartog_install_dir_env
+echo ""
+test_install_dir_reuses_existing_cartog_location
+echo ""
+test_path_warning_when_install_dir_not_on_path
+echo ""
+test_no_path_warning_when_install_dir_on_path
+echo ""
+test_install_dir_ignores_cartog_function_shadow
+echo ""
+test_path_warning_handles_trailing_slash
+echo ""
+test_verify_install_preserves_existing_binary_on_exec_failure
+echo ""
+test_verify_install_deletes_freshly_installed_broken_binary
+echo ""
+test_cargo_fallback_honors_cargo_install_root
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

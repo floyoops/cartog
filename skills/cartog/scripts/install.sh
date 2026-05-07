@@ -10,6 +10,11 @@ MIN_RUST_MAJOR=1
 MIN_RUST_MINOR=70
 REQUESTED_VERSION="${1:-}"
 
+# Marker hands the chosen install dir from the writer to verify_install.
+# Clear in case PID reuse left a stale file from a crashed run.
+INSTALL_DIR_MARKER="${TMPDIR:-/tmp}/cartog-install-dir.$$"
+rm -f "$INSTALL_DIR_MARKER"
+
 if command -v cartog &>/dev/null; then
     # `cartog --version` prints multiple lines on >=0.14: version, build SHA,
     # features, rustc. Restrict to the first line and strip the build suffix.
@@ -40,6 +45,44 @@ check_rust_version() {
         return 0
     fi
     echo "Warning: Rust $version found, but cartog requires >= $MIN_RUST_MAJOR.$MIN_RUST_MINOR"
+    return 1
+}
+
+# Pick the install directory. Preference order:
+#   1. $CARTOG_INSTALL_DIR — explicit override
+#   2. Directory of an existing cartog on PATH — upgrades in place, no duplicates
+#   3. ~/.local/bin if present — XDG-style user bin, on PATH by default
+#   4. $CARGO_HOME/bin (or ~/.cargo/bin) — last-resort fallback
+pick_install_dir() {
+    if [ -n "${CARTOG_INSTALL_DIR:-}" ]; then
+        printf '%s\n' "$CARTOG_INSTALL_DIR"
+        return
+    fi
+    local existing
+    # Require an absolute path — `command -v` returns the function/alias name
+    # when cartog is shadowed by one, and dirname of that is ".".
+    if existing="$(command -v cartog 2>/dev/null)" && [ -n "$existing" ] && [ "${existing#/}" != "$existing" ]; then
+        local resolved
+        resolved="$(cd "$(dirname "$existing")" 2>/dev/null && pwd)" || resolved=""
+        if [ -n "$resolved" ]; then
+            printf '%s\n' "$resolved"
+            return
+        fi
+    fi
+    if [ -d "$HOME/.local/bin" ]; then
+        printf '%s\n' "$HOME/.local/bin"
+        return
+    fi
+    printf '%s\n' "${CARGO_HOME:-$HOME/.cargo}/bin"
+}
+
+# Component-wise PATH match; trailing slashes normalised on both sides.
+dir_on_path() {
+    local needle="${1%/}"
+    local entry IFS=:
+    for entry in $PATH; do
+        [ "${entry%/}" = "$needle" ] && return 0
+    done
     return 1
 }
 
@@ -92,13 +135,15 @@ install_from_github() {
     fi
 
     local url="https://github.com/${REPO}/releases/download/${tag}/cartog-${target}.tar.gz"
-    local install_dir="${CARGO_HOME:-$HOME/.cargo}/bin"
+    local install_dir
+    install_dir="$(pick_install_dir)"
     mkdir -p "$install_dir"
 
     echo "Downloading cartog ${tag} for ${target}..."
     if curl -fsSL "$url" | tar xz -C "$install_dir"; then
         chmod +x "${install_dir}/cartog"
         echo "cartog installed to ${install_dir}/cartog"
+        printf '%s\n' "$install_dir" > "$INSTALL_DIR_MARKER"
         return 0
     fi
 
@@ -106,7 +151,18 @@ install_from_github() {
 }
 
 verify_install() {
-    local bin="${CARGO_HOME:-$HOME/.cargo}/bin/cartog"
+    # Marker presence means we just wrote the binary; only then is it safe to
+    # delete on exec failure. Otherwise we'd nuke the user's existing install
+    # when --version regression-breaks a future release.
+    local install_dir="" just_installed=0
+    if [ -f "$INSTALL_DIR_MARKER" ]; then
+        install_dir="$(cat "$INSTALL_DIR_MARKER")"
+        rm -f "$INSTALL_DIR_MARKER"
+        just_installed=1
+    else
+        install_dir="$(pick_install_dir)"
+    fi
+    local bin="${install_dir}/cartog"
     local target_bin=""
 
     if has_cmd cartog; then
@@ -121,16 +177,16 @@ verify_install() {
     local version_output
     if version_output=$("$target_bin" --version 2>&1); then
         echo "Verified: $version_output"
-        if [ "$target_bin" = "$bin" ]; then
-            echo "Note: ${CARGO_HOME:-$HOME/.cargo}/bin is not in your PATH."
-            echo "  Add it with: export PATH=\"\${CARGO_HOME:-\$HOME/.cargo}/bin:\$PATH\""
+        if [ "$target_bin" = "$bin" ] && ! dir_on_path "$install_dir"; then
+            echo "Note: $install_dir is not in your PATH."
+            echo "  Add it with: export PATH=\"$install_dir:\$PATH\""
         fi
         return 0
     fi
 
     echo "Error: cartog binary exists but failed to run (wrong architecture?)."
     echo "  Output: $version_output"
-    rm -f "$bin"
+    [ "$just_installed" = "1" ] && rm -f "$bin"
     return 1
 }
 
@@ -162,4 +218,6 @@ if [ -n "$REQUESTED_VERSION" ]; then
 else
     cargo install cartog
 fi
+# cargo install resolves its target dir as: CARGO_INSTALL_ROOT > CARGO_HOME > ~/.cargo
+printf '%s\n' "${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin" > "$INSTALL_DIR_MARKER"
 verify_install

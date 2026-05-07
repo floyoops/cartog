@@ -570,6 +570,98 @@ test_missing_binary_install_failure_propagates() {
     teardown
 }
 
+# --- tests: PATH probe after install.sh writes to a non-PATH directory ---
+
+# Helper: stub install.sh to drop the binary into a target dir (off the test
+# PATH), simulating install.sh's pick_install_dir choosing ~/.local/bin or a
+# CARTOG_INSTALL_DIR override.
+shadow_install_sh_to_dir() {
+    local target_dir="$1"
+    local installed_version="${2:-0.14.1}"
+    local install_log="$TEST_DIR/install.log"
+    : > "$install_log"
+    cp "$REAL_INSTALL" "$TEST_DIR/install.sh.bak"
+    cat > "$REAL_INSTALL" <<STUB
+#!/usr/bin/env bash
+printf 'install.sh args=[%s] target=$target_dir\n' "\$*" >> "$install_log"
+mkdir -p "$target_dir"
+cat > "$target_dir/cartog" <<INNER
+#!/usr/bin/env bash
+if [ "\\\$1" = "--version" ]; then echo "cartog $installed_version"; exit 0; fi
+echo "\\\$@" >> "$CARTOG_TEST_LOG"
+if [ "\\\$1" = "rag" ] && [ "\\\$2" = "index" ]; then sleep 0.1; fi
+exit 0
+INNER
+chmod +x "$target_dir/cartog"
+exit 0
+STUB
+    chmod +x "$REAL_INSTALL"
+}
+
+test_install_to_local_bin_recovered_via_path_probe() {
+    echo "TEST: install.sh drops binary in ~/.local/bin → ensure_indexed adds it to PATH"
+    setup
+    write_plugin_json "0.14.1"
+    # Drop binary outside the test PATH; ensure_indexed must probe ~/.local/bin.
+    shadow_install_sh_to_dir "$TEST_DIR/home/.local/bin" "0.14.1"
+
+    local output rc
+    output=$(run_ensure_indexed) && rc=0 || rc=$?
+    wait_for_rag_index
+    restore_install_sh
+
+    assert_eq "succeeds despite binary outside PATH" "0" "$rc"
+    assert_contains "install.sh ran" "args=[0.14.1]" "$(cat "$TEST_DIR/install.log")"
+    local line1
+    line1=$(sed -n '1p' "$CARTOG_TEST_LOG")
+    assert_eq "indexing runs (PATH was augmented)" "index ." "$line1"
+    teardown
+}
+
+test_install_to_cartog_install_dir_recovered_via_path_probe() {
+    echo "TEST: install.sh honors \$CARTOG_INSTALL_DIR → ensure_indexed probes it"
+    setup
+    write_plugin_json "0.14.1"
+    local override_dir="$TEST_DIR/custom-install/bin"
+    shadow_install_sh_to_dir "$override_dir" "0.14.1"
+
+    local output rc
+    output=$(
+        export CARTOG_INSTALL_DIR="$override_dir"
+        # Pre-create HOME/.local/bin to prove the override beats it in priority.
+        mkdir -p "$TEST_DIR/home/.local/bin" "$TEST_DIR/workdir"
+        # Same hermetic PATH as run_ensure_indexed, plus the override env var.
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        cd "$TEST_DIR/workdir"
+        bash "$ENSURE_SCRIPT" 2>&1
+    ) && rc=0 || rc=$?
+    wait_for_rag_index
+    restore_install_sh
+
+    assert_eq "succeeds with override dir" "0" "$rc"
+    local line1
+    line1=$(sed -n '1p' "$CARTOG_TEST_LOG")
+    assert_eq "indexing runs from override dir" "index ." "$line1"
+    teardown
+}
+
+test_install_to_unreachable_dir_fails_with_clear_error() {
+    echo "TEST: install.sh writes to a dir NOT in any probe candidate → ensure_indexed fails loudly"
+    setup
+    write_plugin_json "0.14.1"
+    # Drop in a dir nothing probes (not ~/.local/bin, not ~/.cargo/bin, no override).
+    shadow_install_sh_to_dir "$TEST_DIR/totally-isolated/bin" "0.14.1"
+
+    local output rc
+    output=$(run_ensure_indexed 2>&1) && rc=0 || rc=$?
+    restore_install_sh
+
+    assert_eq "exits non-zero" "1" "$rc"
+    assert_contains "explains PATH problem" "still not on PATH after install" "$output"
+    teardown
+}
+
 # --- tests: drift warning (passive — actual update happens in SessionEnd hook) ---
 
 test_drift_warning_emitted_when_versions_differ() {
@@ -785,6 +877,12 @@ echo ""
 test_missing_binary_no_plugin_json_runs_install_unpinned
 echo ""
 test_missing_binary_install_failure_propagates
+echo ""
+test_install_to_local_bin_recovered_via_path_probe
+echo ""
+test_install_to_cartog_install_dir_recovered_via_path_probe
+echo ""
+test_install_to_unreachable_dir_fails_with_clear_error
 echo ""
 test_drift_warning_emitted_when_versions_differ
 echo ""
