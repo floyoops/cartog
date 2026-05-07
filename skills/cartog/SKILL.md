@@ -108,12 +108,14 @@ When you see this notice, ask the user if they want to update before continuing.
 | 2 | `+ cartog rag setup` | Yes | **Yes** | No | Keyword + neural reranking |
 | 3 | `+ cartog rag index .` | Yes | Yes | **Yes** | Full hybrid (best) |
 
-The setup script runs tier 1+2 blocking, then tier 3 in the background.
-`cartog rag search` is usable immediately after tier 2 — vector search becomes available
-transparently once background embedding completes.
+The setup script runs tier 1 blocking (foreground), then tiers 2 + 3 in the background
+so Claude is responsive immediately. `cartog rag search` works at FTS5-only quality
+the moment the index is ready, and upgrades transparently to tier 2 then tier 3 as
+the background pipeline completes.
 
-> **First run**: tier 2 downloads ~1.2GB of ONNX models (cached in `~/.cache/cartog/models/`).
-> This may take a few minutes — do not abort. Subsequent runs are instant.
+> **First run**: tier 2 downloads ~1.2GB of ONNX models (cached in `~/.cache/cartog/models/`)
+> in the background. Search keeps working at tier 1 in the meantime; logs go to
+> `~/.cache/cartog/session.log`. Subsequent runs are instant.
 
 ## Database Location
 

@@ -24,6 +24,7 @@ setup() {
     export CARTOG_TEST_LOG="$TEST_DIR/commands.log"
     : > "$CARTOG_TEST_LOG"
     export CARTOG_LOCK_DIR="$TEST_DIR/rag-index.lock"
+    export CARTOG_LOG_DIR="$TEST_DIR/log"
     # Default plugin.json fixture — tests can override via write_plugin_json.
     write_plugin_json "0.14.1"
     export CARTOG_PLUGIN_JSON="$TEST_DIR/plugin.json"
@@ -38,6 +39,7 @@ teardown() {
     rmdir "${CARTOG_LOCK_DIR:-}" 2>/dev/null || true
     [ -n "$TEST_DIR" ] && rm -rf "$TEST_DIR"
     unset CARTOG_PLUGIN_JSON
+    unset CARTOG_LOG_DIR
 }
 
 assert_eq() {
@@ -173,7 +175,10 @@ run_ensure_indexed() {
     local workdir="$TEST_DIR/workdir"
     mkdir -p "$workdir"
     (
-        export PATH="$TEST_DIR/bin:$PATH"
+        # Hermetic PATH: only the test bin + minimal system core (for stat/date/sed/etc.).
+        # Excluding $PATH prevents a developer-installed `cartog` (e.g. ~/.cargo/bin/cartog)
+        # from leaking in and making "missing binary" tests pass spuriously.
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         export HOME="$TEST_DIR/home"
         mkdir -p "$HOME"
         cd "$workdir"
@@ -181,19 +186,25 @@ run_ensure_indexed() {
     )
 }
 
-# Wait until the background `rag index` finishes so log assertions are stable.
+# Wait until the background pipeline finishes so log assertions are stable.
 wait_for_rag_index() {
     local i=0
-    while ! grep -q '^rag index ' "$CARTOG_TEST_LOG" 2>/dev/null && [ "$i" -lt 30 ]; do
+    while ! grep -q '^rag index ' "$CARTOG_TEST_LOG" 2>/dev/null && [ "$i" -lt 50 ]; do
         sleep 0.1
         i=$((i + 1))
     done
     # Also wait for the lock to release so subsequent tests don't race.
     i=0
-    while [ -d "${CARTOG_LOCK_DIR:-}" ] && [ "$i" -lt 30 ]; do
+    while [ -d "${CARTOG_LOCK_DIR:-}" ] && [ "$i" -lt 50 ]; do
         sleep 0.1
         i=$((i + 1))
     done
+}
+
+# Read the background session log (stdout/stderr from the background pipeline).
+session_log() {
+    local log_file="${CARTOG_LOG_DIR:-}/session.log"
+    [ -f "$log_file" ] && cat "$log_file" || true
 }
 
 # --- tests: indexing phases (versions in sync, no install/update path) ---
@@ -223,42 +234,56 @@ test_existing_index_shows_updating() {
 }
 
 test_phase_order() {
-    echo "TEST: commands run in correct order (index, rag setup, rag index)"
+    echo "TEST: commands run in correct order (foreground index, then background rag setup → rag index)"
     setup
     create_mock_cartog "0.14.1"
 
     run_ensure_indexed > /dev/null
     wait_for_rag_index
 
-    local line1 line2 line3
+    # Foreground: index runs first.
+    local line1
     line1=$(sed -n '1p' "$CARTOG_TEST_LOG")
-    line2=$(sed -n '2p' "$CARTOG_TEST_LOG")
-    line3=$(sed -n '3p' "$CARTOG_TEST_LOG")
+    assert_eq "foreground: cartog index ." "index ." "$line1"
 
-    assert_eq "phase 1: cartog index ." "index ." "$line1"
-    assert_eq "phase 2: cartog rag setup" "rag setup" "$line2"
-    assert_eq "phase 3: cartog rag index ." "rag index ." "$line3"
+    # Background pipeline runs rag setup before rag index. Their relative position
+    # in CARTOG_TEST_LOG is what matters (same mock writes both serially).
+    local setup_line index_line
+    setup_line=$(grep -nx 'rag setup' "$CARTOG_TEST_LOG" | head -1 | cut -d: -f1)
+    index_line=$(grep -nx 'rag index .' "$CARTOG_TEST_LOG" | head -1 | cut -d: -f1)
+    if [ -n "$setup_line" ] && [ -n "$index_line" ] && [ "$setup_line" -lt "$index_line" ]; then
+        echo "  PASS: background: rag setup before rag index"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: rag setup ($setup_line) should precede rag index ($index_line)"
+        FAIL=$((FAIL + 1))
+    fi
     teardown
 }
 
 test_rag_setup_failure_continues() {
-    echo "TEST: rag setup failure shows warning but continues to rag index"
+    echo "TEST: rag setup failure is logged but rag index still runs"
     setup
     create_mock_cartog "0.14.1" 1 "Error: model download failed"
 
-    local output
-    output=$(run_ensure_indexed)
+    run_ensure_indexed > /dev/null
     wait_for_rag_index
 
-    assert_contains "shows warning" "Warning: cartog rag setup failed" "$output"
-    local line3
-    line3=$(sed -n '3p' "$CARTOG_TEST_LOG")
-    assert_eq "rag index still runs" "rag index ." "$line3"
+    local log
+    log=$(session_log)
+    assert_contains "log notes B2 failure" "B2 failed" "$log"
+    if grep -qx 'rag index .' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: rag index still runs after rag setup failure"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: rag index did not run after rag setup failure"
+        FAIL=$((FAIL + 1))
+    fi
     teardown
 }
 
-test_rag_setup_stderr_visible() {
-    echo "TEST: rag setup stderr is visible (not redirected to log file)"
+test_rag_setup_stderr_in_session_log() {
+    echo "TEST: rag setup stderr is captured in session log (not foreground stdout)"
     setup
     create_mock_cartog "0.14.1" 1 "Error: disk full"
 
@@ -266,7 +291,83 @@ test_rag_setup_stderr_visible() {
     output=$(run_ensure_indexed)
     wait_for_rag_index
 
-    assert_contains "stderr visible in output" "Error: disk full" "$output"
+    assert_not_contains "stderr NOT in foreground output" "Error: disk full" "$output"
+    local log
+    log=$(session_log)
+    assert_contains "stderr captured in session log" "Error: disk full" "$log"
+    teardown
+}
+
+test_session_log_created() {
+    echo "TEST: session log directory and file are created"
+    setup
+    create_mock_cartog "0.14.1"
+
+    run_ensure_indexed > /dev/null
+    wait_for_rag_index
+
+    if [ -f "$CARTOG_LOG_DIR/session.log" ]; then
+        echo "  PASS: session log file exists at $CARTOG_LOG_DIR/session.log"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: session log not found at $CARTOG_LOG_DIR/session.log"
+        FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
+test_last_error_surfaces_next_session() {
+    echo "TEST: last-error file from previous session is surfaced and cleared"
+    setup
+    create_mock_cartog "0.14.1"
+    mkdir -p "$CARTOG_LOG_DIR"
+    echo "previous failure detail" > "$CARTOG_LOG_DIR/last-error"
+
+    local output
+    output=$(run_ensure_indexed)
+    wait_for_rag_index
+
+    assert_contains "surfaces previous error" "previous failure detail" "$output"
+    assert_contains "shows error header" "Previous cartog background task failed" "$output"
+    if [ ! -f "$CARTOG_LOG_DIR/last-error" ]; then
+        echo "  PASS: last-error file cleared after surfacing"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: last-error file still exists after surfacing"
+        FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
+test_background_failure_writes_last_error() {
+    echo "TEST: background pipeline failure writes last-error file"
+    setup
+    # rag setup AND rag index both fail
+    cat > "$TEST_DIR/bin/cartog" <<'MOCK'
+#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then echo "cartog 0.14.1"; exit 0; fi
+echo "$@" >> "$CARTOG_TEST_LOG"
+case "$1 $2" in
+    "rag setup") echo "setup boom" >&2; exit 1 ;;
+    "rag index") echo "index boom" >&2; exit 1 ;;
+esac
+exit 0
+MOCK
+    chmod +x "$TEST_DIR/bin/cartog"
+
+    run_ensure_indexed > /dev/null
+    wait_for_rag_index
+
+    if [ -f "$CARTOG_LOG_DIR/last-error" ]; then
+        echo "  PASS: last-error file created on background failure"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: last-error file missing after background failure"
+        FAIL=$((FAIL + 1))
+    fi
+    local last_error
+    last_error=$(cat "$CARTOG_LOG_DIR/last-error" 2>/dev/null || echo "")
+    assert_contains "last-error references session log" "session.log" "$last_error"
     teardown
 }
 
@@ -302,8 +403,60 @@ MOCK
     teardown
 }
 
-test_lock_prevents_concurrent_rag_index() {
-    echo "TEST: lock prevents concurrent rag index (second run skips)"
+test_self_update_runs_in_background() {
+    echo "TEST: self update no longer blocks foreground (runs in background pipeline)"
+    setup
+    write_plugin_json "0.14.1"
+    # Slow self update — foreground must return before it finishes.
+    cat > "$TEST_DIR/bin/cartog" <<'MOCK'
+#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then echo "cartog 0.14.0"; exit 0; fi
+echo "$@" >> "$CARTOG_TEST_LOG"
+if [ "$1" = "self" ] && [ "$2" = "update" ]; then sleep 3; echo "updated"; fi
+exit 0
+MOCK
+    chmod +x "$TEST_DIR/bin/cartog"
+
+    local start end elapsed
+    start=$(date +%s)
+    run_ensure_indexed > /dev/null
+    end=$(date +%s)
+    elapsed=$((end - start))
+
+    if [ "$elapsed" -lt 3 ]; then
+        echo "  PASS: foreground returned before background self update (${elapsed}s < 3s)"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: foreground blocked on self update (${elapsed}s >= 3s)"
+        FAIL=$((FAIL + 1))
+    fi
+    pkill -f "self update" 2>/dev/null || true
+    rmdir "${CARTOG_LOCK_DIR:-}" 2>/dev/null || true
+    teardown
+}
+
+test_index_runs_in_foreground() {
+    echo "TEST: cartog index is recorded before script returns (proves foreground)"
+    setup
+    create_mock_cartog "0.14.1"
+
+    run_ensure_indexed > /dev/null
+    # Do NOT call wait_for_rag_index — we want to see what was logged synchronously.
+    # The index command should already be in the log at this point.
+    if grep -qx 'index .' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: 'index .' present immediately after script returned"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: 'index .' missing from log right after return — index not foreground?"
+        FAIL=$((FAIL + 1))
+    fi
+
+    wait_for_rag_index
+    teardown
+}
+
+test_lock_prevents_concurrent_background_pipeline() {
+    echo "TEST: lock prevents concurrent background pipeline (second run skips)"
     setup
     create_mock_cartog "0.14.1"
     mkdir "$CARTOG_LOCK_DIR"
@@ -311,10 +464,11 @@ test_lock_prevents_concurrent_rag_index() {
     local output
     output=$(run_ensure_indexed)
 
-    assert_contains "skips rag index" "RAG embedding already running" "$output"
+    assert_contains "skips background pipeline" "background pipeline already running" "$output"
+    # Only the foreground 'index .' should have been recorded — no rag setup or rag index.
     local line_count
     line_count=$(wc -l < "$CARTOG_TEST_LOG" | tr -d ' ')
-    assert_eq "only 2 commands logged (no rag index)" "2" "$line_count"
+    assert_eq "only foreground index logged (no background pipeline)" "1" "$line_count"
     rmdir "$CARTOG_LOCK_DIR" 2>/dev/null || true
     teardown
 }
@@ -338,7 +492,7 @@ test_lock_cleaned_after_rag_index() {
 }
 
 test_stale_lock_removed() {
-    echo "TEST: stale lock (>1 hour) is removed and rag index proceeds"
+    echo "TEST: stale lock (>1 hour) is removed and background pipeline proceeds"
     setup
     create_mock_cartog "0.14.1"
 
@@ -349,16 +503,20 @@ test_stale_lock_removed() {
     output=$(run_ensure_indexed)
     wait_for_rag_index
 
-    assert_contains "detects stale lock" "Removing stale RAG lock" "$output"
-    assert_contains "starts rag index" "RAG embedding started in background" "$output"
-    local line3
-    line3=$(sed -n '3p' "$CARTOG_TEST_LOG")
-    assert_eq "rag index runs after stale lock removal" "rag index ." "$line3"
+    assert_contains "detects stale lock" "Removing stale cartog background lock" "$output"
+    assert_contains "starts background pipeline" "cartog background tasks started" "$output"
+    if grep -qx 'rag index .' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: rag index runs after stale lock removal"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: rag index did not run after stale lock removal"
+        FAIL=$((FAIL + 1))
+    fi
     teardown
 }
 
 test_output_messages() {
-    echo "TEST: output includes RAG background PID and status message"
+    echo "TEST: foreground output mentions background PID and index-ready status"
     setup
     create_mock_cartog "0.14.1"
 
@@ -366,8 +524,8 @@ test_output_messages() {
     output=$(run_ensure_indexed)
     wait_for_rag_index
 
-    assert_contains "mentions background PID" "RAG embedding started in background" "$output"
-    assert_contains "mentions FTS5+reranker ready" "FTS5 + reranker" "$output"
+    assert_contains "mentions background PID" "cartog background tasks started" "$output"
+    assert_contains "mentions index ready" "cartog index ready" "$output"
     teardown
 }
 
@@ -436,7 +594,7 @@ test_missing_binary_install_failure_propagates() {
 # --- tests: outdated binary → cartog self update (>= 0.14.0) ---
 
 test_outdated_modern_binary_self_updates() {
-    echo "TEST: installed >= 0.14.0 but != plugin runs 'cartog self update'"
+    echo "TEST: installed >= 0.14.0 but != plugin runs 'cartog self update' in background"
     setup
     write_plugin_json "0.14.1"
     create_mock_cartog "0.14.0"  # outdated, but self update CLI exists
@@ -446,8 +604,11 @@ test_outdated_modern_binary_self_updates() {
     wait_for_rag_index
 
     assert_eq "succeeds" "0" "$rc"
-    assert_contains "announces self update to latest" "Updating cartog 0.14.0 → latest via 'cartog self update'" "$output"
-    assert_contains "self update output" "cartog updated" "$output"
+    # Self update announce now appears in the session log, NOT in foreground output.
+    assert_not_contains "no self update announce in foreground" "Updating cartog 0.14.0" "$output"
+    local log
+    log=$(session_log)
+    assert_contains "announces self update in log" "Updating cartog 0.14.0 → latest via 'cartog self update'" "$log"
     if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
         echo "  PASS: 'cartog self update' was invoked"
         PASS=$((PASS + 1))
@@ -458,32 +619,43 @@ test_outdated_modern_binary_self_updates() {
     teardown
 }
 
-test_self_update_failure_propagates() {
-    echo "TEST: 'cartog self update' failure exits 1 with stderr surfaced"
+test_self_update_failure_recorded_to_last_error() {
+    echo "TEST: 'cartog self update' failure does NOT block foreground; recorded to last-error"
     setup
     write_plugin_json "0.14.1"
     create_mock_cartog "0.14.0" 0 "" 2  # self update exits 2
 
     local output rc
     output=$(run_ensure_indexed) && rc=0 || rc=$?
+    wait_for_rag_index
 
-    assert_eq "exits non-zero" "1" "$rc"
-    assert_contains "summary line" "cartog self update failed (exit 2)" "$output"
-    assert_contains "surfaces stderr" "self update mock failure" "$output"
-    if grep -q '^index ' "$CARTOG_TEST_LOG"; then
-        echo "  FAIL: index ran despite self update failure"
-        FAIL=$((FAIL + 1))
-    else
-        echo "  PASS: index did not run after self update failure"
+    # Foreground succeeds — index still runs because B1 is now async.
+    assert_eq "foreground succeeds" "0" "$rc"
+    if grep -qx 'index .' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: index ran in foreground despite background self update failure"
         PASS=$((PASS + 1))
+    else
+        echo "  FAIL: index did not run"
+        FAIL=$((FAIL + 1))
     fi
+    # Failure recorded for next session.
+    if [ -f "$CARTOG_LOG_DIR/last-error" ]; then
+        echo "  PASS: last-error file written on background self update failure"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: last-error file missing"
+        FAIL=$((FAIL + 1))
+    fi
+    local log
+    log=$(session_log)
+    assert_contains "log captures self update failure" "cartog self update failed (exit 2)" "$log"
     teardown
 }
 
 # --- tests: outdated binary < 0.14.0 → install.sh fallback ---
 
 test_outdated_legacy_binary_uses_install_sh() {
-    echo "TEST: installed < 0.14.0 (no self update CLI) reinstalls via install.sh"
+    echo "TEST: installed < 0.14.0 reinstalls via install.sh in background"
     setup
     write_plugin_json "0.14.1"
     create_mock_cartog "0.13.5"  # pre-self-update version
@@ -495,11 +667,14 @@ test_outdated_legacy_binary_uses_install_sh() {
     restore_install_sh
 
     assert_eq "succeeds" "0" "$rc"
-    assert_contains "announces install fallback" "Updating cartog 0.13.5 → 0.14.1 via" "$output"
-    assert_contains "mentions pre-self-update" "(pre-self-update)" "$output"
+    # Install announce is now in session log, not foreground.
+    assert_not_contains "no install announce in foreground" "Updating cartog 0.13.5" "$output"
+    local log
+    log=$(session_log)
+    assert_contains "log announces install fallback" "Updating cartog 0.13.5 → 0.14.1 via" "$log"
+    assert_contains "log mentions pre-self-update" "(pre-self-update)" "$log"
     assert_file_exists "install.sh ran" "$TEST_DIR/install.log"
     assert_contains "install.sh pinned to plugin version" "args=[0.14.1]" "$(cat "$TEST_DIR/install.log")"
-    # 'cartog self update' must NOT have been called
     if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
         echo "  FAIL: 'cartog self update' was called on legacy binary"
         FAIL=$((FAIL + 1))
@@ -510,8 +685,8 @@ test_outdated_legacy_binary_uses_install_sh() {
     teardown
 }
 
-test_outdated_legacy_install_failure_propagates() {
-    echo "TEST: install.sh failure on legacy upgrade exits 1"
+test_outdated_legacy_install_failure_recorded() {
+    echo "TEST: install.sh failure on legacy upgrade does NOT fail foreground; logged to last-error"
     setup
     write_plugin_json "0.14.1"
     create_mock_cartog "0.13.5"
@@ -519,11 +694,20 @@ test_outdated_legacy_install_failure_propagates() {
 
     local output rc
     output=$(run_ensure_indexed) && rc=0 || rc=$?
+    wait_for_rag_index
     restore_install_sh
 
-    assert_eq "exits non-zero" "1" "$rc"
-    assert_contains "surfaces install error" "install.sh: simulated failure" "$output"
-    assert_contains "summary line" "cartog install failed" "$output"
+    assert_eq "foreground succeeds" "0" "$rc"
+    if [ -f "$CARTOG_LOG_DIR/last-error" ]; then
+        echo "  PASS: last-error file written on background install failure"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: last-error file missing"
+        FAIL=$((FAIL + 1))
+    fi
+    local log
+    log=$(session_log)
+    assert_contains "log captures install failure" "install.sh: simulated failure" "$log"
     teardown
 }
 
@@ -539,8 +723,10 @@ test_synced_binary_skips_update() {
     output=$(run_ensure_indexed)
     wait_for_rag_index
 
-    assert_not_contains "no install announce" "Installing via" "$output"
-    assert_not_contains "no update announce" "Updating cartog 0." "$output"
+    assert_not_contains "no install announce in foreground" "Installing via" "$output"
+    local log
+    log=$(session_log)
+    assert_not_contains "no update announce in log" "Updating cartog 0." "$log"
     if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
         echo "  FAIL: 'cartog self update' ran when versions matched"
         FAIL=$((FAIL + 1))
@@ -551,20 +737,18 @@ test_synced_binary_skips_update() {
     teardown
 }
 
-test_newer_installed_skips_update() {
-    echo "TEST: installed > plugin version still skips update (different == plugin only triggers)"
+test_newer_installed_triggers_background_update() {
+    echo "TEST: installed > plugin version still triggers background self update (drift)"
     setup
     write_plugin_json "0.14.1"
     create_mock_cartog "0.15.0"  # ahead of plugin
 
-    local output
-    output=$(run_ensure_indexed)
+    run_ensure_indexed > /dev/null
     wait_for_rag_index
 
-    # We trigger only on != plugin. Installed > plugin is a "drift" too — the
-    # current design DOES try to self update in that case (since 0.15.0 >= 0.14.0).
-    # `cartog self update` only goes to latest, so the announce says "→ latest".
-    assert_contains "announces self update on drift" "Updating cartog 0.15.0 → latest" "$output"
+    local log
+    log=$(session_log)
+    assert_contains "log announces drift update" "Updating cartog 0.15.0 → latest" "$log"
     teardown
 }
 
@@ -601,7 +785,7 @@ MOCK
 }
 
 test_no_plugin_json_modern_outdated_self_updates() {
-    echo "TEST: no plugin.json + modern binary outdated runs self update"
+    echo "TEST: no plugin.json + modern binary outdated runs self update in background"
     setup
     rm -f "$TEST_DIR/plugin.json"
     cat > "$TEST_DIR/bin/cartog" <<MOCK
@@ -620,13 +804,15 @@ MOCK
     wait_for_rag_index
 
     assert_eq "succeeds" "0" "$rc"
-    assert_contains "announces update to latest" "Updating cartog 0.14.0 → latest" "$output"
-    assert_contains "self update output" "updated to latest" "$output"
+    local log
+    log=$(session_log)
+    assert_contains "log announces update to latest" "Updating cartog 0.14.0 → latest" "$log"
+    assert_contains "log captures self update output" "updated to latest" "$log"
     teardown
 }
 
 test_no_plugin_json_legacy_uses_install_sh() {
-    echo "TEST: no plugin.json + legacy binary (<0.14.0) reinstalls via install.sh"
+    echo "TEST: no plugin.json + legacy binary (<0.14.0) reinstalls via install.sh in background"
     setup
     rm -f "$TEST_DIR/plugin.json"
     create_mock_cartog "0.13.5"
@@ -638,8 +824,10 @@ test_no_plugin_json_legacy_uses_install_sh() {
     restore_install_sh
 
     assert_eq "succeeds" "0" "$rc"
-    assert_contains "announces install fallback" "Updating cartog 0.13.5 → latest via" "$output"
-    assert_contains "mentions pre-self-update" "(pre-self-update)" "$output"
+    local log
+    log=$(session_log)
+    assert_contains "log announces install fallback" "Updating cartog 0.13.5 → latest via" "$log"
+    assert_contains "log mentions pre-self-update" "(pre-self-update)" "$log"
     assert_file_exists "install.sh ran" "$TEST_DIR/install.log"
     teardown
 }
@@ -681,7 +869,7 @@ run_ensure_indexed_print_db() {
     local workdir="$1"
     shift
     (
-        export PATH="$TEST_DIR/bin:$PATH"
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         export HOME="$TEST_DIR/home"
         mkdir -p "$HOME"
         "$@"
@@ -807,13 +995,23 @@ test_existing_index_shows_updating
 echo ""
 test_phase_order
 echo ""
+test_index_runs_in_foreground
+echo ""
 test_rag_setup_failure_continues
 echo ""
-test_rag_setup_stderr_visible
+test_rag_setup_stderr_in_session_log
+echo ""
+test_session_log_created
+echo ""
+test_last_error_surfaces_next_session
+echo ""
+test_background_failure_writes_last_error
 echo ""
 test_background_rag_index
 echo ""
-test_lock_prevents_concurrent_rag_index
+test_self_update_runs_in_background
+echo ""
+test_lock_prevents_concurrent_background_pipeline
 echo ""
 test_lock_cleaned_after_rag_index
 echo ""
@@ -829,15 +1027,15 @@ test_missing_binary_install_failure_propagates
 echo ""
 test_outdated_modern_binary_self_updates
 echo ""
-test_self_update_failure_propagates
+test_self_update_failure_recorded_to_last_error
 echo ""
 test_outdated_legacy_binary_uses_install_sh
 echo ""
-test_outdated_legacy_install_failure_propagates
+test_outdated_legacy_install_failure_recorded
 echo ""
 test_synced_binary_skips_update
 echo ""
-test_newer_installed_skips_update
+test_newer_installed_triggers_background_update
 echo ""
 test_no_plugin_json_modern_uptodate_skips
 echo ""
