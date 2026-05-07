@@ -102,10 +102,12 @@ cartog/
 │       ├── SKILL.md         # Behavioral instructions for AI agents
 │       ├── scripts/
 │       │   ├── install.sh
-│       │   └── ensure_indexed.sh
+│       │   ├── ensure_indexed.sh    # SessionStart hook
+│       │   └── update_on_exit.sh    # SessionEnd hook (binary self-update)
 │       ├── tests/
 │       │   ├── golden_examples.yaml  # Behavioral test scenarios
 │       │   ├── test_ensure_indexed.sh
+│       │   ├── test_update_on_exit.sh
 │       │   └── eval.sh
 │       └── references/
 │           ├── query_cookbook.md

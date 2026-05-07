@@ -25,6 +25,16 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/cartog/scripts/update_on_exit.sh\""
+          }
+        ]
+      }
     ]
   }
 }

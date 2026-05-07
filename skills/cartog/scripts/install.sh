@@ -11,7 +11,9 @@ MIN_RUST_MINOR=70
 REQUESTED_VERSION="${1:-}"
 
 if command -v cartog &>/dev/null; then
-    local_version="$(cartog --version | sed -E 's/^cartog //')"
+    # `cartog --version` prints multiple lines on >=0.14: version, build SHA,
+    # features, rustc. Restrict to the first line and strip the build suffix.
+    local_version="$(cartog --version 2>/dev/null | head -n1 | sed -E 's/^cartog //' | awk '{print $1}')"
     if [ -z "$REQUESTED_VERSION" ]; then
         echo "cartog is already installed: cartog $local_version"
         exit 0

@@ -141,6 +141,30 @@ test_version_arg_same_version_exits_early() {
     teardown
 }
 
+test_version_arg_same_version_with_multiline_output_exits_early() {
+    echo "TEST: multi-line --version output (build/features/rustc lines) parses to first version token"
+    setup
+    # Real cartog >=0.14 emits 4 lines. Make sure we strip everything after
+    # line 1 and ignore the build SHA suffix.
+    cat > "$TEST_DIR/bin/cartog" <<'MOCK'
+#!/usr/bin/env bash
+cat <<EOF
+cartog 0.14.3
+build:    56e4f4e53a
+features: default, lsp
+rustc:    1.77 (MSRV)
+EOF
+MOCK
+    chmod +x "$TEST_DIR/bin/cartog"
+
+    local output exit_code=0
+    output=$(run_install "0.14.3") || exit_code=$?
+
+    assert_eq "exits 0" "0" "$exit_code"
+    assert_contains "recognises matching version despite multi-line output" "0.14.3 already installed" "$output"
+    teardown
+}
+
 test_version_arg_different_version_reinstalls() {
     echo "TEST: version arg + different version → reinstalls"
     setup
@@ -277,6 +301,8 @@ echo ""
 test_no_arg_already_installed_exits_early
 echo ""
 test_version_arg_same_version_exits_early
+echo ""
+test_version_arg_same_version_with_multiline_output_exits_early
 echo ""
 test_version_arg_different_version_reinstalls
 echo ""

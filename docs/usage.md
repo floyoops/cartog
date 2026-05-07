@@ -559,7 +559,12 @@ Or install manually:
 cp -r skills/cartog ~/.claude/skills/
 ```
 
-At session start, run the setup script (version check + 3-phase: blocking index + model download, background RAG embedding). Checks for newer cartog versions (cached, at most once per 24h). First run downloads ~1.2GB of ONNX models and may take a few minutes — subsequent runs are instant:
+The plugin wires two Claude Code hooks:
+
+- **SessionStart** (`ensure_indexed.sh`): installs cartog if missing, runs `cartog index .` synchronously, then backgrounds rag setup + rag embedding. Prints a one-line warning if the installed binary version drifts from the plugin version.
+- **SessionEnd** (`update_on_exit.sh`): runs `cartog self update` after MCP shuts down to bring the binary in sync with the plugin's pinned version. Updates land on the *next* session — `cartog self update` refuses to swap the binary while a peer process is alive, so we defer until exit. Coordinates with the SessionStart RAG pipeline lock to avoid mid-pipeline binary swaps.
+
+To run the SessionStart steps manually:
 
 ```bash
 bash scripts/ensure_indexed.sh
@@ -571,9 +576,11 @@ bash scripts/ensure_indexed.sh
 |------|---------|
 | [`SKILL.md`](../skills/cartog/SKILL.md) | Behavioral instructions, commands, and workflows |
 | [`scripts/install.sh`](../skills/cartog/scripts/install.sh) | Automated installation (pre-built binary or cargo install), accepts optional version arg |
-| [`scripts/ensure_indexed.sh`](../skills/cartog/scripts/ensure_indexed.sh) | Version check + 3-phase setup: blocking index + rag setup, background rag index |
+| [`scripts/ensure_indexed.sh`](../skills/cartog/scripts/ensure_indexed.sh) | SessionStart hook: install-if-missing + foreground index + background rag setup/index + drift warning |
+| [`scripts/update_on_exit.sh`](../skills/cartog/scripts/update_on_exit.sh) | SessionEnd hook: peer-aware `cartog self update` (defers if RAG pipeline lock is active) |
 | [`tests/golden_examples.yaml`](../skills/cartog/tests/golden_examples.yaml) | Behavioral test scenarios (expected tool calls per query) |
 | [`tests/test_ensure_indexed.sh`](../skills/cartog/tests/test_ensure_indexed.sh) | Bash unit tests for ensure_indexed.sh |
+| [`tests/test_update_on_exit.sh`](../skills/cartog/tests/test_update_on_exit.sh) | Bash unit tests for update_on_exit.sh |
 | [`tests/test_install.sh`](../skills/cartog/tests/test_install.sh) | Bash unit tests for install.sh |
 | [`tests/eval.sh`](../skills/cartog/tests/eval.sh) | LLM-as-judge evaluation via `claude` CLI |
 | [`references/query_cookbook.md`](../skills/cartog/references/query_cookbook.md) | Recipes for common navigation patterns |

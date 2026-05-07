@@ -7,14 +7,17 @@ set -euo pipefail
 # Foreground (must finish before Claude responds):
 #   F1. Install cartog if the binary is missing (MCP server can't start without it).
 #   F2. Code graph index (fast, incremental — usually <1s for unchanged codebases).
+#   F3. Passive drift warning if the binary is out of sync with plugin.json.
+#       Update itself runs from the SessionEnd hook (update_on_exit.sh) — the
+#       MCP `cartog serve` peer is still alive at SessionStart, which would
+#       make `cartog self update` fail with PEER_RUNNING (exit 6).
 #
 # Background (forked into one subshell, logged to ~/.cache/cartog/session.log):
-#   B1. Version sync: `cartog self update` (>=0.14.0) or install.sh (<0.14.0).
-#   B2. Model download (`cartog rag setup`) — enables cross-encoder reranker.
-#   B3. RAG embedding (`cartog rag index`) — enables vector/semantic search.
+#   B1. Model download (`cartog rag setup`) — enables cross-encoder reranker.
+#   B2. RAG embedding (`cartog rag index`) — enables vector/semantic search.
 #
-# Failures during the background pipeline are written to the log file and
-# surfaced on the next session via a marker file at ~/.cache/cartog/last-error.
+# Failures during the background pipeline (or the previous session-end update)
+# are written to the log file and surfaced via ~/.cache/cartog/last-error.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || SCRIPT_DIR="."
 LOCK_DIR="${CARTOG_LOCK_DIR:-/tmp/cartog-rag-index.lock}"
@@ -69,24 +72,8 @@ if [ -f "$LAST_ERROR_FILE" ]; then
     rm -f "$LAST_ERROR_FILE"
 fi
 
-# Semver compare: returns 0 iff $1 > $2 component-wise.
-# Pre-release suffixes (e.g. 0.14.0-rc.1) are stripped — bare numeric triple compare.
-version_gt() {
-    local IFS=.
-    local -a a b
-    read -ra a <<< "${1%%-*}"
-    read -ra b <<< "${2%%-*}"
-    local i
-    for ((i=0; i<${#a[@]} || i<${#b[@]}; i++)); do
-        local ai="${a[i]:-0}" bi="${b[i]:-0}"
-        if [ "$ai" -gt "$bi" ] 2>/dev/null; then return 0; fi
-        if [ "$ai" -lt "$bi" ] 2>/dev/null; then return 1; fi
-    done
-    return 1
-}
-
 # F1: install cartog only when the binary is missing. Outdated-but-present
-# binaries are upgraded asynchronously in the background pipeline, so this
+# binaries are upgraded by the SessionEnd hook (update_on_exit.sh), so this
 # function does NOT touch the network when cartog is already on PATH.
 ensure_cartog_installed() {
     if command -v cartog >/dev/null 2>&1; then
@@ -108,74 +95,35 @@ ensure_cartog_installed() {
     fi
 }
 
-# B1 (runs in background): bring an existing binary in sync with the plugin's
-# pinned version. Mirrors the previous foreground branching:
-#   installed == PLUGIN_VERSION → noop
-#   installed >= 0.14.0         → `cartog self update`
-#   installed <  0.14.0         → install.sh (pre-self-update bootstrap)
-#   PLUGIN_VERSION missing      → `cartog self update --check` then maybe self update
-# All output goes to the caller's stdout — the background subshell appends it to SESSION_LOG.
-sync_cartog_version_bg() {
+# F3: passive drift warning. Compares the installed binary version against
+# the plugin's pinned version and prints a one-line notice. The actual update
+# happens in the SessionEnd hook (update_on_exit.sh) where MCP is shutting
+# down — `cartog self update` refuses to run while a peer is alive.
+warn_if_drifted() {
+    [ -n "$PLUGIN_VERSION" ] || return 0
     local installed
     installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')"
     [ -n "$installed" ] || return 0
-
-    if [ -n "$PLUGIN_VERSION" ] && [ "$installed" = "$PLUGIN_VERSION" ]; then
-        return 0
-    fi
-
-    local install_label="${PLUGIN_VERSION:-latest}"
-    local self_update_label="latest"
-
-    if version_gt "0.14.0" "$installed"; then
-        echo "Updating cartog $installed → $install_label via $SCRIPT_DIR/install.sh (pre-self-update)..."
-        if ! bash "$SCRIPT_DIR/install.sh" ${PLUGIN_VERSION:+"$PLUGIN_VERSION"}; then
-            echo "cartog install failed. See output above."
-            return 1
-        fi
-        return 0
-    fi
-
-    if [ -z "$PLUGIN_VERSION" ]; then
-        local rc=0
-        cartog self update --check --quiet 2>/dev/null || rc=$?
-        # rc: 0 = up to date, 1 = update available, 2 = network error.
-        [ "$rc" -eq 1 ] || return 0
-    fi
-
-    echo "Updating cartog $installed → $self_update_label via 'cartog self update'..."
-    local update_output update_rc
-    update_output="$(cartog self update 2>&1)" && update_rc=0 || update_rc=$?
-    if [ "$update_rc" -ne 0 ]; then
-        echo "cartog self update failed (exit $update_rc):"
-        printf '%s\n' "$update_output"
-        return 1
-    fi
-    printf '%s\n' "$update_output"
+    [ "$installed" = "$PLUGIN_VERSION" ] && return 0
+    echo "cartog binary $installed is out of sync with plugin $PLUGIN_VERSION (will sync on session exit)." >&2
 }
 
-# Background pipeline: version sync → model download → RAG embedding.
+# Background pipeline: model download → RAG embedding.
 # Single subshell guarded by LOCK_DIR; failures recorded to LAST_ERROR_FILE
 # so the next session surfaces them.
 run_background_pipeline() {
     local pipeline_rc=0
     {
         echo "=== cartog session log $(date '+%Y-%m-%d %H:%M:%S') ==="
-        echo "--- B1: version sync ---"
-        if ! sync_cartog_version_bg; then
+        echo "--- B1: rag setup (model download) ---"
+        if ! cartog rag setup; then
             pipeline_rc=1
-            echo "B1 failed; skipping B2 and B3." >&2
-        else
-            echo "--- B2: rag setup (model download) ---"
-            if ! cartog rag setup; then
-                pipeline_rc=1
-                echo "B2 failed; semantic search will use FTS5 only (no reranker)." >&2
-            fi
-            echo "--- B3: rag index (vector embedding) ---"
-            if ! cartog rag index .; then
-                pipeline_rc=1
-                echo "B3 failed; vector search unavailable." >&2
-            fi
+            echo "B1 failed; semantic search will use FTS5 only (no reranker)." >&2
+        fi
+        echo "--- B2: rag index (vector embedding) ---"
+        if ! cartog rag index .; then
+            pipeline_rc=1
+            echo "B2 failed; vector search unavailable." >&2
         fi
         echo "=== pipeline exit $pipeline_rc ==="
     } >> "$SESSION_LOG" 2>&1
@@ -199,7 +147,10 @@ else
 fi
 cartog index .
 
-# Background pipeline: version sync + model download + RAG embedding.
+# F3: drift warning (the SessionEnd hook does the actual update).
+warn_if_drifted
+
+# Background pipeline: model download + RAG embedding.
 # Stale lock (>1h) is removed automatically — handles crashed processes where trap didn't fire.
 if [ -d "$LOCK_DIR" ]; then
     # GNU stat (Linux) uses -c %Y; BSD stat (macOS) uses -f %m. Try GNU first
