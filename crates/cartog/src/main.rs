@@ -8,6 +8,7 @@ use anyhow::Result;
 use cartog_mcp as mcp;
 use clap::Parser;
 use std::io::IsTerminal;
+use std::path::Path;
 use std::time::SystemTime;
 
 use cli::{Cli, Command, RagCommand, SelfCommand};
@@ -220,6 +221,21 @@ fn main() -> Result<()> {
             }
             SelfCommand::Version => commands::cmd_self_version(cli.json),
             SelfCommand::Rollback => commands::cmd_self_rollback(),
+            SelfCommand::MigrateDb { dry_run } => {
+                let resolved = config::resolve_db_path(cli.db.clone(), &cartog_config);
+                let parent = resolved
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+                // If resolved is inside `.cartog/`, climb one level to the project root.
+                let root = if parent.file_name().and_then(|n| n.to_str()) == Some(cartog_db::DB_DIR)
+                {
+                    parent.parent().map(Path::to_path_buf).unwrap_or(parent)
+                } else {
+                    parent
+                };
+                commands::cmd_self_migrate_db(&root, dry_run, cli.json)
+            }
         },
     };
 

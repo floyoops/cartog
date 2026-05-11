@@ -25,12 +25,11 @@ LOCK_DIR="${CARTOG_LOCK_DIR:-/tmp/cartog-rag-index.lock}"
 # Resolve the database path using the same priority as the Rust binary:
 #   1. CARTOG_DB env var (explicit override)
 #   2. .cartog.toml database.path (local project config)
-#   3. Git root detection (walk up from cwd to find .git, place DB there)
-#   4. cwd fallback (.cartog.db in the current directory)
+#   3. Git root: prefer .cartog/db.sqlite, fall back to legacy .cartog.db
+#   4. cwd fallback (.cartog/db.sqlite, or legacy .cartog.db if present)
 if [ -n "${CARTOG_DB:-}" ]; then
     DB_FILE="$CARTOG_DB"
 else
-    # Check .cartog.toml for database.path
     TOML_DB=""
     GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || true
     for _dir in "." "$GIT_ROOT"; do
@@ -40,15 +39,19 @@ else
         }
     done
     if [ -n "$TOML_DB" ]; then
-        # Expand leading ~/
         case "$TOML_DB" in
             "~/"*) DB_FILE="${HOME}${TOML_DB#\~}" ;;
             *)     DB_FILE="$TOML_DB" ;;
         esac
-    elif [ -n "$GIT_ROOT" ]; then
-        DB_FILE="${GIT_ROOT}/.cartog.db"
     else
-        DB_FILE=".cartog.db"
+        _root="${GIT_ROOT:-.}"
+        if [ -f "${_root}/.cartog/db.sqlite" ]; then
+            DB_FILE="${_root}/.cartog/db.sqlite"
+        elif [ -f "${_root}/.cartog.db" ]; then
+            DB_FILE="${_root}/.cartog.db"
+        else
+            DB_FILE="${_root}/.cartog/db.sqlite"
+        fi
     fi
 fi
 

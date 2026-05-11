@@ -125,8 +125,8 @@ The index is stored in a SQLite database. cartog resolves the path automatically
 |----------|--------|
 | 1 | `--db <path>` flag or `CARTOG_DB` env var |
 | 2 | `.cartog.toml` → `[database] path = "..."` at git root |
-| 3 | Auto git-root: DB placed at the root of the current git repository |
-| 4 | `.cartog.db` in the current directory (fallback) |
+| 3 | Auto git-root: prefers `<root>/.cartog/db.sqlite`, falls back to legacy `<root>/.cartog.db` if only it exists |
+| 4 | `.cartog/db.sqlite` in the current directory (fallback) |
 
 For most projects, no configuration is needed — running `cartog index .` from any subdirectory will place the DB at the git root automatically.
 
@@ -312,15 +312,17 @@ cartog serve --watch --rag      # watcher + deferred RAG embedding
 
 When an agent calls `cartog_index` via MCP, LSP servers are started once and **kept warm** for the session. Subsequent index calls reuse warm servers (~2s instead of a cold 2-15s startup). Background watch re-indexing stays heuristic-only.
 
-### Self (upgrade / inspect / rollback)
+### Self (upgrade / inspect / rollback / migrate)
 ```bash
 cartog self update              # upgrade in place to latest stable
 cartog self update --check      # report whether an update exists; exit 1 if outdated
 cartog self version             # version + target + install source + last check
 cartog self rollback            # restore the previous binary saved at <bin>.old
+cartog self migrate-db          # move legacy .cartog.db (+ -wal/-shm/.bak) into .cartog/
+cartog self migrate-db --dry-run  # preview the planned moves
 ```
 
-User-facing maintenance commands. If the agent observes a "new cartog version available" hint or a stale binary, it can suggest the user run `cartog self update`. `cargo install cartog` users get an exit-3 refusal pointing at `cargo install cartog --force` instead.
+User-facing maintenance commands. If the agent observes a "new cartog version available" hint or a stale binary, it can suggest the user run `cartog self update`. `cargo install cartog` users get an exit-3 refusal pointing at `cargo install cartog --force` instead. If the agent sees a one-shot deprecation warning about a legacy `.cartog.db`, suggest `cartog self migrate-db`.
 
 ## Token Budget
 

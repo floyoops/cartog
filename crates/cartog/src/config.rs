@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 /// Top-level cartog configuration, loaded from `.cartog.toml`.
 ///
 /// Priority (highest to lowest):
-/// 1. `--db` CLI flag / `CARTOG_DB` env var  (handled in main)
-/// 2. `.cartog.toml` at git root or cwd      (`database.path`)
-/// 3. Auto git-root detection                (no config needed)
-/// 4. cwd fallback
+/// 1. `--db` CLI flag / `CARTOG_DB` env var       (handled in main)
+/// 2. `.cartog.toml` at git root or cwd           (`database.path`)
+/// 3. Auto git-root detection: prefer `.cartog/db.sqlite`,
+///    fall back to legacy `.cartog.db` if only it exists
+/// 4. cwd fallback to `.cartog/db.sqlite`
 #[derive(Debug, Default, Deserialize)]
 pub struct CartogConfig {
     pub database: Option<DatabaseConfig>,
@@ -218,8 +219,10 @@ fn read_config(path: &Path) -> Option<CartogConfig> {
 ///
 /// 1. `explicit` — from `--db` flag or `CARTOG_DB` env var (already merged by clap)
 /// 2. `config.database.path` — from `.cartog.toml` at git root / cwd
-/// 3. Auto git-root detection — walk up from cwd to `.git`, place DB there
-/// 4. cwd fallback — `.cartog.db` in the current directory
+/// 3. Auto git-root detection: prefer `<root>/.cartog/db.sqlite`, fall back to
+///    legacy `<root>/.cartog.db` if only it exists (warns once, points at
+///    `cartog self migrate-db`)
+/// 4. cwd fallback — `.cartog/db.sqlite` in the current directory
 pub fn resolve_db_path(explicit: Option<PathBuf>, config: &CartogConfig) -> PathBuf {
     // 1. Explicit override (--db / CARTOG_DB)
     if let Some(p) = explicit {
@@ -235,7 +238,7 @@ pub fn resolve_db_path(explicit: Option<PathBuf>, config: &CartogConfig) -> Path
     if let Ok(mut dir) = std::env::current_dir() {
         loop {
             if dir.join(".git").exists() {
-                return dir.join(cartog_db::DB_FILE);
+                return resolve_root_db_path(&dir);
             }
             if !dir.pop() {
                 break;
@@ -243,8 +246,50 @@ pub fn resolve_db_path(explicit: Option<PathBuf>, config: &CartogConfig) -> Path
         }
     }
 
-    // 4. Fallback: DB_FILE relative to cwd
-    PathBuf::from(cartog_db::DB_FILE)
+    // 4. Fallback relative to cwd
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    resolve_root_db_path(&cwd)
+}
+
+/// Prefer `.cartog/db.sqlite`; fall back to legacy `.cartog.db` with a warning.
+fn resolve_root_db_path(root: &Path) -> PathBuf {
+    let new_path = root.join(cartog_db::DB_DIR).join(cartog_db::DB_FILENAME);
+    let legacy = root.join(cartog_db::LEGACY_DB_FILE);
+    if new_path.exists() {
+        if legacy.exists() {
+            warn_orphan_legacy_once(&legacy);
+        }
+        return new_path;
+    }
+    if legacy.exists() {
+        warn_legacy_db_once(&legacy);
+        return legacy;
+    }
+    new_path
+}
+
+fn warn_legacy_db_once(path: &Path) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if WARNED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    tracing::warn!(
+        path = %path.display(),
+        "using legacy database location; run `cartog self migrate-db` to move it into .cartog/"
+    );
+}
+
+fn warn_orphan_legacy_once(path: &Path) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if WARNED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    tracing::warn!(
+        path = %path.display(),
+        "found legacy database alongside the new layout; the legacy file is being ignored"
+    );
 }
 
 /// Expand a leading `~/` to the user's home directory.
@@ -342,13 +387,19 @@ mod tests {
     #[serial]
     fn test_resolve_fallback_when_no_config_and_no_git() {
         let dir = tempfile::TempDir::new().unwrap();
+        let canonical = dir.path().canonicalize().unwrap();
         let original = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
 
         let result = resolve_db_path(None, &CartogConfig::default());
         std::env::set_current_dir(original).unwrap();
 
-        assert_eq!(result, PathBuf::from(cartog_db::DB_FILE));
+        assert_eq!(
+            result,
+            canonical
+                .join(cartog_db::DB_DIR)
+                .join(cartog_db::DB_FILENAME)
+        );
     }
 
     #[test]
@@ -367,7 +418,59 @@ mod tests {
         let result = resolve_db_path(None, &CartogConfig::default());
         std::env::set_current_dir(original).unwrap();
 
-        assert_eq!(result, canonical_root.join(cartog_db::DB_FILE));
+        assert_eq!(
+            result,
+            canonical_root
+                .join(cartog_db::DB_DIR)
+                .join(cartog_db::DB_FILENAME)
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_prefers_new_layout_over_legacy() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let canonical_root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        // Both files exist — new layout wins.
+        std::fs::create_dir(dir.path().join(cartog_db::DB_DIR)).unwrap();
+        std::fs::write(
+            dir.path()
+                .join(cartog_db::DB_DIR)
+                .join(cartog_db::DB_FILENAME),
+            b"",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join(cartog_db::LEGACY_DB_FILE), b"").unwrap();
+
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let result = resolve_db_path(None, &CartogConfig::default());
+        std::env::set_current_dir(original).unwrap();
+
+        assert_eq!(
+            result,
+            canonical_root
+                .join(cartog_db::DB_DIR)
+                .join(cartog_db::DB_FILENAME)
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_falls_back_to_legacy_db_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let canonical_root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        // Only legacy file exists — picks it up (and warns once).
+        std::fs::write(dir.path().join(cartog_db::LEGACY_DB_FILE), b"").unwrap();
+
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let result = resolve_db_path(None, &CartogConfig::default());
+        std::env::set_current_dir(original).unwrap();
+
+        assert_eq!(result, canonical_root.join(cartog_db::LEGACY_DB_FILE));
     }
 
     // ── Embedding config tests ──

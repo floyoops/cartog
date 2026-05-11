@@ -241,7 +241,7 @@
 - id: setup_non_blocking
   description: Setup should not block on RAG embedding
   user_query: "Help me explore this new codebase"
-  context: "First time using cartog on this project, no .cartog.db exists"
+  context: "First time using cartog on this project, no .cartog/db.sqlite exists"
   expected:
     tool_calls:
       - "bash scripts/ensure_indexed.sh"

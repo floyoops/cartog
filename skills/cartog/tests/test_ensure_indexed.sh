@@ -210,7 +210,7 @@ session_log() {
 # --- tests: indexing phases (versions in sync, no install/update path) ---
 
 test_fresh_index_shows_building() {
-    echo "TEST: fresh index (no .cartog.db) shows 'Building'"
+    echo "TEST: fresh index (no db) shows 'Building'"
     setup
     create_mock_cartog "0.14.1"
     local output
@@ -221,7 +221,20 @@ test_fresh_index_shows_building() {
 }
 
 test_existing_index_shows_updating() {
-    echo "TEST: existing .cartog.db shows 'Updating'"
+    echo "TEST: existing .cartog/db.sqlite shows 'Updating'"
+    setup
+    create_mock_cartog "0.14.1"
+    mkdir -p "$TEST_DIR/workdir/.cartog"
+    touch "$TEST_DIR/workdir/.cartog/db.sqlite"
+    local output
+    output=$(run_ensure_indexed)
+    wait_for_rag_index
+    assert_contains "shows 'Updating'" "Updating cartog index..." "$output"
+    teardown
+}
+
+test_legacy_db_file_shows_updating() {
+    echo "TEST: legacy .cartog.db at root shows 'Updating'"
     setup
     create_mock_cartog "0.14.1"
     mkdir -p "$TEST_DIR/workdir"
@@ -229,7 +242,7 @@ test_existing_index_shows_updating() {
     local output
     output=$(run_ensure_indexed)
     wait_for_rag_index
-    assert_contains "shows 'Updating'" "Updating cartog index..." "$output"
+    assert_contains "shows 'Updating' for legacy" "Updating cartog index..." "$output"
     teardown
 }
 
@@ -817,7 +830,7 @@ TOML
 }
 
 test_no_toml_falls_back_to_git_root() {
-    echo "TEST: no .cartog.toml falls back to git root"
+    echo "TEST: no .cartog.toml falls back to git root .cartog/db.sqlite"
     setup
     create_mock_cartog "0.14.1"
     local workdir="$TEST_DIR/workdir"
@@ -835,7 +848,56 @@ MOCK
     local output
     output=$(run_ensure_indexed_print_db "$workdir")
 
-    assert_contains "falls back to git root" "DB_FILE=$workdir/.cartog.db" "$output"
+    assert_contains "falls back to git root" "DB_FILE=$workdir/.cartog/db.sqlite" "$output"
+    teardown
+}
+
+test_legacy_root_db_used_when_only_legacy_exists() {
+    echo "TEST: legacy .cartog.db at git root is picked up when new layout missing"
+    setup
+    create_mock_cartog "0.14.1"
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir"
+    touch "$workdir/.cartog.db"
+
+    cat > "$TEST_DIR/bin/git" <<MOCK
+#!/usr/bin/env bash
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--show-toplevel" ]; then
+    echo "$workdir"; exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/bin/git"
+
+    local output
+    output=$(run_ensure_indexed_print_db "$workdir")
+
+    assert_contains "legacy root path" "DB_FILE=$workdir/.cartog.db" "$output"
+    teardown
+}
+
+test_new_layout_wins_over_legacy() {
+    echo "TEST: .cartog/db.sqlite wins when both layouts exist"
+    setup
+    create_mock_cartog "0.14.1"
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir/.cartog"
+    touch "$workdir/.cartog.db"
+    touch "$workdir/.cartog/db.sqlite"
+
+    cat > "$TEST_DIR/bin/git" <<MOCK
+#!/usr/bin/env bash
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--show-toplevel" ]; then
+    echo "$workdir"; exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/bin/git"
+
+    local output
+    output=$(run_ensure_indexed_print_db "$workdir")
+
+    assert_contains "new layout wins" "DB_FILE=$workdir/.cartog/db.sqlite" "$output"
     teardown
 }
 
@@ -847,6 +909,8 @@ echo ""
 test_fresh_index_shows_building
 echo ""
 test_existing_index_shows_updating
+echo ""
+test_legacy_db_file_shows_updating
 echo ""
 test_phase_order
 echo ""
@@ -899,6 +963,10 @@ echo ""
 test_cartog_db_env_overrides_toml
 echo ""
 test_no_toml_falls_back_to_git_root
+echo ""
+test_legacy_root_db_used_when_only_legacy_exists
+echo ""
+test_new_layout_wins_over_legacy
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

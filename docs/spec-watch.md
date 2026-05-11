@@ -2,7 +2,7 @@
 
 ## Overview
 
-A long-running CLI command that watches filesystem events, debounces changes, and automatically re-indexes the code graph + RAG embeddings. Keeps the `.cartog.db` fresh without manual `cartog index` / `cartog rag index` cycles, especially useful during active development before commits.
+A long-running CLI command that watches filesystem events, debounces changes, and automatically re-indexes the code graph + RAG embeddings. Keeps `.cartog/db.sqlite` fresh without manual `cartog index` / `cartog rag index` cycles, especially useful during active development before commits.
 
 ## Architecture
 
@@ -138,7 +138,7 @@ When I press Ctrl+C
 Then pending embeddings are flushed before exit
 
 ### AC-008: Startup initial index
-Given `.cartog.db` exists but is stale
+Given `.cartog/db.sqlite` exists but is stale
 When I run `cartog watch`
 Then an initial incremental index runs before entering watch mode
 

@@ -49,7 +49,8 @@ rank = match_tier + kind_penalty
 | Export | Description |
 |--------|-------------|
 | `Database` | Main handle — open, query, insert, resolve |
-| `DB_FILE` | Default database filename (`.cartog.db`) |
+| `DB_DIR` / `DB_FILENAME` | Default DB location: `.cartog/db.sqlite` at the project root |
+| `LEGACY_DB_FILE` | Legacy DB filename (`.cartog.db`), kept for backwards-compat lookups |
 | `MAX_SEARCH_LIMIT` | Maximum results for search queries (100) |
 | `UnresolvedEdge` | Edge pending LSP resolution |
 | `IndexStats` | Aggregate statistics (files, symbols, edges, languages) |

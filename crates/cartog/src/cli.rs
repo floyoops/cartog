@@ -313,4 +313,17 @@ pub enum SelfCommand {
 
     /// Restore the previous binary saved at `<bin>.old`
     Rollback,
+
+    /// Move a legacy `.cartog.db` (+ WAL/SHM/backups) into `.cartog/db.sqlite`
+    ///
+    /// Detects the project root via the same rules as the rest of cartog
+    /// (walk up to the git root, or use cwd). Refuses to run while another
+    /// cartog process holds the peer lock, and never overwrites files at
+    /// the destination.
+    #[command(name = "migrate-db")]
+    MigrateDb {
+        /// Print the planned moves without touching the filesystem.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
