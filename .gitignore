@@ -1,4 +1,5 @@
 /target
+.cartog/
 .cartog.db
 .fastembed_cache/
 .ruff_cache/

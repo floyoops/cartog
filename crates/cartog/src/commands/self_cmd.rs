@@ -812,6 +812,240 @@ fn smoke_test(bin: &Path) -> Result<()> {
     }
 }
 
+// ── migrate-db ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PlannedMove {
+    pub from: PathBuf,
+    pub to: PathBuf,
+}
+
+/// Plan the moves needed to migrate `.cartog.db` (+ -wal, -shm, .pre-v*.bak)
+/// at `root` into `.cartog/`. Empty vec when nothing to migrate. Errors when
+/// any destination already exists: we never overwrite.
+pub(crate) fn plan_migration(root: &Path) -> Result<Vec<PlannedMove>> {
+    let legacy_db = root.join(cartog_db::LEGACY_DB_FILE);
+    if !legacy_db.exists() {
+        return Ok(Vec::new());
+    }
+    // fs::rename moves the link, not the target. Symlinks usually point to a
+    // shared / network DB the user wants to keep where it is.
+    let meta = std::fs::symlink_metadata(&legacy_db)
+        .map_err(|e| anyhow::anyhow!("stat {}: {e}", legacy_db.display()))?;
+    if meta.file_type().is_symlink() {
+        anyhow::bail!(
+            "refusing to migrate {}: it is a symlink. Resolve or update it manually.",
+            legacy_db.display()
+        );
+    }
+    let new_dir = root.join(cartog_db::DB_DIR);
+    let new_db = new_dir.join(cartog_db::DB_FILENAME);
+
+    let mut moves = Vec::new();
+    let mut push_move = |from: PathBuf, to: PathBuf| -> Result<()> {
+        if to.exists() {
+            anyhow::bail!("refusing to migrate: {} already exists", to.display());
+        }
+        // Same symlink guard as legacy_db above: fs::rename moves the link, not the target.
+        let meta = std::fs::symlink_metadata(&from)
+            .map_err(|e| anyhow::anyhow!("stat {}: {e}", from.display()))?;
+        if meta.file_type().is_symlink() {
+            anyhow::bail!(
+                "refusing to migrate {}: it is a symlink. Resolve or update it manually.",
+                from.display()
+            );
+        }
+        moves.push(PlannedMove { from, to });
+        Ok(())
+    };
+
+    push_move(legacy_db.clone(), new_db.clone())?;
+
+    for suffix in ["-wal", "-shm"] {
+        let from = root.join(format!("{}{suffix}", cartog_db::LEGACY_DB_FILE));
+        if from.exists() {
+            let to = new_dir.join(format!("{}{suffix}", cartog_db::DB_FILENAME));
+            push_move(from, to)?;
+        }
+    }
+
+    let entries = std::fs::read_dir(root)
+        .map_err(|e| anyhow::anyhow!("read_dir({}): {e}", root.display()))?;
+    let prefix = format!("{}.pre-v", cartog_db::LEGACY_DB_FILE);
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        let Some(suffix) = name_str.strip_prefix(&prefix) else {
+            continue;
+        };
+        let from = entry.path();
+        let to = new_dir.join(format!("{}.pre-v{suffix}", cartog_db::DB_FILENAME));
+        push_move(from, to)?;
+    }
+
+    Ok(moves)
+}
+
+/// Test seam: when set, skips the peer-lock check. Only honored in `cfg(test)` builds.
+#[cfg(test)]
+const TEST_SKIP_PEER_LOCK_ENV: &str = "CARTOG_TEST_SKIP_PEER_LOCK";
+
+#[cfg(test)]
+fn peer_lock_check_skipped() -> bool {
+    std::env::var_os(TEST_SKIP_PEER_LOCK_ENV).is_some()
+}
+
+#[cfg(not(test))]
+fn peer_lock_check_skipped() -> bool {
+    false
+}
+
+/// `cartog self migrate-db [--dry-run]`. Moves legacy DB files into `.cartog/`.
+/// Refuses to run while another cartog peer holds the lock.
+pub fn cmd_self_migrate_db(root: &Path, dry_run: bool, json: bool) -> Result<()> {
+    if !peer_lock_check_skipped() {
+        if let Some(dir) = state::default_state_dir() {
+            let active = cartog_process_lock::find_active_locks(&dir);
+            if let Some(peer) = active.first() {
+                anyhow::bail!(
+                    "another cartog process is running ({slot}, PID {pid}); stop it before migrating",
+                    slot = peer.slot,
+                    pid = peer.pid,
+                );
+            }
+        }
+    }
+
+    let preview = plan_migration(root)?;
+    if preview.is_empty() {
+        emit_migrate_result(root, &preview, false, json, "nothing-to-do");
+        return Ok(());
+    }
+
+    if dry_run {
+        emit_migrate_result(root, &preview, false, json, "dry-run");
+        return Ok(());
+    }
+
+    // Checkpointing closes the WAL/SHM siblings, so re-plan afterwards.
+    // Non-fatal: the post-rename sweep picks up any siblings left behind.
+    let legacy_db = root.join(cartog_db::LEGACY_DB_FILE);
+    if let Err(e) = cartog_db::checkpoint_wal(&legacy_db) {
+        tracing::warn!(
+            path = %legacy_db.display(),
+            error = %e,
+            "WAL checkpoint failed before migrate-db; proceeding anyway",
+        );
+    }
+    let moves = plan_migration(root)?;
+
+    let new_dir = root.join(cartog_db::DB_DIR);
+    std::fs::create_dir_all(&new_dir)
+        .map_err(|e| anyhow::anyhow!("create_dir_all({}): {e}", new_dir.display()))?;
+
+    for mv in &moves {
+        std::fs::rename(&mv.from, &mv.to).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to move {} → {}: {e}",
+                mv.from.display(),
+                mv.to.display(),
+            )
+        })?;
+    }
+
+    // Sweep again: another SQLite reader may have re-created -wal/-shm
+    // between the checkpoint and the renames. Move them too so the new
+    // layout has the full set and the legacy path is empty.
+    let mut extra_moves = Vec::new();
+    for suffix in ["-wal", "-shm"] {
+        let from = root.join(format!("{}{suffix}", cartog_db::LEGACY_DB_FILE));
+        if from.exists() {
+            let meta = std::fs::symlink_metadata(&from)
+                .map_err(|e| anyhow::anyhow!("stat {}: {e}", from.display()))?;
+            if meta.file_type().is_symlink() {
+                anyhow::bail!(
+                    "refusing to migrate {}: it is a symlink. Resolve or update it manually.",
+                    from.display()
+                );
+            }
+            let to = new_dir.join(format!("{}{suffix}", cartog_db::DB_FILENAME));
+            if !to.exists() {
+                std::fs::rename(&from, &to).map_err(|e| {
+                    anyhow::anyhow!(
+                        "post-move sweep failed to move {} → {}: {e}",
+                        from.display(),
+                        to.display(),
+                    )
+                })?;
+                extra_moves.push(PlannedMove { from, to });
+            }
+        }
+    }
+    let mut all_moves = moves;
+    all_moves.extend(extra_moves);
+
+    emit_migrate_result(root, &all_moves, true, json, "migrated");
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct MigrateOutcome<'a> {
+    status: &'a str,
+    root: String,
+    performed: bool,
+    moves: Vec<MigrateMove>,
+}
+
+#[derive(Debug, Serialize)]
+struct MigrateMove {
+    from: String,
+    to: String,
+}
+
+fn emit_migrate_result(
+    root: &Path,
+    moves: &[PlannedMove],
+    performed: bool,
+    json: bool,
+    status: &str,
+) {
+    if json {
+        let outcome = MigrateOutcome {
+            status,
+            root: root.display().to_string(),
+            performed,
+            moves: moves
+                .iter()
+                .map(|m| MigrateMove {
+                    from: m.from.display().to_string(),
+                    to: m.to.display().to_string(),
+                })
+                .collect(),
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&outcome).expect("MigrateOutcome serialises")
+        );
+        return;
+    }
+    if moves.is_empty() {
+        println!(
+            "cartog: no legacy database found at {} — nothing to migrate.",
+            root.display()
+        );
+        return;
+    }
+    let verb = if performed { "Moved" } else { "Would move" };
+    for m in moves {
+        println!("{verb}: {} → {}", m.from.display(), m.to.display());
+    }
+    if !performed {
+        println!("(dry run — pass without --dry-run to apply)");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1277,5 +1511,115 @@ deadbeef *cartog-x86_64-unknown-linux-gnu.tar.gz
             Path::new("/home/u/.cargo-tools/bin/cartog"),
             None,
         ));
+    }
+
+    // ── migrate-db ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn plan_migration_no_legacy_returns_empty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let moves = plan_migration(dir.path()).expect("plan succeeds");
+        assert!(moves.is_empty());
+    }
+
+    #[test]
+    fn plan_migration_moves_db_and_wal_siblings() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join(".cartog.db"), b"db").unwrap();
+        std::fs::write(dir.path().join(".cartog.db-wal"), b"wal").unwrap();
+        std::fs::write(dir.path().join(".cartog.db-shm"), b"shm").unwrap();
+        std::fs::write(
+            dir.path().join(".cartog.db.pre-v3-20260101T000000Z.bak"),
+            b"bak",
+        )
+        .unwrap();
+
+        let moves = plan_migration(dir.path()).expect("plan succeeds");
+        let names: std::collections::BTreeSet<_> = moves
+            .iter()
+            .map(|m| m.to.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        let expected: std::collections::BTreeSet<_> = [
+            "db.sqlite".to_string(),
+            "db.sqlite-wal".to_string(),
+            "db.sqlite-shm".to_string(),
+            "db.sqlite.pre-v3-20260101T000000Z.bak".to_string(),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(names, expected);
+        for m in &moves {
+            assert_eq!(m.to.parent().unwrap(), dir.path().join(".cartog"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plan_migration_refuses_symlinks() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::TempDir::new().unwrap();
+        let real_target = dir.path().join("real.db");
+        std::fs::write(&real_target, b"real").unwrap();
+        symlink(&real_target, dir.path().join(".cartog.db")).unwrap();
+
+        let err = plan_migration(dir.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("symlink"),
+            "expected symlink refusal, got: {err}"
+        );
+    }
+
+    #[test]
+    fn plan_migration_refuses_when_destination_exists() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join(".cartog.db"), b"db").unwrap();
+        std::fs::create_dir_all(dir.path().join(".cartog")).unwrap();
+        std::fs::write(dir.path().join(".cartog").join("db.sqlite"), b"existing").unwrap();
+
+        let err = plan_migration(dir.path()).unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn cmd_self_migrate_db_dry_run_does_not_move() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let legacy = dir.path().join(".cartog.db");
+        std::fs::write(&legacy, b"db").unwrap();
+
+        // Safety: tests using process env vars are serialised via #[serial].
+        unsafe { std::env::set_var(TEST_SKIP_PEER_LOCK_ENV, "1") };
+        let result = cmd_self_migrate_db(dir.path(), true, true);
+        unsafe { std::env::remove_var(TEST_SKIP_PEER_LOCK_ENV) };
+        result.expect("dry run succeeds");
+
+        assert!(legacy.exists(), "dry run must not touch the filesystem");
+        assert!(!dir.path().join(".cartog").exists());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn cmd_self_migrate_db_moves_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let legacy = dir.path().join(".cartog.db");
+
+        // Create a real SQLite database so the WAL checkpoint can run without
+        // tripping on a malformed file. The DB content itself is irrelevant.
+        {
+            let db = cartog_db::Database::open(&legacy, 384).unwrap();
+            drop(db);
+        }
+        assert!(legacy.exists());
+
+        unsafe { std::env::set_var(TEST_SKIP_PEER_LOCK_ENV, "1") };
+        let result = cmd_self_migrate_db(dir.path(), false, true);
+        unsafe { std::env::remove_var(TEST_SKIP_PEER_LOCK_ENV) };
+        result.expect("migrate succeeds");
+
+        assert!(!legacy.exists());
+        let new_db = dir.path().join(".cartog").join("db.sqlite");
+        assert!(new_db.exists(), "main db moved into .cartog/");
+        // The migrated DB still opens cleanly.
+        let _ = cartog_db::Database::open(&new_db, 384).expect("migrated db opens");
     }
 }

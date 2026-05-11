@@ -34,6 +34,15 @@ pub enum DbError {
         source: rusqlite::Error,
     },
 
+    /// Failure preparing the on-disk layout (e.g. could not create the
+    /// `.cartog/` parent directory).
+    #[error("failed to prepare database directory {path}: {source}")]
+    PrepareDir {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     /// Could not apply one of the startup PRAGMAs (journal_mode, WAL, …).
     #[error("failed to set startup pragmas: {0}")]
     Pragma(#[source] rusqlite::Error),
@@ -183,8 +192,30 @@ fn rag_vec_schema(dim: usize) -> String {
     format!("CREATE VIRTUAL TABLE IF NOT EXISTS symbol_vec USING vec0(embedding float[{dim}])")
 }
 
-/// Default database filename, stored in the project root.
-pub const DB_FILE: &str = ".cartog.db";
+/// Default directory for cartog-generated artifacts, at the project root.
+/// Holds the SQLite database and its destructive-migration backups.
+pub const DB_DIR: &str = ".cartog";
+
+/// Default SQLite database filename, stored inside [`DB_DIR`].
+pub const DB_FILENAME: &str = "db.sqlite";
+
+/// Legacy database filename at the project root, kept for backwards-compatibility
+/// lookups. Never written to for new projects: use `DB_DIR`/`DB_FILENAME` instead.
+pub const LEGACY_DB_FILE: &str = ".cartog.db";
+
+/// Run `PRAGMA wal_checkpoint(TRUNCATE)` on the SQLite file at `path`.
+/// No-op for missing files. Used before moving the DB to flush the WAL.
+pub fn checkpoint_wal(path: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::Context;
+    if !path.exists() {
+        return Ok(());
+    }
+    let conn = Connection::open(path)
+        .with_context(|| format!("open {} for WAL checkpoint", path.display()))?;
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .with_context(|| format!("PRAGMA wal_checkpoint(TRUNCATE) on {}", path.display()))?;
+    Ok(())
+}
 
 /// Maximum number of results returned by [`Database::search`].
 /// Enforced here and referenced by CLI and MCP layers.
@@ -450,6 +481,15 @@ impl Database {
     pub fn open(path: impl AsRef<std::path::Path>, embedding_dim: usize) -> DbResult<Self> {
         register_sqlite_vec();
         let db_path = path.as_ref();
+        // SQLite::open fails on a missing parent tree, so materialize `.cartog/`.
+        if let Some(parent) = db_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|source| DbError::PrepareDir {
+                    path: parent.to_path_buf(),
+                    source,
+                })?;
+            }
+        }
         let conn = Connection::open(db_path).map_err(|source| DbError::Open {
             path: db_path.to_path_buf(),
             source,
@@ -3892,13 +3932,17 @@ mod tests {
     #[test]
     fn test_db_error_open_variant_has_path() {
         // Give Database::open a path inside a non-writable location to force
-        // rusqlite::Error::SqliteFailure. The `Open` variant should preserve
-        // the path we asked it to touch.
+        // a failure. We accept either PrepareDir (mkdir failed on the parent)
+        // or Open (SQLite refused), since the failure point depends on the
+        // platform's handling of `/dev/null/…`.
         let bad_path = std::path::PathBuf::from("/dev/null/definitely/not/a/db.sqlite");
         let err = Database::open(&bad_path, DEFAULT_EMBEDDING_DIM).unwrap_err();
         match err {
             DbError::Open { path, .. } => assert_eq!(path, bad_path),
-            other => panic!("expected DbError::Open, got {other:?}"),
+            DbError::PrepareDir { path, .. } => {
+                assert_eq!(path, bad_path.parent().unwrap());
+            }
+            other => panic!("expected DbError::Open or PrepareDir, got {other:?}"),
         }
     }
 

@@ -8,6 +8,7 @@ use anyhow::Result;
 use cartog_mcp as mcp;
 use clap::Parser;
 use std::io::IsTerminal;
+use std::path::Path;
 use std::time::SystemTime;
 
 use cli::{Cli, Command, RagCommand, SelfCommand};
@@ -24,6 +25,23 @@ fn classify_command(cmd: &Command) -> CommandKind {
         Command::Serve { .. } | Command::Watch { .. } => CommandKind::LongLived,
         _ => CommandKind::Quick,
     }
+}
+
+/// Walk up from cwd to a `.git` directory; fall back to cwd. Used by
+/// `migrate-db` when the resolved DB path is outside the project.
+fn project_root_from_cwd() -> std::path::PathBuf {
+    use std::path::PathBuf;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut dir = cwd.clone();
+    loop {
+        if dir.join(".git").exists() {
+            return dir;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    cwd
 }
 
 fn run_auto_check_epilogue(command_kind: CommandKind) {
@@ -220,6 +238,29 @@ fn main() -> Result<()> {
             }
             SelfCommand::Version => commands::cmd_self_version(cli.json),
             SelfCommand::Rollback => commands::cmd_self_rollback(),
+            SelfCommand::MigrateDb { dry_run } => {
+                // Explicit --db/CARTOG_DB/[database].path can point outside the project;
+                // anchor at the project root in that case, not at the DB parent.
+                let explicit_override = cli.db.is_some()
+                    || cartog_config
+                        .database
+                        .as_ref()
+                        .is_some_and(|d| d.path.is_some());
+                let root = if explicit_override {
+                    project_root_from_cwd()
+                } else {
+                    let parent = db_path
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+                    if parent.file_name().and_then(|n| n.to_str()) == Some(cartog_db::DB_DIR) {
+                        parent.parent().map(Path::to_path_buf).unwrap_or(parent)
+                    } else {
+                        parent
+                    }
+                };
+                commands::cmd_self_migrate_db(&root, dry_run, cli.json)
+            }
         },
     };
 

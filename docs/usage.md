@@ -24,8 +24,14 @@ cartog resolves the database path using the following priority (highest wins):
 |----------|--------|---------|
 | 1 | `--db` flag or `CARTOG_DB` env var | `cartog --db /tmp/proj.db index .` |
 | 2 | `.cartog.toml` in the project | `[database]\npath = "..."` |
-| 3 | Auto git-root detection | DB placed at the root of the git repo |
-| 4 | Current directory fallback | `.cartog.db` in cwd |
+| 3 | Auto git-root detection | `<root>/.cartog/db.sqlite` (legacy `<root>/.cartog.db` still read if only it exists) |
+| 4 | Current directory fallback | `.cartog/db.sqlite` in cwd |
+
+> **Migrating from `.cartog.db`** — older versions of cartog stored the database
+> as `.cartog.db` at the project root. New installs default to
+> `.cartog/db.sqlite`. Existing legacy files keep working (a one-shot warning
+> is printed). Run `cartog self migrate-db` (add `--dry-run` to preview) to
+> move the database and its WAL/SHM/backup siblings into `.cartog/`.
 
 ### Project config: `.cartog.toml`
 
@@ -324,7 +330,7 @@ cartog doctor
 ```
   [+] git: git repository at /home/user/project
   [+] config: loaded from /home/user/project/.cartog.toml
-  [+] database: 42 files, 387 symbols at /home/user/project/.cartog.db
+  [+] database: 42 files, 387 symbols at /home/user/project/.cartog/db.sqlite
   [+] embedding: local model cached
   [+] reranker: local model cached
 
@@ -406,18 +412,22 @@ cartog manpage > /usr/local/share/man/man1/cartog.1
 man cartog
 ```
 
-### `cartog self <update|version|rollback>`
+### `cartog self <update|version|rollback|migrate-db>`
 
-Manage the installed cartog binary in place: upgrade, inspect, or roll back.
+Manage the installed cartog binary in place: upgrade, inspect, roll back, or migrate the on-disk DB layout.
 
 ```bash
 cartog self update             # upgrade to the latest stable
 cartog self update --check     # report whether an update exists; exit 1 if outdated
 cartog self version            # version + target + install source + last check
 cartog self rollback           # restore the previous binary saved at <bin>.old
+cartog self migrate-db         # move legacy .cartog.db (+ -wal/-shm/.bak) into .cartog/
+cartog self migrate-db --dry-run  # preview the planned moves without touching the filesystem
 ```
 
 `cartog self update` refuses to overwrite a `cargo install cartog` binary (exit 3) and points at `cargo install cartog --force` instead. See [updates.md](updates.md) for the full exit-code matrix, env vars (`CARTOG_NO_UPDATE_CHECK`, `CARTOG_UPDATE_CHECK`), platform-specific state file location, and rollback contract.
+
+`cartog self migrate-db` refuses to overwrite an existing `.cartog/db.sqlite`, refuses to run while a peer cartog process (`serve` / `watch`) holds the lock, and refuses to migrate a symlinked `.cartog.db`.
 
 ### `cartog rag setup`
 

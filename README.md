@@ -296,14 +296,14 @@ references  process  routes/auth.py:22
 ```mermaid
 graph LR
     A["Source files<br/>(py, ts, rs, go, rb, java, md)"] -->|parse| B["Symbols + Edges"]
-    B -->|write| C[".cartog.db<br/>(SQLite)"]
+    B -->|write| C[".cartog/db.sqlite<br/>(SQLite)"]
     C -->|query| D["search / refs / impact<br/>outline / callees / hierarchy"]
     C -->|embed locally| E["ONNX embeddings<br/>(sqlite-vec)"]
     E -->|query| F["rag search<br/>(FTS5 + vector KNN + reranker)"]
 ```
 
 1. **Index** — tree-sitter parses your code, extracts symbols (functions, classes, methods) and edges (calls, imports, inherits, type refs). Markdown is chunked by heading.
-2. **Store** — everything goes into a local `.cartog.db` SQLite file.
+2. **Store** — everything goes into a local `.cartog/db.sqlite` SQLite file.
 3. **Resolve (heuristic)** — links edges by name with scope-aware matching.
 4. **Resolve (LSP, optional)** — sends unresolved edges to language servers for compiler-grade precision. Results persist.
 5. **Embed (optional)** — generates vector embeddings via local ONNX or Ollama, stored in sqlite-vec.
@@ -342,8 +342,8 @@ Database path is resolved automatically — no config needed for standard use:
 
 1. `--db` flag / `CARTOG_DB` env var (highest priority)
 2. `.cartog.toml` at git root
-3. Auto git-root detection
-4. `.cartog.db` in current directory
+3. Auto git-root detection (`.cartog/db.sqlite`; legacy `.cartog.db` still read with a warning)
+4. `.cartog/db.sqlite` in current directory
 
 **`.cartog.toml`** (optional):
 

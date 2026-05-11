@@ -75,7 +75,7 @@ cartog/
 │       │   ├── cli.rs       # Clap command definitions
 │       │   ├── commands/    # Command handlers
 │       │   │   ├── mod.rs   # Top-level: outline, refs, impact, search, …
-│       │   │   └── self_cmd.rs  # `cartog self` (update/version/rollback)
+│       │   │   └── self_cmd.rs  # `cartog self` (update/version/rollback/migrate-db)
 │       │   ├── config.rs    # .cartog.toml loading, DB path resolution
 │       │   ├── auto_check.rs # Daily background update probe (predicate + spawn)
 │       │   ├── state.rs     # `state.toml` (last update check, etc.)
@@ -137,7 +137,7 @@ cartog/
     └── demo.gif             # Generated demo animation
 ```
 
-**Generated artifacts** (gitignored): `.cartog.db` (SQLite index created in project root during development), `target/` (Rust build output), `benchmarks/results/`.
+**Generated artifacts** (gitignored): `.cartog/` (project-local index directory containing `db.sqlite` and migration backups; legacy `.cartog.db` at the project root is still read for backwards-compatibility), `target/` (Rust build output), `benchmarks/results/`.
 
 ## Dependency Graph
 
@@ -172,7 +172,7 @@ Each crate has a `README.md` with detailed technical documentation. Summary:
 - **[cartog-watch](../crates/cartog-watch/README.md)**: Debounced file watcher (`notify-debouncer-mini`), incremental re-index on changes, deferred RAG embedding with configurable timer. See [spec-watch.md](spec-watch.md) for design details.
 - **[cartog-mcp](../crates/cartog-mcp/README.md)**: MCP server over stdio (`rmcp`). 12 tool handlers with JSON Schema params, path validation (canonicalization), `Arc<Mutex<Database>>` for shared state. Writes a `serve.pid` file consumed by `cartog self update`.
 - **cartog-process-lock**: Cross-platform PID-file locks (`<state_dir>/{slot}.pid`) for long-lived commands. `is_alive(pid)` via `kill(pid, 0)` on unix and `OpenProcess` on windows. Consulted by `cartog self update` so an upgrade refuses to clobber a running peer.
-- **[cartog](../crates/cartog/README.md)**: Binary crate (19 CLI commands via clap, including `cartog self` with `update`/`version`/`rollback`) + lib.rs facade re-exporting all crates as `cartog::db`, `cartog::types`, etc. Config resolution, logging setup, tokio runtime for MCP serve, daily background update probe.
+- **[cartog](../crates/cartog/README.md)**: Binary crate (19 CLI commands via clap, including `cartog self` with `update`/`version`/`rollback`/`migrate-db`) + lib.rs facade re-exporting all crates as `cartog::db`, `cartog::types`, etc. Config resolution, logging setup, tokio runtime for MCP serve, daily background update probe.
 
 ## Conventions
 
