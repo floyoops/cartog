@@ -205,12 +205,15 @@ pub const LEGACY_DB_FILE: &str = ".cartog.db";
 
 /// Run `PRAGMA wal_checkpoint(TRUNCATE)` on the SQLite file at `path`.
 /// No-op for missing files. Used before moving the DB to flush the WAL.
-pub fn checkpoint_wal(path: &std::path::Path) -> rusqlite::Result<()> {
+pub fn checkpoint_wal(path: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::Context;
     if !path.exists() {
         return Ok(());
     }
-    let conn = Connection::open(path)?;
-    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+    let conn = Connection::open(path)
+        .with_context(|| format!("open {} for WAL checkpoint", path.display()))?;
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .with_context(|| format!("PRAGMA wal_checkpoint(TRUNCATE) on {}", path.display()))?;
     Ok(())
 }
 

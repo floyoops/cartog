@@ -27,6 +27,23 @@ fn classify_command(cmd: &Command) -> CommandKind {
     }
 }
 
+/// Walk up from cwd to a `.git` directory; fall back to cwd. Used by
+/// `migrate-db` when the resolved DB path is outside the project.
+fn project_root_from_cwd() -> std::path::PathBuf {
+    use std::path::PathBuf;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut dir = cwd.clone();
+    loop {
+        if dir.join(".git").exists() {
+            return dir;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    cwd
+}
+
 fn run_auto_check_epilogue(command_kind: CommandKind) {
     let api_url = std::env::var("CARTOG_GITHUB_API_URL")
         .unwrap_or_else(|_| DEFAULT_GITHUB_LATEST_URL.to_string());
@@ -222,17 +239,25 @@ fn main() -> Result<()> {
             SelfCommand::Version => commands::cmd_self_version(cli.json),
             SelfCommand::Rollback => commands::cmd_self_rollback(),
             SelfCommand::MigrateDb { dry_run } => {
-                let resolved = config::resolve_db_path(cli.db.clone(), &cartog_config);
-                let parent = resolved
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-                // If resolved is inside `.cartog/`, climb one level to the project root.
-                let root = if parent.file_name().and_then(|n| n.to_str()) == Some(cartog_db::DB_DIR)
-                {
-                    parent.parent().map(Path::to_path_buf).unwrap_or(parent)
+                // Explicit --db/CARTOG_DB/[database].path can point outside the project;
+                // anchor at the project root in that case, not at the DB parent.
+                let explicit_override = cli.db.is_some()
+                    || cartog_config
+                        .database
+                        .as_ref()
+                        .is_some_and(|d| d.path.is_some());
+                let root = if explicit_override {
+                    project_root_from_cwd()
                 } else {
-                    parent
+                    let parent = db_path
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+                    if parent.file_name().and_then(|n| n.to_str()) == Some(cartog_db::DB_DIR) {
+                        parent.parent().map(Path::to_path_buf).unwrap_or(parent)
+                    } else {
+                        parent
+                    }
                 };
                 commands::cmd_self_migrate_db(&root, dry_run, cli.json)
             }

@@ -846,6 +846,15 @@ pub(crate) fn plan_migration(root: &Path) -> Result<Vec<PlannedMove>> {
         if to.exists() {
             anyhow::bail!("refusing to migrate: {} already exists", to.display());
         }
+        // Same symlink guard as legacy_db above: fs::rename moves the link, not the target.
+        let meta = std::fs::symlink_metadata(&from)
+            .map_err(|e| anyhow::anyhow!("stat {}: {e}", from.display()))?;
+        if meta.file_type().is_symlink() {
+            anyhow::bail!(
+                "refusing to migrate {}: it is a symlink. Resolve or update it manually.",
+                from.display()
+            );
+        }
         moves.push(PlannedMove { from, to });
         Ok(())
     };
@@ -879,13 +888,24 @@ pub(crate) fn plan_migration(root: &Path) -> Result<Vec<PlannedMove>> {
     Ok(moves)
 }
 
-/// Test seam: when set, skips the peer-lock check.
+/// Test seam: when set, skips the peer-lock check. Only honored in `cfg(test)` builds.
+#[cfg(test)]
 const TEST_SKIP_PEER_LOCK_ENV: &str = "CARTOG_TEST_SKIP_PEER_LOCK";
+
+#[cfg(test)]
+fn peer_lock_check_skipped() -> bool {
+    std::env::var_os(TEST_SKIP_PEER_LOCK_ENV).is_some()
+}
+
+#[cfg(not(test))]
+fn peer_lock_check_skipped() -> bool {
+    false
+}
 
 /// `cartog self migrate-db [--dry-run]`. Moves legacy DB files into `.cartog/`.
 /// Refuses to run while another cartog peer holds the lock.
 pub fn cmd_self_migrate_db(root: &Path, dry_run: bool, json: bool) -> Result<()> {
-    if std::env::var_os(TEST_SKIP_PEER_LOCK_ENV).is_none() {
+    if !peer_lock_check_skipped() {
         if let Some(dir) = state::default_state_dir() {
             let active = cartog_process_lock::find_active_locks(&dir);
             if let Some(peer) = active.first() {
@@ -910,8 +930,15 @@ pub fn cmd_self_migrate_db(root: &Path, dry_run: bool, json: bool) -> Result<()>
     }
 
     // Checkpointing closes the WAL/SHM siblings, so re-plan afterwards.
+    // Non-fatal: the post-rename sweep picks up any siblings left behind.
     let legacy_db = root.join(cartog_db::LEGACY_DB_FILE);
-    let _ = cartog_db::checkpoint_wal(&legacy_db);
+    if let Err(e) = cartog_db::checkpoint_wal(&legacy_db) {
+        tracing::warn!(
+            path = %legacy_db.display(),
+            error = %e,
+            "WAL checkpoint failed before migrate-db; proceeding anyway",
+        );
+    }
     let moves = plan_migration(root)?;
 
     let new_dir = root.join(cartog_db::DB_DIR);
@@ -935,6 +962,14 @@ pub fn cmd_self_migrate_db(root: &Path, dry_run: bool, json: bool) -> Result<()>
     for suffix in ["-wal", "-shm"] {
         let from = root.join(format!("{}{suffix}", cartog_db::LEGACY_DB_FILE));
         if from.exists() {
+            let meta = std::fs::symlink_metadata(&from)
+                .map_err(|e| anyhow::anyhow!("stat {}: {e}", from.display()))?;
+            if meta.file_type().is_symlink() {
+                anyhow::bail!(
+                    "refusing to migrate {}: it is a symlink. Resolve or update it manually.",
+                    from.display()
+                );
+            }
             let to = new_dir.join(format!("{}{suffix}", cartog_db::DB_FILENAME));
             if !to.exists() {
                 std::fs::rename(&from, &to).map_err(|e| {
