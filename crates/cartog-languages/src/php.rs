@@ -41,18 +41,66 @@ struct FileContext {
 }
 
 impl FileContext {
-    /// Resolves a short class name to its FQCN using the current namespace and import map.
+    /// Resolves a name (bare, qualified, or fully-qualified) to its FQCN using the
+    /// current namespace and import map.
+    ///
+    /// Three input shapes are handled:
+    /// - `\App\Foo` (leading `\`) is already fully qualified; the leading slash is stripped.
+    /// - `Alias\Sub` (no leading `\`, contains `\`) resolves `Alias` through the import map,
+    ///   producing `<imported>\Sub`; otherwise the whole name is treated as relative to the
+    ///   current namespace.
+    /// - `Bar` (single segment) resolves through imports first, then the current namespace.
     fn resolve(&self, name: &str) -> String {
-        if name.contains('\\') {
+        if let Some(rest) = name.strip_prefix('\\') {
+            return rest.to_string();
+        }
+        if let Some((head, tail)) = name.split_once('\\') {
+            if let Some(base) = self.imports.get(head) {
+                return format!("{base}\\{tail}");
+            }
+            if let Some(ns) = &self.namespace {
+                return format!("{ns}\\{name}");
+            }
             return name.to_string();
         }
         if let Some(fqcn) = self.imports.get(name) {
             return fqcn.clone();
         }
         if let Some(ns) = &self.namespace {
-            return format!("{}\\{}", ns, name);
+            return format!("{ns}\\{name}");
         }
         name.to_string()
+    }
+}
+
+/// Lexical scope of the symbol enclosing the declaration being extracted.
+///
+/// The `id` is the cartog symbol id of the enclosing class/interface/trait/enum (used
+/// as the `parent_id` on child symbols), and `qname` is the qualified name used both
+/// as the `parent_name` segment of [`symbol_id`] and as the prefix when building child
+/// qualified names. At the top level of a file, `id` is `None` and `qname` carries the
+/// PHP namespace (if any) so cross-namespace symbol ids don't collide.
+#[derive(Clone, Copy, Default)]
+struct ParentScope<'a> {
+    id: Option<&'a str>,
+    qname: Option<&'a str>,
+}
+
+impl<'a> ParentScope<'a> {
+    /// Scope at the top level of a (possibly empty) PHP namespace.
+    fn top_level(namespace: Option<&'a str>) -> Self {
+        Self {
+            id: None,
+            qname: namespace,
+        }
+    }
+
+    /// Scope nested inside a class/interface/trait/enum identified by `id` + `qname`.
+    fn nested(id: &'a str, qname: &'a str) -> Self {
+        Self {
+            id: Some(id),
+            qname: Some(qname),
+        }
     }
 }
 
@@ -64,7 +112,13 @@ fn collect_file_context(root: Node, source: &str) -> FileContext {
     FileContext { namespace, imports }
 }
 
-/// Recursively collects namespace and import information from `node` into the provided accumulators.
+/// Collects namespace and import information from `node`'s direct children into the
+/// provided accumulators.
+///
+/// Only statement-style `namespace Foo;` (without a body) contributes to the outer
+/// scope; brace-style `namespace Foo { ... }` owns its own scope and is handled
+/// separately by [`extract_top_level`], so its contents are intentionally not merged
+/// here.
 fn collect_context_in(
     node: Node,
     source: &str,
@@ -74,12 +128,11 @@ fn collect_context_in(
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
             "namespace_definition" => {
+                if child.child_by_field_name("body").is_some() {
+                    continue;
+                }
                 if let Some(name_node) = child.child_by_field_name("name") {
                     *namespace = Some(node_text(name_node, source).to_string());
-                }
-                // brace-style: `namespace Foo { ... }`
-                if let Some(body) = child.child_by_field_name("body") {
-                    collect_context_in(body, source, namespace, imports);
                 }
             }
             "namespace_use_declaration" => {
@@ -107,7 +160,7 @@ fn collect_use_clause(
     let fqcn = if prefix.is_empty() {
         relative.to_string()
     } else {
-        format!("{}\\{}", prefix, relative)
+        format!("{prefix}\\{relative}")
     };
     let alias = clause
         .child_by_field_name("alias")
@@ -166,7 +219,7 @@ fn extract_use_clause_edge(
     let fqcn = if prefix.is_empty() {
         relative.to_string()
     } else {
-        format!("{}\\{}", prefix, relative)
+        format!("{prefix}\\{relative}")
     };
     if fqcn.is_empty() {
         return;
@@ -289,30 +342,39 @@ fn extract_top_level(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    let parent = ParentScope::top_level(ctx.namespace.as_deref());
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
             "namespace_use_declaration" => {
                 extract_namespace_use(child, source, file_path, symbols, edges);
             }
             "class_declaration" => {
-                extract_class(child, source, file_path, ctx, None, None, symbols, edges);
+                extract_class(child, source, file_path, ctx, parent, symbols, edges);
             }
             "interface_declaration" => {
-                extract_interface(child, source, file_path, ctx, None, None, symbols, edges);
+                extract_interface(child, source, file_path, ctx, parent, symbols, edges);
             }
             "trait_declaration" => {
-                extract_trait(child, source, file_path, ctx, None, None, symbols, edges);
+                extract_trait(child, source, file_path, ctx, parent, symbols, edges);
             }
             "enum_declaration" => {
-                extract_enum(child, source, file_path, ctx, None, None, symbols, edges);
+                extract_enum(child, source, file_path, ctx, parent, symbols, edges);
             }
             "function_definition" => {
-                extract_function(child, source, file_path, ctx, None, None, symbols, edges);
+                extract_function(child, source, file_path, ctx, parent, symbols, edges);
             }
             "namespace_definition" => {
-                // brace-style namespace body
+                // Brace-style namespace body: each block owns its own
+                // namespace + import scope, so build a fresh context for the
+                // body and recurse with it instead of inheriting `ctx`.
                 if let Some(body) = child.child_by_field_name("body") {
-                    extract_top_level(body, source, file_path, ctx, symbols, edges);
+                    let namespace = child
+                        .child_by_field_name("name")
+                        .map(|n| node_text(n, source).to_string());
+                    let mut imports = HashMap::new();
+                    collect_context_in(body, source, &mut None, &mut imports);
+                    let scope_ctx = FileContext { namespace, imports };
+                    extract_top_level(body, source, file_path, &scope_ctx, symbols, edges);
                 }
             }
             _ => {}
@@ -328,8 +390,7 @@ fn extract_class(
     source: &str,
     file_path: &str,
     ctx: &FileContext,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -343,8 +404,8 @@ fn extract_class(
     let visibility = php_visibility(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "class", &name, parent_qname);
-    let class_qname = match parent_qname {
+    let sym_id = symbol_id(file_path, "class", &name, parent.qname);
+    let class_qname = match parent.qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
     };
@@ -357,9 +418,9 @@ fn extract_class(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_docstring(docstring);
     if visibility != Visibility::Public {
         sym = sym.with_visibility(visibility);
@@ -400,8 +461,7 @@ fn extract_class(
             source,
             file_path,
             ctx,
-            &sym_id,
-            &class_qname,
+            ParentScope::nested(&sym_id, &class_qname),
             symbols,
             edges,
         );
@@ -416,8 +476,7 @@ fn extract_interface(
     source: &str,
     file_path: &str,
     ctx: &FileContext,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -430,8 +489,8 @@ fn extract_interface(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "interface", &name, parent_qname);
-    let iface_qname = match parent_qname {
+    let sym_id = symbol_id(file_path, "interface", &name, parent.qname);
+    let iface_qname = match parent.qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
     };
@@ -444,9 +503,9 @@ fn extract_interface(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_docstring(docstring);
     symbols.push(sym);
 
@@ -471,8 +530,7 @@ fn extract_interface(
             source,
             file_path,
             ctx,
-            &sym_id,
-            &iface_qname,
+            ParentScope::nested(&sym_id, &iface_qname),
             symbols,
             edges,
         );
@@ -487,8 +545,7 @@ fn extract_trait(
     source: &str,
     file_path: &str,
     ctx: &FileContext,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -501,8 +558,8 @@ fn extract_trait(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "trait", &name, parent_qname);
-    let trait_qname = match parent_qname {
+    let sym_id = symbol_id(file_path, "trait", &name, parent.qname);
+    let trait_qname = match parent.qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
     };
@@ -515,9 +572,9 @@ fn extract_trait(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_docstring(docstring);
     symbols.push(sym);
 
@@ -527,8 +584,7 @@ fn extract_trait(
             source,
             file_path,
             ctx,
-            &sym_id,
-            &trait_qname,
+            ParentScope::nested(&sym_id, &trait_qname),
             symbols,
             edges,
         );
@@ -543,8 +599,7 @@ fn extract_enum(
     source: &str,
     file_path: &str,
     ctx: &FileContext,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -557,8 +612,8 @@ fn extract_enum(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "enum", &name, parent_qname);
-    let enum_qname = match parent_qname {
+    let sym_id = symbol_id(file_path, "enum", &name, parent.qname);
+    let enum_qname = match parent.qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
     };
@@ -571,9 +626,9 @@ fn extract_enum(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_docstring(docstring);
     symbols.push(sym);
 
@@ -597,8 +652,7 @@ fn extract_enum(
             source,
             file_path,
             ctx,
-            &sym_id,
-            &enum_qname,
+            ParentScope::nested(&sym_id, &enum_qname),
             symbols,
             edges,
         );
@@ -613,24 +667,17 @@ fn extract_class_body(
     source: &str,
     file_path: &str,
     ctx: &FileContext,
-    parent_id: &str,
-    parent_qname: &str,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    let parent_id = parent
+        .id
+        .expect("extract_class_body called without a parent symbol id");
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
             "method_declaration" => {
-                extract_method(
-                    child,
-                    source,
-                    file_path,
-                    ctx,
-                    parent_id,
-                    parent_qname,
-                    symbols,
-                    edges,
-                );
+                extract_method(child, source, file_path, ctx, parent, symbols, edges);
             }
             "use_declaration" => {
                 // trait use inside class body: `use TimestampTrait;`
@@ -657,11 +704,13 @@ fn extract_method(
     source: &str,
     file_path: &str,
     ctx: &FileContext,
-    parent_id: &str,
-    parent_qname: &str,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    let parent_id = parent
+        .id
+        .expect("extract_method called without a parent symbol id");
     let name = match node.child_by_field_name("name") {
         Some(n) => node_text(n, source).to_string(),
         None => return,
@@ -673,7 +722,7 @@ fn extract_method(
     let signature = build_method_signature(node, source, &name, visibility);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "method", &name, Some(parent_qname));
+    let sym_id = symbol_id(file_path, "method", &name, parent.qname);
     let mut sym = Symbol::new(
         name.clone(),
         SymbolKind::Method,
@@ -682,7 +731,7 @@ fn extract_method(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        Some(parent_qname),
+        parent.qname,
     )
     .with_parent(Some(parent_id))
     .with_signature(signature)
@@ -828,8 +877,7 @@ fn extract_function(
     source: &str,
     file_path: &str,
     ctx: &FileContext,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -845,7 +893,7 @@ fn extract_function(
         .map(|p| format!("function {}{}", name, node_text(p, source)));
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "function", &name, parent_qname);
+    let sym_id = symbol_id(file_path, "function", &name, parent.qname);
     let sym = Symbol::new(
         name,
         SymbolKind::Function,
@@ -854,9 +902,9 @@ fn extract_function(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_signature(signature)
     .with_docstring(docstring);
     symbols.push(sym);
@@ -938,7 +986,7 @@ fn walk_for_calls(
                         let obj_text = node_text(obj_node, source);
                         let target = scope
                             .get(obj_text)
-                            .map(|fqcn| format!("{}.{}", fqcn, method_name))
+                            .map(|fqcn| format!("{fqcn}.{method_name}"))
                             .unwrap_or_else(|| method_name.to_string());
                         edges.push(Edge::new(
                             context_id,
@@ -951,12 +999,37 @@ fn walk_for_calls(
                 }
             }
             "scoped_call_expression" => {
-                if let Some(name_node) = current.child_by_field_name("name") {
+                if let (Some(scope_node), Some(name_node)) = (
+                    current.child_by_field_name("scope"),
+                    current.child_by_field_name("name"),
+                ) {
                     let method_name = node_text(name_node, source);
                     if !method_name.is_empty() {
+                        let target = match scope_node.kind() {
+                            "name" | "qualified_name" => {
+                                let scope_text = node_text(scope_node, source);
+                                // self/static/parent depend on the surrounding class and
+                                // can't be resolved here without a class stack; leave them
+                                // unqualified so heuristic resolution can still match.
+                                if matches!(scope_text, "self" | "static" | "parent") {
+                                    method_name.to_string()
+                                } else {
+                                    let fqcn = ctx.resolve(scope_text);
+                                    format!("{fqcn}.{method_name}")
+                                }
+                            }
+                            "variable_name" => {
+                                let var = node_text(scope_node, source);
+                                scope
+                                    .get(var)
+                                    .map(|fqcn| format!("{fqcn}.{method_name}"))
+                                    .unwrap_or_else(|| method_name.to_string())
+                            }
+                            _ => method_name.to_string(),
+                        };
                         edges.push(Edge::new(
                             context_id,
-                            method_name,
+                            target,
                             EdgeKind::Calls,
                             file_path,
                             current.start_position().row as u32 + 1,
@@ -1618,5 +1691,227 @@ class Publisher {
             .collect();
         assert!(calls.contains(&"App\\Repo\\PostRepo.findAll"));
         assert!(calls.contains(&"App\\Repo\\TagRepo.findAll"));
+    }
+
+    // ── FQCN resolution ──
+
+    #[test]
+    fn test_resolve_strips_leading_backslash() {
+        let result = extract(
+            r#"<?php
+namespace App;
+class Child extends \Vendor\BaseClass {}
+"#,
+        );
+        assert!(result
+            .edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Inherits && e.target_name == "Vendor\\BaseClass"));
+    }
+
+    #[test]
+    fn test_resolve_qualified_alias_head() {
+        // `use Pkg\Inner as Pkg;` makes `Pkg\Service` resolve to `Pkg\Inner\Service`,
+        // not stay as `Pkg\Service`.
+        let result = extract(
+            r#"<?php
+use Pkg\Inner as Pkg;
+class Foo extends Pkg\Service {}
+"#,
+        );
+        assert!(
+            result
+                .edges
+                .iter()
+                .any(|e| e.kind == EdgeKind::Inherits && e.target_name == "Pkg\\Inner\\Service"),
+            "expected inherits target Pkg\\Inner\\Service; got: {:?}",
+            result
+                .edges
+                .iter()
+                .filter(|e| e.kind == EdgeKind::Inherits)
+                .map(|e| &e.target_name)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_resolve_qualified_relative_to_namespace() {
+        // No alias for `Sub`: `Sub\Service` is relative to current namespace.
+        let result = extract(
+            r#"<?php
+namespace App\Domain;
+class Foo extends Sub\Service {}
+"#,
+        );
+        assert!(result.edges.iter().any(|e| {
+            e.kind == EdgeKind::Inherits && e.target_name == "App\\Domain\\Sub\\Service"
+        }));
+    }
+
+    // ── Multi-namespace files ──
+
+    #[test]
+    fn test_brace_namespaces_have_independent_imports() {
+        let result = extract(
+            r#"<?php
+namespace App\Foo {
+    use Other\B;
+    class A extends B {}
+}
+
+namespace App\Bar {
+    class C extends B {}
+}
+"#,
+        );
+
+        // In App\Foo, `B` resolves through the import to Other\B.
+        assert!(
+            result
+                .edges
+                .iter()
+                .any(|e| e.kind == EdgeKind::Inherits && e.target_name == "Other\\B"),
+            "expected App\\Foo's B to resolve via import to Other\\B"
+        );
+
+        // In App\Bar, `B` has no import → falls back to current namespace.
+        assert!(
+            result
+                .edges
+                .iter()
+                .any(|e| e.kind == EdgeKind::Inherits && e.target_name == "App\\Bar\\B"),
+            "expected App\\Bar's B to resolve to App\\Bar\\B, not leak Other\\B"
+        );
+    }
+
+    #[test]
+    fn test_brace_namespaces_classify_symbols_by_block() {
+        let result = extract(
+            r#"<?php
+namespace App\Foo { class A {} }
+namespace App\Bar { class A {} }
+"#,
+        );
+        let class_a_ids: Vec<&str> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Class && s.name == "A")
+            .map(|s| s.id.as_str())
+            .collect();
+        assert_eq!(
+            class_a_ids.len(),
+            2,
+            "expected two A classes, got {class_a_ids:?}"
+        );
+        assert!(class_a_ids.iter().any(|id| id.contains("App\\Foo.A")));
+        assert!(class_a_ids.iter().any(|id| id.contains("App\\Bar.A")));
+    }
+
+    // ── Namespace-qualified symbol IDs ──
+
+    #[test]
+    fn test_top_level_class_symbol_id_includes_namespace() {
+        let result = extract(
+            r#"<?php
+namespace App\Domain;
+class Service {}
+"#,
+        );
+        let svc = result
+            .symbols
+            .iter()
+            .find(|s| s.kind == SymbolKind::Class && s.name == "Service")
+            .expect("Service class not found");
+        assert!(
+            svc.id.ends_with(":class:App\\Domain.Service"),
+            "expected namespace-qualified symbol id; got: {}",
+            svc.id
+        );
+    }
+
+    #[test]
+    fn test_top_level_function_symbol_id_includes_namespace() {
+        let result = extract(
+            r#"<?php
+namespace App\Util;
+function helper(): void {}
+"#,
+        );
+        let f = result
+            .symbols
+            .iter()
+            .find(|s| s.kind == SymbolKind::Function && s.name == "helper")
+            .expect("helper function not found");
+        assert!(
+            f.id.ends_with(":function:App\\Util.helper"),
+            "expected namespace-qualified function id; got: {}",
+            f.id
+        );
+    }
+
+    // ── Static method calls ──
+
+    #[test]
+    fn test_static_call_qualifies_with_class_name() {
+        let result = extract(
+            r#"<?php
+class Service {
+    public function handle(): void {
+        Foo::bar();
+    }
+}
+"#,
+        );
+        assert!(
+            result
+                .edges
+                .iter()
+                .any(|e| e.kind == EdgeKind::Calls && e.target_name == "Foo.bar"),
+            "expected Calls edge target Foo.bar; got: {:?}",
+            result
+                .edges
+                .iter()
+                .filter(|e| e.kind == EdgeKind::Calls)
+                .map(|e| &e.target_name)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_static_call_resolves_imported_class() {
+        let result = extract(
+            r#"<?php
+use Lib\Foo;
+class Service {
+    public function handle(): void {
+        Foo::bar();
+    }
+}
+"#,
+        );
+        assert!(result
+            .edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Calls && e.target_name == "Lib\\Foo.bar"));
+    }
+
+    #[test]
+    fn test_static_call_self_stays_unqualified() {
+        // `self::method()` depends on the surrounding class; without a class
+        // stack we leave it unqualified so heuristic resolution can match it.
+        let result = extract(
+            r#"<?php
+class Service {
+    public function handle(): void {
+        self::work();
+    }
+    public function work(): void {}
+}
+"#,
+        );
+        assert!(result
+            .edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Calls && e.target_name == "work"));
     }
 }
