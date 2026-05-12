@@ -91,7 +91,12 @@ fn collect_context_in(
 }
 
 /// Resolves a single `namespace_use_clause` to its FQCN and alias, then inserts it into `imports`.
-fn collect_use_clause(clause: Node, source: &str, prefix: &str, imports: &mut HashMap<String, String>) {
+fn collect_use_clause(
+    clause: Node,
+    source: &str,
+    prefix: &str,
+    imports: &mut HashMap<String, String>,
+) {
     let Some(name_node) = clause
         .named_children(&mut clause.walk())
         .find(|c| matches!(c.kind(), "qualified_name" | "name"))
@@ -178,9 +183,21 @@ fn extract_use_clause_edge(
         clause.end_byte() as u32,
         None,
     ));
-    edges.push(Edge::new(&sym_id, fqcn.clone(), EdgeKind::Imports, file_path, line));
+    edges.push(Edge::new(
+        &sym_id,
+        fqcn.clone(),
+        EdgeKind::Imports,
+        file_path,
+        line,
+    ));
     let short_name = fqcn.rsplit('\\').next().unwrap_or(&fqcn).to_string();
-    edges.push(Edge::new(&sym_id, short_name, EdgeKind::References, file_path, line));
+    edges.push(Edge::new(
+        &sym_id,
+        short_name,
+        EdgeKind::References,
+        file_path,
+        line,
+    ));
 }
 
 /// Processes a `namespace_use_declaration` node and emits symbols and edges for each imported name.
@@ -222,11 +239,7 @@ fn collect_type_names<'a>(node: Node<'a>, source: &'a str) -> Vec<(&'a str, u32)
 }
 
 /// Recursively accumulates `name`/`qualified_name` nodes into `out`.
-fn collect_type_names_in<'a>(
-    node: Node<'a>,
-    source: &'a str,
-    out: &mut Vec<(&'a str, u32)>,
-) {
+fn collect_type_names_in<'a>(node: Node<'a>, source: &'a str, out: &mut Vec<(&'a str, u32)>) {
     match node.kind() {
         "name" | "qualified_name" => {
             let text = node_text(node, source);
@@ -383,7 +396,14 @@ fn extract_class(
 
     if let Some(body) = node.child_by_field_name("body") {
         extract_class_body(
-            body, source, file_path, ctx, &sym_id, &class_qname, symbols, edges,
+            body,
+            source,
+            file_path,
+            ctx,
+            &sym_id,
+            &class_qname,
+            symbols,
+            edges,
         );
     }
 }
@@ -447,7 +467,14 @@ fn extract_interface(
 
     if let Some(body) = node.child_by_field_name("body") {
         extract_class_body(
-            body, source, file_path, ctx, &sym_id, &iface_qname, symbols, edges,
+            body,
+            source,
+            file_path,
+            ctx,
+            &sym_id,
+            &iface_qname,
+            symbols,
+            edges,
         );
     }
 }
@@ -496,7 +523,14 @@ fn extract_trait(
 
     if let Some(body) = node.child_by_field_name("body") {
         extract_class_body(
-            body, source, file_path, ctx, &sym_id, &trait_qname, symbols, edges,
+            body,
+            source,
+            file_path,
+            ctx,
+            &sym_id,
+            &trait_qname,
+            symbols,
+            edges,
         );
     }
 }
@@ -559,7 +593,14 @@ fn extract_enum(
 
     if let Some(body) = node.child_by_field_name("body") {
         extract_class_body(
-            body, source, file_path, ctx, &sym_id, &enum_qname, symbols, edges,
+            body,
+            source,
+            file_path,
+            ctx,
+            &sym_id,
+            &enum_qname,
+            symbols,
+            edges,
         );
     }
 }
@@ -581,7 +622,14 @@ fn extract_class_body(
         match child.kind() {
             "method_declaration" => {
                 extract_method(
-                    child, source, file_path, ctx, parent_id, parent_qname, symbols, edges,
+                    child,
+                    source,
+                    file_path,
+                    ctx,
+                    parent_id,
+                    parent_qname,
+                    symbols,
+                    edges,
                 );
             }
             "use_declaration" => {
@@ -661,7 +709,11 @@ fn extract_method(
 }
 
 /// Collects named (non-primitive) types from a type hint node, including unions and optional types.
-fn collect_injected_named_types<'a>(node: Node<'a>, source: &'a str, out: &mut Vec<(&'a str, u32)>) {
+fn collect_injected_named_types<'a>(
+    node: Node<'a>,
+    source: &'a str,
+    out: &mut Vec<(&'a str, u32)>,
+) {
     match node.kind() {
         "named_type" => {
             if let Some(child) = node.named_children(&mut node.walk()).next() {
@@ -692,7 +744,10 @@ fn extract_constructor_injection_edges(
     edges: &mut Vec<Edge>,
 ) {
     for param in params.named_children(&mut params.walk()) {
-        if !matches!(param.kind(), "simple_parameter" | "property_promotion_parameter") {
+        if !matches!(
+            param.kind(),
+            "simple_parameter" | "property_promotion_parameter"
+        ) {
             continue;
         }
         let Some(type_node) = param.child_by_field_name("type") else {
@@ -719,10 +774,15 @@ fn extract_constructor_injection_edges(
 fn build_param_scope(params: Node, source: &str, ctx: &FileContext) -> HashMap<String, String> {
     let mut scope = HashMap::new();
     for param in params.named_children(&mut params.walk()) {
-        if !matches!(param.kind(), "simple_parameter" | "property_promotion_parameter") {
+        if !matches!(
+            param.kind(),
+            "simple_parameter" | "property_promotion_parameter"
+        ) {
             continue;
         }
-        let Some(type_node) = param.child_by_field_name("type") else { continue };
+        let Some(type_node) = param.child_by_field_name("type") else {
+            continue;
+        };
         if type_node.kind() != "named_type" {
             continue;
         }
@@ -732,9 +792,23 @@ fn build_param_scope(params: Node, source: &str, ctx: &FileContext) -> HashMap<S
         let type_name = node_text(name_node, source);
         if matches!(
             type_name,
-            "self" | "static" | "parent" | "string" | "int" | "float" | "bool"
-                | "array" | "callable" | "iterable" | "void" | "null" | "never"
-                | "mixed" | "object" | "false" | "true"
+            "self"
+                | "static"
+                | "parent"
+                | "string"
+                | "int"
+                | "float"
+                | "bool"
+                | "array"
+                | "callable"
+                | "iterable"
+                | "void"
+                | "null"
+                | "never"
+                | "mixed"
+                | "object"
+                | "false"
+                | "true"
         ) {
             continue;
         }
@@ -941,12 +1015,7 @@ fn php_visibility(node: Node, source: &str) -> Visibility {
 }
 
 /// Builds a human-readable method signature string including visibility, name, parameters, and return type.
-fn build_method_signature(
-    node: Node,
-    source: &str,
-    name: &str,
-    vis: Visibility,
-) -> Option<String> {
+fn build_method_signature(node: Node, source: &str, name: &str, vis: Visibility) -> Option<String> {
     let params = node
         .child_by_field_name("parameters")
         .map(|p| node_text(p, source))?;
@@ -971,10 +1040,7 @@ fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
     }
     let text = node_text(prev, source);
     if text.starts_with("/**") {
-        let inner = text
-            .trim_start_matches("/**")
-            .trim_end_matches("*/")
-            .trim();
+        let inner = text.trim_start_matches("/**").trim_end_matches("*/").trim();
         let lines: Vec<&str> = inner
             .lines()
             .map(|l| l.trim().trim_start_matches('*').trim())
@@ -1082,10 +1148,9 @@ use App\Contracts\Repository;
 class InMemoryRepository implements Repository {}
 "#,
         );
-        assert!(result
-            .edges
-            .iter()
-            .any(|e| e.kind == EdgeKind::Implements && e.target_name == "App\\Contracts\\Repository"));
+        assert!(result.edges.iter().any(
+            |e| e.kind == EdgeKind::Implements && e.target_name == "App\\Contracts\\Repository"
+        ));
     }
 
     #[test]
@@ -1115,8 +1180,7 @@ class TaskRepository implements RepositoryInterface {}
 "#,
         );
         assert!(result.edges.iter().any(|e| {
-            e.kind == EdgeKind::Implements
-                && e.target_name == "App\\Contracts\\RepositoryInterface"
+            e.kind == EdgeKind::Implements && e.target_name == "App\\Contracts\\RepositoryInterface"
         }));
     }
 
@@ -1129,7 +1193,8 @@ use MobilityWork\SparePartStocksManagement\SparePartStockDualWriteDispatcher;
         );
         assert!(result.symbols.iter().any(|s| {
             s.kind == SymbolKind::Import
-                && s.name == "MobilityWork\\SparePartStocksManagement\\SparePartStockDualWriteDispatcher"
+                && s.name
+                    == "MobilityWork\\SparePartStocksManagement\\SparePartStockDualWriteDispatcher"
         }));
         assert!(result.edges.iter().any(|e| {
             e.kind == EdgeKind::Imports
@@ -1152,7 +1217,10 @@ use MobilityWork\Core\MessageBus\CorrelationContext,
             .filter(|e| e.kind == EdgeKind::Imports)
             .collect();
         assert_eq!(import_edges.len(), 2);
-        let targets: Vec<&str> = import_edges.iter().map(|e| e.target_name.as_str()).collect();
+        let targets: Vec<&str> = import_edges
+            .iter()
+            .map(|e| e.target_name.as_str())
+            .collect();
         assert!(targets.contains(&"MobilityWork\\Core\\MessageBus\\CorrelationContext"));
         assert!(targets.contains(&"MobilityWork\\Core\\Identifiers\\LegacyNetworkId"));
     }
@@ -1173,7 +1241,10 @@ use MobilityWork\Core\{
             .filter(|e| e.kind == EdgeKind::Imports)
             .collect();
         assert_eq!(import_edges.len(), 2);
-        let targets: Vec<&str> = import_edges.iter().map(|e| e.target_name.as_str()).collect();
+        let targets: Vec<&str> = import_edges
+            .iter()
+            .map(|e| e.target_name.as_str())
+            .collect();
         assert!(targets.contains(&"MobilityWork\\Core\\MessageBus\\CorrelationContext"));
         assert!(targets.contains(&"MobilityWork\\Core\\Identifiers\\LegacyNetworkId"));
     }
@@ -1221,8 +1292,7 @@ use MobilityWork\SparePartStocksManagement\SparePartStockDualWriteDispatcher;
 "#,
         );
         assert!(result.edges.iter().any(|e| {
-            e.kind == EdgeKind::References
-                && e.target_name == "SparePartStockDualWriteDispatcher"
+            e.kind == EdgeKind::References && e.target_name == "SparePartStockDualWriteDispatcher"
         }));
     }
 
@@ -1313,9 +1383,12 @@ class Foo {
             .iter()
             .filter(|e| e.kind == EdgeKind::References)
             .collect();
-        assert!(refs.iter().any(|e| e.target_name == "App\\Service\\MyService"
-            || e.target_name == "MyService"));
-        assert!(!refs.iter().any(|e| e.target_name == "string" || e.target_name == "int"));
+        assert!(refs
+            .iter()
+            .any(|e| e.target_name == "App\\Service\\MyService" || e.target_name == "MyService"));
+        assert!(!refs
+            .iter()
+            .any(|e| e.target_name == "string" || e.target_name == "int"));
     }
 
     #[test]
@@ -1337,8 +1410,16 @@ class MyHandler {
             .find(|e| e.kind == EdgeKind::References && e.target_name == "App\\Repository\\Repo")
             .expect("injection edge not found");
         // source should be the class symbol, not the __construct method symbol
-        assert!(ref_edge.source_id.contains("class"), "source: {}", ref_edge.source_id);
-        assert!(!ref_edge.source_id.contains("method"), "source: {}", ref_edge.source_id);
+        assert!(
+            ref_edge.source_id.contains("class"),
+            "source: {}",
+            ref_edge.source_id
+        );
+        assert!(
+            !ref_edge.source_id.contains("method"),
+            "source: {}",
+            ref_edge.source_id
+        );
     }
 
     #[test]
@@ -1400,10 +1481,13 @@ use App\Contracts\HasLabel;
 enum Color: string implements HasLabel { case Red = 'red'; }
 "#,
         );
-        assert!(result
-            .edges
-            .iter()
-            .any(|e| e.kind == EdgeKind::Implements && e.target_name == "App\\Contracts\\HasLabel"));
+        assert!(
+            result
+                .edges
+                .iter()
+                .any(|e| e.kind == EdgeKind::Implements
+                    && e.target_name == "App\\Contracts\\HasLabel")
+        );
     }
 
     #[test]
@@ -1425,7 +1509,10 @@ enum Status: string {
             .symbols
             .iter()
             .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
-        assert!(result.symbols.iter().any(|s| s.name == "label" && s.kind == SymbolKind::Method));
+        assert!(result
+            .symbols
+            .iter()
+            .any(|s| s.name == "label" && s.kind == SymbolKind::Method));
     }
 
     #[test]
@@ -1460,11 +1547,14 @@ class Service {
         );
         assert!(
             result.edges.iter().any(|e| {
-                e.kind == EdgeKind::Calls
-                    && e.target_name == "App\\Repository\\UserRepository.save"
+                e.kind == EdgeKind::Calls && e.target_name == "App\\Repository\\UserRepository.save"
             }),
             "expected qualified Calls edge; got: {:?}",
-            result.edges.iter().filter(|e| e.kind == EdgeKind::Calls).collect::<Vec<_>>()
+            result
+                .edges
+                .iter()
+                .filter(|e| e.kind == EdgeKind::Calls)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -1480,8 +1570,7 @@ function handle(UserRepository $repo): void {
 "#,
         );
         assert!(result.edges.iter().any(|e| {
-            e.kind == EdgeKind::Calls
-                && e.target_name == "App\\Repository\\UserRepository.save"
+            e.kind == EdgeKind::Calls && e.target_name == "App\\Repository\\UserRepository.save"
         }));
     }
 
@@ -1497,9 +1586,10 @@ class Service {
 "#,
         );
         // No type known → unqualified edge preserved
-        assert!(result.edges.iter().any(|e| {
-            e.kind == EdgeKind::Calls && e.target_name == "doSomething"
-        }));
+        assert!(result
+            .edges
+            .iter()
+            .any(|e| { e.kind == EdgeKind::Calls && e.target_name == "doSomething" }));
         assert!(!result.edges.iter().any(|e| e.target_name.contains('.')));
     }
 

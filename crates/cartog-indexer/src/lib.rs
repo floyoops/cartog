@@ -932,9 +932,15 @@ mod tests {
         let nested_builds = entries.iter().find(|e| e.path() == tmp.join("src/builds"));
 
         assert!(nested_var.is_some());
-        assert!(!is_ignored(nested_var.unwrap()), "src/var should NOT be ignored");
+        assert!(
+            !is_ignored(nested_var.unwrap()),
+            "src/var should NOT be ignored"
+        );
         assert!(nested_builds.is_some());
-        assert!(!is_ignored(nested_builds.unwrap()), "src/builds should NOT be ignored");
+        assert!(
+            !is_ignored(nested_builds.unwrap()),
+            "src/builds should NOT be ignored"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
